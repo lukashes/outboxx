@@ -12,10 +12,10 @@ pub const Config = struct {
         return Config{
             .host = "localhost",
             .port = 5432,
-            .database = "zicdc_test",
+            .database = "outboxx_test",
             .user = "postgres",
             .password = "password",
-            .slot_name = "zicdc_slot",
+            .slot_name = "outboxx_slot",
         };
     }
 

@@ -26,6 +26,20 @@ pub fn build(b: *std.Build) void {
     // Add Kafka library (librdkafka) - will be added later when implementing Kafka integration
     // exe.linkSystemLibrary("rdkafka");
 
+    // Add include paths from environment (useful for Nix and custom installs)
+    if (std.process.getEnvVarOwned(b.allocator, "C_INCLUDE_PATH")) |include_path| {
+        defer b.allocator.free(include_path);
+        var it = std.mem.splitScalar(u8, include_path, ':');
+        while (it.next()) |path| {
+            if (path.len > 0) {
+                exe.addIncludePath(.{ .cwd_relative = path });
+            }
+        }
+    } else |_| {
+        // Fallback to standard system paths
+        exe.addIncludePath(.{ .cwd_relative = "/usr/include/postgresql" });
+    }
+
     b.installArtifact(exe);
 
     // Create run step

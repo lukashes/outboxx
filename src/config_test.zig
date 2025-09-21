@@ -9,10 +9,10 @@ test "Config.default" {
 
     try testing.expectEqualStrings("localhost", cfg.host);
     try testing.expectEqual(@as(u16, 5432), cfg.port);
-    try testing.expectEqualStrings("zicdc_test", cfg.database);
+    try testing.expectEqualStrings("outboxx_test", cfg.database);
     try testing.expectEqualStrings("postgres", cfg.user);
     try testing.expectEqualStrings("password", cfg.password);
-    try testing.expectEqualStrings("zicdc_slot", cfg.slot_name);
+    try testing.expectEqualStrings("outboxx_slot", cfg.slot_name);
 }
 
 test "Config.connectionString" {
@@ -25,7 +25,7 @@ test "Config.connectionString" {
     // Check that all required connection parameters are present
     try testing.expect(std.mem.indexOf(u8, conn_str, "host=127.0.0.1") != null);
     try testing.expect(std.mem.indexOf(u8, conn_str, "port=5432") != null);
-    try testing.expect(std.mem.indexOf(u8, conn_str, "dbname=zicdc_test") != null);
+    try testing.expect(std.mem.indexOf(u8, conn_str, "dbname=outboxx_test") != null);
     try testing.expect(std.mem.indexOf(u8, conn_str, "user=postgres") != null);
     try testing.expect(std.mem.indexOf(u8, conn_str, "password=password") != null);
     try testing.expect(std.mem.indexOf(u8, conn_str, "replication=database") != null);

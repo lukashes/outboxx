@@ -112,7 +112,7 @@ fn executeSql(allocator: std.mem.Allocator, _: []const u8, sql: []const u8) !voi
 
     // Create non-replication connection string
     const regular_conn_str = try std.fmt.allocPrint(allocator,
-        "host=127.0.0.1 port=5432 dbname=zicdc_test user=postgres password=password", .{});
+        "host=127.0.0.1 port=5432 dbname=outboxx_test user=postgres password=password", .{});
     defer allocator.free(regular_conn_str);
 
     const conn = c.PQconnectdb(regular_conn_str.ptr);

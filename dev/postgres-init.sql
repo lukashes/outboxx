@@ -1,24 +1,24 @@
--- PostgreSQL initialization script for ZiCDC development
+-- PostgreSQL initialization script for Outboxx development
 -- This script sets up the database, users, and test data for CDC testing
 
-\echo 'Starting ZiCDC database initialization...'
+\echo 'Starting Outboxx database initialization...'
 
 -- Create a dedicated user for replication (optional, for production-like setup)
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'zicdc_user') THEN
-        CREATE ROLE zicdc_user WITH LOGIN PASSWORD 'zicdc_password' REPLICATION;
-        RAISE NOTICE 'Created zicdc_user with replication privileges';
+    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'outboxx_user') THEN
+        CREATE ROLE outboxx_user WITH LOGIN PASSWORD 'outboxx_password' REPLICATION;
+        RAISE NOTICE 'Created outboxx_user with replication privileges';
     ELSE
-        RAISE NOTICE 'zicdc_user already exists';
+        RAISE NOTICE 'outboxx_user already exists';
     END IF;
 END
 $$;
 
 -- Grant necessary permissions
-GRANT CONNECT ON DATABASE zicdc_test TO zicdc_user;
-GRANT USAGE ON SCHEMA public TO zicdc_user;
-GRANT CREATE ON SCHEMA public TO zicdc_user;
+GRANT CONNECT ON DATABASE outboxx_test TO outboxx_user;
+GRANT USAGE ON SCHEMA public TO outboxx_user;
+GRANT CREATE ON SCHEMA public TO outboxx_user;
 
 -- Create sample tables for CDC testing
 \echo 'Creating sample tables...';
@@ -107,16 +107,16 @@ CREATE TRIGGER update_orders_updated_at
     EXECUTE FUNCTION update_updated_at_column();
 
 -- Create publication for logical replication
--- This is what ZiCDC will subscribe to for receiving change events
-DROP PUBLICATION IF EXISTS zicdc_publication;
-CREATE PUBLICATION zicdc_publication FOR ALL TABLES;
+-- This is what Outboxx will subscribe to for receiving change events
+DROP PUBLICATION IF EXISTS outboxx_publication;
+CREATE PUBLICATION outboxx_publication FOR ALL TABLES;
 
 -- Alternative: Create publication for specific tables only (more selective)
--- CREATE PUBLICATION zicdc_publication FOR TABLE users, products, orders, order_items;
+-- CREATE PUBLICATION outboxx_publication FOR TABLE users, products, orders, order_items;
 
--- Grant permissions on tables to zicdc_user
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO zicdc_user;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO zicdc_user;
+-- Grant permissions on tables to outboxx_user
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO outboxx_user;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO outboxx_user;
 
 -- Insert sample data for testing
 \echo 'Inserting sample data...';
@@ -162,11 +162,11 @@ ON CONFLICT DO NOTHING;
 
 -- Display setup information
 \echo '';
-\echo '=== ZiCDC Database Setup Complete ===';
-\echo 'Database: zicdc_test';
+\echo '=== Outboxx Database Setup Complete ===';
+\echo 'Database: outboxx_test';
 \echo 'Main user: postgres (password: password)';
-\echo 'CDC user: zicdc_user (password: zicdc_password)';
-\echo 'Publication: zicdc_publication';
+\echo 'CDC user: outboxx_user (password: outboxx_password)';
+\echo 'Publication: outboxx_publication';
 \echo '';
 \echo 'Sample data inserted:';
 SELECT 'users' as table_name, count(*) as row_count FROM users
@@ -179,8 +179,8 @@ SELECT 'order_items', count(*) FROM order_items;
 
 \echo '';
 \echo 'To test logical replication, you can:';
-\echo '1. Create a replication slot: SELECT pg_create_logical_replication_slot(''zicdc_slot'', ''pgoutput'');';
-\echo '2. Read changes: SELECT * FROM pg_logical_slot_get_changes(''zicdc_slot'', NULL, NULL);';
+\echo '1. Create a replication slot: SELECT pg_create_logical_replication_slot(''outboxx_slot'', ''pgoutput'');';
+\echo '2. Read changes: SELECT * FROM pg_logical_slot_get_changes(''outboxx_slot'', NULL, NULL);';
 \echo '3. Make some changes: UPDATE users SET status = ''premium'' WHERE id = 1;';
 \echo '4. Read changes again to see the CDC events';
 \echo '';
@@ -191,4 +191,4 @@ SELECT slot_name, plugin, slot_type, database, active, confirmed_flush_lsn
 FROM pg_replication_slots;
 
 \echo '';
-\echo 'ZiCDC database initialization completed successfully!';
+\echo 'Outboxx database initialization completed successfully!';

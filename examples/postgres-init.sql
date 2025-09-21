@@ -1,4 +1,4 @@
--- PostgreSQL initialization script for ZiCDC development
+-- PostgreSQL initialization script for Outboxx development
 -- This script sets up sample tables and logical replication
 
 -- Create sample tables for testing CDC
@@ -50,11 +50,11 @@ CREATE TABLE audit_logs (
 );
 
 -- Create publication for logical replication
--- This will be used by ZiCDC to stream changes
-CREATE PUBLICATION zicdc_publication FOR ALL TABLES;
+-- This will be used by Outboxx to stream changes
+CREATE PUBLICATION outboxx_publication FOR ALL TABLES;
 
 -- Alternative: Create publication for specific tables only
--- CREATE PUBLICATION zicdc_publication FOR TABLE users, orders, products, order_items;
+-- CREATE PUBLICATION outboxx_publication FOR TABLE users, orders, products, order_items;
 
 -- Insert sample data
 INSERT INTO users (email, name, password_hash) VALUES
@@ -107,8 +107,8 @@ ALTER USER postgres WITH REPLICATION;
 -- Display setup completion message
 DO $$
 BEGIN
-    RAISE NOTICE 'ZiCDC development database initialized successfully!';
+    RAISE NOTICE 'Outboxx development database initialized successfully!';
     RAISE NOTICE 'Created tables: users, orders, products, order_items, audit_logs';
-    RAISE NOTICE 'Created publication: zicdc_publication';
+    RAISE NOTICE 'Created publication: outboxx_publication';
     RAISE NOTICE 'Sample data inserted for testing';
 END $$;
