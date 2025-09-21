@@ -42,6 +42,5 @@ docs/build/
 site/
 
 # Claude Code assistant files
-CLAUDE.md
 CLAUDE.local.md
 .claude/
