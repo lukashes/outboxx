@@ -1,10 +1,10 @@
 # CLAUDE.md - AI Assistant Development Guidelines
 
-This file provides guidance for AI assistants (like Claude Code) when working with the ZiCDC codebase. It's also useful for contributors who want to understand the project's development philosophy and conventions.
+This file provides guidance for AI assistants (like Claude Code) when working with the Outboxx codebase. It's also useful for contributors who want to understand the project's development philosophy and conventions.
 
 ## Project Overview
 
-ZiCDC is a lightweight PostgreSQL Change Data Capture (CDC) tool written in Zig that streams WAL changes to Apache Kafka. It aims to be a high-performance, resource-efficient alternative to JVM-based CDC solutions like Debezium.
+Outboxx is a lightweight PostgreSQL Change Data Capture (CDC) tool written in Zig that streams WAL changes to Apache Kafka. It aims to be a high-performance, resource-efficient alternative to JVM-based CDC solutions like Debezium.
 
 ## Development Philosophy
 

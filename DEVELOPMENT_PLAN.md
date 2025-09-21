@@ -1,4 +1,4 @@
-# ZiCDC Development Plan
+# Outboxx Development Plan
 
 ## Phase 1: Foundation (2-3 weeks)
 1. Setup project structure and build.zig

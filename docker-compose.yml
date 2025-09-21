@@ -4,7 +4,7 @@ services:
   # PostgreSQL with logical replication enabled for CDC testing
   postgres:
     image: postgres:15
-    container_name: zicdc-postgres
+    container_name: outboxx-postgres
     restart: unless-stopped
     environment:
       POSTGRES_DB: zicdc_test
@@ -26,7 +26,7 @@ services:
       -c log_statement=all
       -c log_min_messages=info
     networks:
-      - zicdc-network
+      - outboxx-network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d zicdc_test"]
       interval: 5s
@@ -35,9 +35,9 @@ services:
 
 volumes:
   postgres_data:
-    name: zicdc_postgres_data
+    name: outboxx_postgres_data
 
 networks:
-  zicdc-network:
+  outboxx-network:
     driver: bridge
-    name: zicdc-network
+    name: outboxx-network

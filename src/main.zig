@@ -8,7 +8,7 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    print("ZiCDC - PostgreSQL Change Data Capture\n", .{});
+    print("Outboxx - PostgreSQL Change Data Capture\n", .{});
     print("Version: 0.1.0-dev\n", .{});
     print("Build: Debug\n\n", .{});
 

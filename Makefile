@@ -2,7 +2,7 @@
 
 # Default target
 help:
-	@echo "ZiCDC Development Commands:"
+	@echo "Outboxx Development Commands:"
 	@echo ""
 	@echo "Build & Run:"
 	@echo "  make build         - Build the project"
@@ -46,7 +46,7 @@ test-integration:
 test-all: env-up
 	@echo "Waiting for PostgreSQL to be ready..."
 	@sleep 5
-	@docker exec zicdc-postgres pg_isready -U postgres -d zicdc_test
+	@docker exec outboxx-postgres pg_isready -U postgres -d zicdc_test
 	zig build test
 	zig build test-integration
 

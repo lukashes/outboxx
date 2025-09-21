@@ -1,12 +1,12 @@
-# ZiCDC - Lightweight PostgreSQL Change Data Capture in Zig
+# Outboxx - Lightweight PostgreSQL Change Data Capture in Zig
 
-ZiCDC is a high-performance, resource-efficient Change Data Capture (CDC) tool that streams PostgreSQL Write-Ahead Log (WAL) changes to Apache Kafka. Built in Zig for minimal resource consumption and maximum performance.
+Outboxx is a high-performance, resource-efficient Change Data Capture (CDC) tool that streams PostgreSQL Write-Ahead Log (WAL) changes to Apache Kafka. Built in Zig for minimal resource consumption and maximum performance.
 
 **Project Status**: This started as a learning project for Zig programming language, but has the ambition to become a production-ready tool for implementing the Transactional Outbox pattern and general CDC use cases.
 
 ## Inspiration and Motivation
 
-This project is inspired by [Debezium](https://debezium.io/), the established leader in Change Data Capture. While Debezium is feature-rich and battle-tested, it often consumes significant resources and introduces complexity. ZiCDC aims to provide:
+This project is inspired by [Debezium](https://debezium.io/), the established leader in Change Data Capture. While Debezium is feature-rich and battle-tested, it often consumes significant resources and introduces complexity. Outboxx aims to provide:
 
 - **Minimal Resource Usage** - Low memory footprint and CPU overhead
 - **High Performance** - Native code performance with Zig's zero-cost abstractions
@@ -31,7 +31,7 @@ This project is inspired by [Debezium](https://debezium.io/), the established le
 ## Architecture Overview
 
 ```
-PostgreSQL WAL → ZiCDC → Kafka Topics
+PostgreSQL WAL → Outboxx → Kafka Topics
      ↑              ↑         ↑
 Logical Replication  |    Partitioned
    Protocol      Processing    Messages
@@ -47,7 +47,7 @@ Logical Replication  |    Partitioned
 
 ## Comparison with Debezium
 
-| Feature | ZiCDC | Debezium |
+| Feature | Outboxx | Debezium |
 |---------|--------|----------|
 | Runtime | Native binary | JVM (Kafka Connect) |
 | Memory Usage | ~10-50MB | ~200-500MB |
@@ -64,7 +64,7 @@ source:
   port: 5432
   database: mydb
   user: postgres
-  slot_name: zicdc_slot
+  slot_name: outboxx_slot
 
 target:
   brokers: ["localhost:9092"]
@@ -111,7 +111,7 @@ This project is licensed under the MIT License - See LICENSE file for details.
 
 ### Third-Party Acknowledgments
 
-- **Inspired by [Debezium](https://debezium.io/)**: ZiCDC draws architectural inspiration from Debezium's approach to Change Data Capture. Debezium is licensed under the Apache License 2.0.
+- **Inspired by [Debezium](https://debezium.io/)**: Outboxx draws architectural inspiration from Debezium's approach to Change Data Capture. Debezium is licensed under the Apache License 2.0.
 - **PostgreSQL**: Uses PostgreSQL's logical replication functionality. PostgreSQL is licensed under the PostgreSQL License.
 - **Zig Programming Language**: Built with [Zig](https://ziglang.org/), which is licensed under the MIT License.
 

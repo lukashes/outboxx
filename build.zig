@@ -9,7 +9,7 @@ pub fn build(b: *std.Build) void {
 
     // Main executable
     const exe = b.addExecutable(.{
-        .name = "zicdc",
+        .name = "outboxx",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
@@ -91,7 +91,7 @@ pub fn build(b: *std.Build) void {
 
     // Development build with debug symbols and runtime safety
     const debug_exe = b.addExecutable(.{
-        .name = "zicdc-debug",
+        .name = "outboxx-debug",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
@@ -107,7 +107,7 @@ pub fn build(b: *std.Build) void {
 
     // Release build optimized for size
     const release_small_exe = b.addExecutable(.{
-        .name = "zicdc-small",
+        .name = "outboxx-small",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
