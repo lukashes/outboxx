@@ -1,0 +1,47 @@
+# Zig build artifacts
+zig-cache/
+zig-out/
+.zig-cache/
+
+# Build artifacts
+build/
+dist/
+target/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# OS specific files
+Thumbs.db
+.DS_Store
+
+# Local development files
+.env
+.env.local
+*.local
+
+# Docker volumes (if any)
+postgres-data/
+
+# Test artifacts
+*.test
+test_results/
+
+# Documentation build artifacts
+docs/build/
+site/
+
+# Claude Code assistant files
+CLAUDE.md
+CLAUDE.local.md
+.claude/
