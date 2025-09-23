@@ -33,10 +33,8 @@
           ];
 
           shellHook = ''
-            # Set environment variables for Zig to find libraries
-            export LIBRARY_PATH="${pkgs.postgresql}/lib:${pkgs.rdkafka}/lib:''${LIBRARY_PATH:+:$LIBRARY_PATH}"
+            # Only set C_INCLUDE_PATH for header files (used by build.zig)
             export C_INCLUDE_PATH="${pkgs.postgresql}/include:${pkgs.rdkafka}/include:''${C_INCLUDE_PATH:+:$C_INCLUDE_PATH}"
-            export PKG_CONFIG_PATH="${pkgs.postgresql}/lib/pkgconfig:${pkgs.rdkafka}/lib/pkgconfig:''${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 
             echo "Outboxx development environment ready"
           '';
