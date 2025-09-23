@@ -4,7 +4,7 @@ services:
   # PostgreSQL with logical replication enabled
   postgres:
     image: postgres:15
-    container_name: zicdc-postgres
+    container_name: outboxx-postgres
     environment:
       POSTGRES_DB: myapp
       POSTGRES_USER: postgres
@@ -22,23 +22,23 @@ services:
       -c max_replication_slots=10
       -c listen_addresses='*'
     networks:
-      - zicdc-network
+      - outboxx-network
 
   # Kafka ecosystem
   zookeeper:
     image: confluentinc/cp-zookeeper:7.4.0
-    container_name: zicdc-zookeeper
+    container_name: outboxx-zookeeper
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
     ports:
       - "2181:2181"
     networks:
-      - zicdc-network
+      - outboxx-network
 
   kafka:
     image: confluentinc/cp-kafka:7.4.0
-    container_name: zicdc-kafka
+    container_name: outboxx-kafka
     depends_on:
       - zookeeper
     ports:
@@ -53,12 +53,12 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: true
     networks:
-      - zicdc-network
+      - outboxx-network
 
   # Kafka UI for development
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
-    container_name: zicdc-kafka-ui
+    container_name: outboxx-kafka-ui
     depends_on:
       - kafka
     ports:
@@ -67,12 +67,12 @@ services:
       KAFKA_CLUSTERS_0_NAME: local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
     networks:
-      - zicdc-network
+      - outboxx-network
 
   # Optional: Schema Registry for Avro support (future)
   schema-registry:
     image: confluentinc/cp-schema-registry:7.4.0
-    container_name: zicdc-schema-registry
+    container_name: outboxx-schema-registry
     depends_on:
       - kafka
     ports:
@@ -82,11 +82,11 @@ services:
       SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:9092
       SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
     networks:
-      - zicdc-network
+      - outboxx-network
 
 volumes:
   postgres_data:
 
 networks:
-  zicdc-network:
+  outboxx-network:
     driver: bridge

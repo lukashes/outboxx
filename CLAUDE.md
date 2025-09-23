@@ -21,11 +21,17 @@ Outboxx is a lightweight PostgreSQL Change Data Capture (CDC) tool written in Zi
 - ✅ **WAL Change Detection**: INSERT, UPDATE, DELETE operations with test_decoding plugin
 - ✅ **Comprehensive Testing**: Integration tests with real PostgreSQL database
 - ✅ **Development Environment**: Docker Compose setup with automated testing
+- ✅ **Nix Environment**: Isolated, reproducible development environment with Zig 0.15.1
+- ✅ **Dependency Management**: libpq and librdkafka ready via Nix
 
 ## Development Workflow
 
 ### Quick Start
 ```bash
+# Enter isolated development environment (recommended)
+make nix-shell
+# OR: cd into project directory if direnv is installed (automatic)
+
 # Start PostgreSQL development environment
 make env-up
 
@@ -38,20 +44,24 @@ make dev
 
 ### Common Commands
 ```bash
-# Build and test
+# Development environment setup
+make nix-shell      # Enter Nix development environment
+make help           # Show all available commands
+
+# Build and test (inside Nix shell or with compatible system setup)
 zig build                    # Build the project
 zig build test              # Run unit tests
 zig build test-integration  # Run integration tests
 
-# Running specific integration tests
-zig test src/integration_test.zig --library c --library pq -I/usr/include/postgresql --test-filter "INSERT"
-zig test src/integration_test.zig --library c --library pq -I/usr/include/postgresql --test-filter "UPDATE"
-zig test src/integration_test.zig --library c --library pq -I/usr/include/postgresql --test-filter "DELETE"
+# Makefile convenience commands
+make build          # Build the project
+make test           # Run unit tests
+make test-all       # Run all tests (starts PostgreSQL if needed)
+make dev            # Development workflow (format + test + build)
 
 # Development environment
 make env-up         # Start PostgreSQL with Docker Compose
 make env-down       # Stop PostgreSQL environment
-make help           # Show all available commands
 ```
 
 ## Architecture and Implementation Notes
@@ -91,9 +101,14 @@ The project emphasizes robust testing:
 │       └── reader_test.zig # WAL reader unit tests
 ├── dev/                   # Development environment
 │   ├── postgres-init.sql  # Database schema and test data
-│   └── docker-compose.yml # PostgreSQL container setup
+│   ├── postgres.conf      # PostgreSQL configuration for CDC
+│   ├── pg_hba.conf        # PostgreSQL authentication config
+│   └── README.md          # Development environment documentation
+├── docker-compose.yml     # PostgreSQL container setup
 ├── build.zig             # Zig build configuration
 ├── Makefile              # Development convenience commands
+├── flake.nix             # Nix development environment
+├── .envrc                # direnv configuration for auto-activation
 └── CLAUDE.md             # This file - AI assistant guidelines
 ```
 
@@ -106,10 +121,11 @@ The project emphasizes robust testing:
 - **Testing**: Write both unit tests and integration tests for new functionality
 
 ### Development Process
-1. Start PostgreSQL environment: `make env-up`
-2. Run tests to ensure baseline: `make test-all`
-3. Implement changes following Zig idioms
-4. Add/update tests for new functionality
-5. Verify all tests pass: `make test-all`
-6. Format code: `zig build fmt`
+1. Enter development environment: `make nix-shell` (or use direnv)
+2. Start PostgreSQL environment: `make env-up`
+3. Run tests to ensure baseline: `make test-all`
+4. Implement changes following Zig idioms
+5. Add/update tests for new functionality
+6. Verify all tests pass: `make test-all`
+7. Format code: `zig build fmt`
 

@@ -1,4 +1,4 @@
-# ZiCDC Configuration Example
+# Outboxx Configuration Example
 # This file shows all available configuration options
 
 # PostgreSQL source configuration
@@ -10,8 +10,8 @@ source:
   password: "password"
 
   # Logical replication slot configuration
-  slot_name: "zicdc_slot"
-  publication_name: "zicdc_publication"
+  slot_name: "outboxx_slot"
+  publication_name: "outboxx_publication"
 
   # Connection settings
   connection_timeout_ms: 5000
@@ -100,7 +100,7 @@ logging:
 
   # File logging (when output is "file")
   file:
-    path: "/var/log/zicdc/zicdc.log"
+    path: "/var/log/outboxx/outboxx.log"
     max_size_mb: 100
     max_files: 5
     rotate: true
@@ -109,7 +109,7 @@ logging:
 state:
   # LSN tracking
   checkpoint_interval_ms: 5000
-  state_file: "/var/lib/zicdc/state.json"
+  state_file: "/var/lib/outboxx/state.json"
   backup_state_files: 3
 
   # Recovery settings

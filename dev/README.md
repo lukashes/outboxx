@@ -1,110 +1,110 @@
-# ZiCDC Development Environment
+# Outboxx Development Environment
 
-Этот dev environment настроен для тестирования PostgreSQL logical replication и разработки ZiCDC.
+This development environment is configured for testing PostgreSQL logical replication and developing Outboxx.
 
-## Быстрый старт
+## Quick Start
 
-### 1. Запуск PostgreSQL
+### 1. Start PostgreSQL
 
 ```bash
-# Запустить PostgreSQL с логической репликацией
+# Start PostgreSQL with logical replication
 docker-compose up -d
 
-# Проверить статус
+# Check status
 docker-compose ps
 
-# Посмотреть логи
+# View logs
 docker-compose logs -f postgres
 ```
 
-### 2. Подключение к базе данных
+### 2. Connect to Database
 
 ```bash
-# Подключиться как основной пользователь
-psql -h localhost -U postgres -d zicdc_test
+# Connect as main user
+psql -h localhost -U postgres -d outboxx_test
 
-# Или подключиться как CDC пользователь
-psql -h localhost -U zicdc_user -d zicdc_test
+# Or connect as CDC user
+psql -h localhost -U outboxx_user -d outboxx_test
 ```
 
-### 3. Тестирование логической репликации
+### 3. Test Logical Replication
 
-После подключения к базе выполните:
+After connecting to the database, execute:
 
 ```sql
--- 1. Создать replication slot для тестирования
+-- 1. Create replication slot for testing
 SELECT pg_create_logical_replication_slot('test_slot', 'pgoutput');
 
--- 2. Проверить что слот создался
+-- 2. Verify slot was created
 SELECT slot_name, plugin, slot_type, database, active
 FROM pg_replication_slots;
 
--- 3. Сделать изменения в данных
+-- 3. Make data changes
 UPDATE users SET status = 'premium' WHERE id = 1;
 INSERT INTO products (name, price, inventory_count, category)
 VALUES ('Test Product', 99.99, 10, 'Test');
 
--- 4. Прочитать события CDC
+-- 4. Read CDC events
 SELECT lsn, xid, data
 FROM pg_logical_slot_get_changes('test_slot', NULL, NULL);
 
--- 5. Удалить тестовый слот (когда закончите)
+-- 5. Drop test slot (when finished)
 SELECT pg_drop_replication_slot('test_slot');
 ```
 
-## Структура данных
+## Data Structure
 
-База содержит тестовые таблицы:
+The database contains test tables:
 
-- **users** - пользователи (4 записи)
-- **products** - товары (5 записей)
-- **orders** - заказы (4 записи)
-- **order_items** - позиции заказов (8 записей)
-- **system_logs** - системные логи (исключается из CDC)
+- **users** - users (4 records)
+- **products** - products (5 records)
+- **orders** - orders (4 records)
+- **order_items** - order items (8 records)
+- **system_logs** - system logs (excluded from CDC)
 
-## Проверка конфигурации CDC
+## CDC Configuration Check
 
-### Проверить настройки PostgreSQL:
+### Check PostgreSQL settings:
 
 ```sql
--- Уровень WAL (должен быть 'logical')
+-- WAL level (should be 'logical')
 SHOW wal_level;
 
--- Максимальное количество WAL senders
+-- Maximum number of WAL senders
 SHOW max_wal_senders;
 
--- Максимальное количество replication slots
+-- Maximum number of replication slots
 SHOW max_replication_slots;
 
--- Публикации для репликации
+-- Publications for replication
 SELECT pubname, puballtables, pubinsert, pubupdate, pubdelete
 FROM pg_publication;
 
--- Таблицы в публикации
+-- Tables in publication
 SELECT schemaname, tablename
 FROM pg_publication_tables
-WHERE pubname = 'zicdc_publication';
+WHERE pubname = 'outboxx_publication';
 ```
 
-### Мониторинг активности:
+### Monitor activity:
 
 ```sql
--- Активные подключения
+-- Active connections
 SELECT pid, usename, application_name, client_addr, state, query
 FROM pg_stat_activity
 WHERE application_name LIKE '%replication%' OR backend_type = 'walsender';
 
--- Статистика репликации
+-- Replication statistics
 SELECT slot_name, active, restart_lsn, confirmed_flush_lsn
 FROM pg_replication_slots;
 
--- WAL статистика
+-- WAL statistics
 SELECT * FROM pg_stat_wal;
 ```
 
-## Тестовые сценарии для CDC
+## CDC Test Scenarios
 
-### Сценарий 1: Простые изменения
+### Scenario 1: Simple Changes
 
 ```sql
 -- INSERT
@@ -117,10 +117,10 @@ UPDATE products SET price = price * 1.1 WHERE category = 'Electronics';
 DELETE FROM system_logs WHERE created_at < NOW() - INTERVAL '1 hour';
 ```
 
-### Сценарий 2: Массовые изменения
+### Scenario 2: Bulk Changes
 
 ```sql
--- Массовое обновление
+-- Bulk update
 UPDATE products SET inventory_count = inventory_count + 10;
 
 -- Batch insert
@@ -132,7 +132,7 @@ SELECT
 FROM generate_series(1, 5);
 ```
 
-### Сценарий 3: Транзакционные изменения
+### Scenario 3: Transactional Changes
 
 ```sql
 BEGIN;
@@ -142,50 +142,50 @@ BEGIN;
 COMMIT;
 ```
 
-## Отладка и устранение проблем
+## Debugging and Troubleshooting
 
-### Проверить логи PostgreSQL:
+### Check PostgreSQL logs:
 
 ```bash
 docker-compose logs postgres | grep -i error
 docker-compose logs postgres | grep -i replication
 ```
 
-### Перезапустить среду:
+### Restart environment:
 
 ```bash
-# Перезапустить с сохранением данных
+# Restart with data preservation
 docker-compose restart
 
-# Полная перезагрузка (удалит данные!)
+# Full reload (will delete data!)
 docker-compose down -v
 docker-compose up -d
 ```
 
-### Подключиться к контейнеру:
+### Connect to container:
 
 ```bash
 docker-compose exec postgres bash
 ```
 
-## Очистка
+## Cleanup
 
 ```bash
-# Остановить и удалить контейнеры
+# Stop and remove containers
 docker-compose down
 
-# Удалить данные (осторожно!)
+# Remove data (careful!)
 docker-compose down -v
-docker volume rm zicdc_postgres_data
+docker volume rm outboxx_postgres_data
 ```
 
-## Следующие шаги
+## Next Steps
 
-После успешного тестирования логической репликации можно:
+After successful logical replication testing, you can:
 
-1. Начать разработку WAL reader в ZiCDC
-2. Реализовать подключение к replication slot
-3. Парсить полученные CDC события
-4. Интегрировать с Kafka producer
+1. Start developing the WAL reader in Outboxx
+2. Implement connection to replication slot
+3. Parse received CDC events
+4. Integrate with Kafka producer
 
-Логическая репликация готова к использованию!
+Logical replication is ready for use!

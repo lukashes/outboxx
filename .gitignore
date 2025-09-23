@@ -44,3 +44,7 @@ site/
 # Claude Code assistant files
 CLAUDE.local.md
 .claude/
+
+# Direnv
+.direnv
+.envrc

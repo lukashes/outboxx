@@ -1,4 +1,4 @@
-.PHONY: help build run test clean fmt dev install-deps check-deps env-up env-down env-restart env-logs env-status
+.PHONY: help build run test clean fmt dev install-deps check-deps env-up env-down env-restart env-logs env-status nix-shell
 
 # Default target
 help:
@@ -22,6 +22,7 @@ help:
 	@echo "  make env-status    - Show environment status"
 	@echo ""
 	@echo "Dependencies:"
+	@echo "  make nix-shell     - Enter Nix development shell (recommended)"
 	@echo "  make check-deps    - Check system dependencies"
 	@echo "  make install-deps  - Install system dependencies (Ubuntu/Debian)"
 	@echo ""
@@ -36,19 +37,18 @@ run:
 
 # Run unit tests
 test:
-	zig build test
+	zig build test && echo "Success: Unit tests passed"
 
 # Run integration tests (requires PostgreSQL)
 test-integration:
-	zig build test-integration
-
+	zig build test-integration && echo "Success: Integration tests passed"
 # Run all tests with database setup
 test-all: env-up
 	@echo "Waiting for PostgreSQL to be ready..."
 	@sleep 5
-	@docker exec outboxx-postgres pg_isready -U postgres -d zicdc_test
-	zig build test
-	zig build test-integration
+	@docker exec outboxx-postgres pg_isready -U postgres -d outboxx_test
+	zig build test && echo "Success: Unit tests passed!"
+	zig build test-integration && echo "Success: Integration tests passed!"
 
 # Development workflow
 dev:
@@ -65,10 +65,10 @@ clean:
 # Check if required system dependencies are installed
 check-deps:
 	@echo "Checking system dependencies..."
-	@command -v zig >/dev/null 2>&1 || { echo "❌ Zig is not installed"; exit 1; }
-	@echo "✅ Zig: $$(zig version)"
-	@pkg-config --exists libpq 2>/dev/null || { echo "❌ libpq (PostgreSQL client library) is not installed"; exit 1; }
-	@echo "✅ libpq: $$(pkg-config --modversion libpq)"
+	@command -v zig >/dev/null 2>&1 || { echo "ERROR: Zig is not installed"; exit 1; }
+	@echo "OK: Zig: $$(zig version)"
+	@pkg-config --exists libpq 2>/dev/null || { echo "ERROR: libpq (PostgreSQL client library) is not installed"; exit 1; }
+	@echo "OK: libpq: $$(pkg-config --modversion libpq)"
 	@echo "All dependencies are installed!"
 
 # Install system dependencies (Ubuntu/Debian)
@@ -88,7 +88,7 @@ env-up:
 	@sleep 5
 	@echo "Development environment is ready!"
 	@echo "PostgreSQL: localhost:5432"
-	@echo "Database: zicdc_test"
+	@echo "Database: outboxx_test"
 	@echo "User: postgres / Password: password"
 
 env-down:
@@ -109,3 +109,16 @@ env-logs:
 env-status:
 	@echo "Development environment status:"
 	docker-compose ps
+
+# Nix development shell
+nix-shell:
+	@if command -v nix >/dev/null 2>&1; then \
+		echo "Entering Nix development shell..."; \
+		nix --extra-experimental-features "nix-command flakes" develop; \
+	else \
+		echo "ERROR: Nix is not installed. Installing Nix (Determinate Systems installer):"; \
+		echo "curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix | sh -s -- install"; \
+		echo ""; \
+		echo "After installation, restart your shell and run 'make nix-shell' again."; \
+		exit 1; \
+	fi

@@ -1,6 +1,6 @@
-# ZiCDC Examples
+# Outboxx Examples
 
-This directory contains example configurations and setup files for ZiCDC development and testing.
+This directory contains example configurations and setup files for Outboxx development and testing.
 
 ## Files Overview
 
@@ -31,16 +31,16 @@ docker-compose -f docker-compose.dev.yml logs -f
 # Check PostgreSQL
 psql -h localhost -U postgres -d myapp -c "SELECT * FROM users;"
 
-# Check Kafka topics (after running ZiCDC)
-docker exec -it zicdc-kafka kafka-topics --bootstrap-server localhost:9092 --list
+# Check Kafka topics (after running Outboxx)
+docker exec -it outboxx-kafka kafka-topics --bootstrap-server localhost:9092 --list
 ```
 
-### 3. Run ZiCDC
+### 3. Run Outboxx
 
 ```bash
 # From project root
 make build
-./zig-out/bin/zicdc --config examples/config.yaml
+./zig-out/bin/outboxx --config examples/config.yaml
 ```
 
 ## Configuration Options
@@ -60,7 +60,7 @@ The example configuration includes:
 1. **Make Changes**: Modify tables in PostgreSQL
 2. **Observe**: Check Kafka topics for CDC messages
 3. **Monitor**: Use Kafka UI at http://localhost:8080
-4. **Debug**: Check ZiCDC logs and metrics
+4. **Debug**: Check Outboxx logs and metrics
 
 ## Sample Data
 
