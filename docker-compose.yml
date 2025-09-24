@@ -33,9 +33,42 @@ services:
       timeout: 5s
       retries: 5
 
+  # Kafka broker with KRaft mode (no ZooKeeper needed)
+  kafka:
+    image: bitnami/kafka:latest
+    container_name: outboxx-kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+    environment:
+      # KRaft mode configuration
+      KAFKA_CFG_NODE_ID: 1
+      KAFKA_CFG_PROCESS_ROLES: broker,controller
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:19093
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:19093
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_KRAFT_CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+      # Auto-create topics for CDC
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_CFG_NUM_PARTITIONS: 3
+      KAFKA_CFG_DEFAULT_REPLICATION_FACTOR: 1
+    networks:
+      - outboxx-network
+    healthcheck:
+      test: ["CMD", "kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - kafka_data:/bitnami/kafka
+
 volumes:
   postgres_data:
     name: outboxx_postgres_data
+  kafka_data:
+    name: outboxx_kafka_data
 
 networks:
   outboxx-network:
