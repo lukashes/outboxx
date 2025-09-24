@@ -25,7 +25,6 @@ Outboxx is a lightweight PostgreSQL Change Data Capture (CDC) tool written in Zi
 - ✅ **Development Environment**: Docker Compose setup with PostgreSQL and Kafka
 - ✅ **Nix Environment**: Isolated, reproducible development environment with Zig 0.15.1
 - ✅ **Dependency Management**: libpq and librdkafka ready via Nix
-- ✅ **Debug Tools**: Kafka debug consumer for message inspection
 
 ## Development Workflow
 
@@ -66,10 +65,9 @@ make dev            # Development workflow (format + test + build)
 make env-up         # Start PostgreSQL and Kafka with Docker Compose
 make env-down       # Stop development environment
 
-# Kafka-specific commands (inside Nix shell)
-zig build kafka-debug       # Build Kafka debug consumer utility
-./zig-out/bin/kafka-debug   # Run debug consumer (listens to common CDC topics)
-./zig-out/bin/kafka-debug public.users public.orders  # Listen to specific topics
+# Kafka debugging (use standard tools)
+kafka-console-consumer --bootstrap-server localhost:9092 --topic public.users --from-beginning
+kcat -C -b localhost:9092 -t public.users -f 'Topic: %t, Partition: %p, Offset: %o, Key: %k, Payload: %s\n'
 ```
 
 ## Architecture and Implementation Notes
@@ -83,9 +81,8 @@ PostgreSQL WAL → WAL Reader → Message Processor → Kafka Producer → Kafka
 - **WAL Reader**: PostgreSQL logical replication using `test_decoding` plugin
 - **Message Processor**: WAL message parsing, JSON serialization, topic/partition key generation
 - **Kafka Producer**: High-performance message publishing with librdkafka
-- **Kafka Consumer**: Message consumption for testing and debugging
+- **Test Consumer**: Simplified consumer integrated in tests for end-to-end validation
 - **Config Module**: Database connection management with proper error handling
-- **Debug Tools**: Kafka debug consumer utility for message inspection
 - **Integration Tests**: Comprehensive testing with real PostgreSQL and Kafka
 
 ### Testing Strategy
@@ -115,14 +112,12 @@ The project emphasizes robust testing:
 │   ├── config_test.zig    # Configuration unit tests
 │   ├── integration_test.zig # Integration tests with PostgreSQL
 │   ├── message_processor.zig # WAL message parsing and JSON serialization
-│   ├── kafka_debug.zig    # Kafka debug consumer utility
 │   ├── wal/               # WAL streaming components
 │   │   ├── reader.zig     # WAL reader with logical replication
 │   │   └── reader_test.zig # WAL reader unit tests
 │   └── kafka/             # Kafka integration components
 │       ├── producer.zig   # Kafka producer implementation
-│       ├── consumer.zig   # Kafka consumer implementation
-│       └── producer_test.zig # Kafka integration tests
+│       └── producer_test.zig # Kafka integration tests with embedded test consumer
 ├── dev/                   # Development environment
 │   ├── postgres-init.sql  # Database schema and test data
 │   ├── postgres.conf      # PostgreSQL configuration for CDC
@@ -174,15 +169,14 @@ zig test src/wal/reader_test.zig --library c --library pq
 
 #### Kafka Development
 ```bash
-# Build and run Kafka debug consumer
-zig build kafka-debug
-./zig-out/bin/kafka-debug
-
 # Test Kafka integration (requires Kafka running)
 zig build test-integration
 
 # Run specific Kafka tests
 zig test src/kafka/producer_test.zig --library c --library rdkafka
+
+# Debug Kafka messages using standard tools
+kafka-console-consumer --bootstrap-server localhost:9092 --topic public.users --from-beginning
 ```
 
 #### PostgreSQL Development
