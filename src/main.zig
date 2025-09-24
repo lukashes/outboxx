@@ -57,11 +57,11 @@ pub fn main() !void {
     };
 
     // Main CDC loop
-    print("\n=== Starting CDC streaming: PostgreSQL → Kafka ===\n", .{});
+    print("\n=== Starting CDC streaming: PostgreSQL -> Kafka ===\n", .{});
     print("Listening for changes... (Press Ctrl+C to stop)\n\n", .{});
 
     var iteration: u32 = 0;
-    while (iteration < 50) : (iteration += 1) {  // Limit iterations for testing
+    while (iteration < 50) : (iteration += 1) { // Limit iterations for testing
         print("--- Polling for changes (iteration {}) ---\n", .{iteration + 1});
 
         kafka_wal_reader.streamChangesToKafka(10) catch |err| {

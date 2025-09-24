@@ -84,7 +84,7 @@ pub const KafkaProducer = struct {
         const result = c.rd_kafka_produce(
             topic,
             c.RD_KAFKA_PARTITION_UA, // Auto-assign partition
-            c.RD_KAFKA_MSG_F_COPY,   // Copy message payload
+            c.RD_KAFKA_MSG_F_COPY, // Copy message payload
             @constCast(message.ptr),
             message.len,
             key_ptr,

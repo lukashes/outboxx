@@ -20,10 +20,6 @@ pub const Config = struct {
     }
 
     pub fn connectionString(self: Config, allocator: std.mem.Allocator) ![]u8 {
-        return std.fmt.allocPrint(
-            allocator,
-            "host=127.0.0.1 port={d} dbname={s} user={s} password={s} replication=database gssencmode=disable",
-            .{ self.port, self.database, self.user, self.password }
-        );
+        return std.fmt.allocPrint(allocator, "host=127.0.0.1 port={d} dbname={s} user={s} password={s} replication=database gssencmode=disable", .{ self.port, self.database, self.user, self.password });
     }
 };

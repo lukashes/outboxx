@@ -42,6 +42,33 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
+    // Kafka debug utility
+    const kafka_debug_exe = b.addExecutable(.{
+        .name = "kafka-debug",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/kafka_debug.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    kafka_debug_exe.linkLibC();
+    kafka_debug_exe.linkSystemLibrary("rdkafka");
+
+    // Add include paths for kafka debug utility
+    if (std.process.getEnvVarOwned(b.allocator, "C_INCLUDE_PATH")) |include_path| {
+        defer b.allocator.free(include_path);
+        var it = std.mem.splitScalar(u8, include_path, ':');
+        while (it.next()) |path| {
+            if (path.len > 0) {
+                kafka_debug_exe.addIncludePath(.{ .cwd_relative = path });
+            }
+        }
+    } else |_| {}
+
+    const kafka_debug_install = b.addInstallArtifact(kafka_debug_exe, .{});
+    const kafka_debug_step = b.step("kafka-debug", "Build Kafka debug consumer utility");
+    kafka_debug_step.dependOn(&kafka_debug_install.step);
+
     // Create run step
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
@@ -116,9 +143,23 @@ pub fn build(b: *std.Build) void {
     integration_tests.linkSystemLibrary("pq");
     integration_tests.linkSystemLibrary("rdkafka");
 
+    // Kafka integration tests (in kafka directory)
+    const kafka_integration_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/kafka/producer_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    kafka_integration_tests.linkLibC();
+    kafka_integration_tests.linkSystemLibrary("rdkafka");
+
     const run_integration_tests = b.addRunArtifact(integration_tests);
+    const run_kafka_integration_tests = b.addRunArtifact(kafka_integration_tests);
+
     const integration_test_step = b.step("test-integration", "Run integration tests");
     integration_test_step.dependOn(&run_integration_tests.step);
+    integration_test_step.dependOn(&run_kafka_integration_tests.step);
 
     // Single integration test with filter
     const single_integration_test = b.addRunArtifact(integration_tests);
