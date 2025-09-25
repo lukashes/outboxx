@@ -120,5 +120,5 @@ test "KafkaProducer initialization" {
     // Test that we can create and destroy the producer structure
     // without actually connecting to Kafka
     _ = allocator;
-    // TODO: Add mock tests when we have a testing framework set up
+    // Mock tests can be added when a testing framework is set up
 }

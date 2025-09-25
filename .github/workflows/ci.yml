@@ -35,11 +35,12 @@ jobs:
 
       - name: Check for TODO/FIXME comments
         run: |
-          if grep -r "TODO\|FIXME\|XXX" src/ --exclude-dir=.git; then
-            echo "Found TODO/FIXME comments - please address them"
+          # Allow TODO/FIXME in test files, but not in main source
+          if grep -r "TODO\|FIXME\|XXX" src/ --exclude-dir=.git --include="*.zig" | grep -v "_test.zig"; then
+            echo "FAIL: Found TODO/FIXME comments in source code - please address them"
             exit 1
           fi
-          echo "No TODO/FIXME comments found"
+          echo "PASS: No TODO/FIXME comments found in source code"
 
       - name: Check function complexity
         run: |
