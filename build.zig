@@ -74,10 +74,10 @@ pub fn build(b: *std.Build) void {
     wal_reader_tests.linkLibC();
     wal_reader_tests.linkSystemLibrary("pq");
 
-    // Message processor tests
-    const message_processor_tests = b.addTest(.{
+    // Message and WAL parser tests
+    const message_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/message_processor.zig"),
+            .root_source_file = b.path("src/processor/message.zig"),
             .target = target,
             .optimize = optimize,
         }),
@@ -96,13 +96,13 @@ pub fn build(b: *std.Build) void {
 
     const run_unit_tests = b.addRunArtifact(unit_tests);
     const run_wal_reader_tests = b.addRunArtifact(wal_reader_tests);
-    const run_message_processor_tests = b.addRunArtifact(message_processor_tests);
+    const run_message_tests = b.addRunArtifact(message_tests);
     const run_kafka_producer_tests = b.addRunArtifact(kafka_producer_tests);
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_wal_reader_tests.step);
-    test_step.dependOn(&run_message_processor_tests.step);
+    test_step.dependOn(&run_message_tests.step);
     test_step.dependOn(&run_kafka_producer_tests.step);
 
     // Integration tests (moved to src/ for simplicity)

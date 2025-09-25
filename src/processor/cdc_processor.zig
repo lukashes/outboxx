@@ -3,13 +3,13 @@ const WalReader = @import("../wal/reader.zig").WalReader;
 const WalEvent = @import("../wal/reader.zig").WalEvent;
 const WalReaderError = @import("../wal/reader.zig").WalReaderError;
 const KafkaProducer = @import("../kafka/producer.zig").KafkaProducer;
-const MessageProcessor = @import("../message_processor.zig").MessageProcessor;
+const WalMessageParser = @import("message.zig").WalMessageParser;
 
 pub const CdcProcessor = struct {
     allocator: std.mem.Allocator,
     wal_reader: WalReader,
     kafka_producer: ?KafkaProducer,
-    message_processor: MessageProcessor,
+    wal_message_parser: WalMessageParser,
     brokers: []const u8,
 
     const Self = @This();
@@ -19,7 +19,7 @@ pub const CdcProcessor = struct {
             .allocator = allocator,
             .wal_reader = WalReader.init(allocator, slot_name),
             .kafka_producer = null,
-            .message_processor = MessageProcessor.init(allocator),
+            .wal_message_parser = WalMessageParser.init(allocator),
             .brokers = brokers,
         };
     }
@@ -29,7 +29,7 @@ pub const CdcProcessor = struct {
             producer.deinit();
         }
         self.wal_reader.deinit();
-        self.message_processor.deinit();
+        self.wal_message_parser.deinit();
     }
 
     pub fn connect(self: *Self, connection_string: []const u8) WalReaderError!void {
@@ -69,7 +69,7 @@ pub const CdcProcessor = struct {
 
         for (events.items) |event| {
             // Parse WAL event into structured message
-            if (self.message_processor.parseWalMessage(event.data)) |message_opt| {
+            if (self.wal_message_parser.parseWalMessage(event.data)) |message_opt| {
                 if (message_opt) |message| {
                     defer {
                         self.allocator.free(message.schema_name);

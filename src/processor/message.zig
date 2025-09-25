@@ -38,7 +38,7 @@ pub const ChangeMessage = struct {
     }
 };
 
-pub const MessageProcessor = struct {
+pub const WalMessageParser = struct {
     allocator: std.mem.Allocator,
 
     const Self = @This();
@@ -118,7 +118,7 @@ pub const MessageProcessor = struct {
 };
 
 // Unit tests
-test "MessageProcessor parse INSERT" {
+test "WalMessageParser parse INSERT" {
     const testing = std.testing;
 
     // Use testing allocator with leak detection
@@ -131,12 +131,12 @@ test "MessageProcessor parse INSERT" {
     }
     const allocator = gpa.allocator();
 
-    var processor = MessageProcessor.init(allocator);
-    defer processor.deinit();
+    var parser = WalMessageParser.init(allocator);
+    defer parser.deinit();
 
     const wal_data = "table public.users: INSERT: id[integer]:1 email[character varying]:'alice@example.com'";
 
-    const message = try processor.parseWalMessage(wal_data);
+    const message = try parser.parseWalMessage(wal_data);
     defer if (message) |msg| {
         allocator.free(msg.schema_name);
         allocator.free(msg.table_name);
@@ -152,24 +152,24 @@ test "MessageProcessor parse INSERT" {
     }
 }
 
-test "MessageProcessor skip non-table messages" {
+test "WalMessageParser skip non-table messages" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    var processor = MessageProcessor.init(allocator);
-    defer processor.deinit();
+    var parser = WalMessageParser.init(allocator);
+    defer parser.deinit();
 
     const begin_msg = "BEGIN 760";
     const commit_msg = "COMMIT 760";
 
-    const begin_result = try processor.parseWalMessage(begin_msg);
-    const commit_result = try processor.parseWalMessage(commit_msg);
+    const begin_result = try parser.parseWalMessage(begin_msg);
+    const commit_result = try parser.parseWalMessage(commit_msg);
 
     try testing.expect(begin_result == null);
     try testing.expect(commit_result == null);
 }
 
-test "MessageProcessor parse UPDATE" {
+test "WalMessageParser parse UPDATE" {
     const testing = std.testing;
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -181,12 +181,12 @@ test "MessageProcessor parse UPDATE" {
     }
     const allocator = gpa.allocator();
 
-    var processor = MessageProcessor.init(allocator);
-    defer processor.deinit();
+    var parser = WalMessageParser.init(allocator);
+    defer parser.deinit();
 
     const wal_data = "table public.users: UPDATE: old-key: id[integer]:1 name[character varying]:'Old Name' new-tuple: id[integer]:1 name[character varying]:'New Name'";
 
-    const message = try processor.parseWalMessage(wal_data);
+    const message = try parser.parseWalMessage(wal_data);
     defer if (message) |msg| {
         allocator.free(msg.schema_name);
         allocator.free(msg.table_name);
@@ -204,7 +204,7 @@ test "MessageProcessor parse UPDATE" {
     }
 }
 
-test "MessageProcessor parse DELETE" {
+test "WalMessageParser parse DELETE" {
     const testing = std.testing;
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -216,12 +216,12 @@ test "MessageProcessor parse DELETE" {
     }
     const allocator = gpa.allocator();
 
-    var processor = MessageProcessor.init(allocator);
-    defer processor.deinit();
+    var parser = WalMessageParser.init(allocator);
+    defer parser.deinit();
 
     const wal_data = "table public.users: DELETE: id[integer]:1 email[character varying]:'deleted@example.com'";
 
-    const message = try processor.parseWalMessage(wal_data);
+    const message = try parser.parseWalMessage(wal_data);
     defer if (message) |msg| {
         allocator.free(msg.schema_name);
         allocator.free(msg.table_name);
