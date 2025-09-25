@@ -23,8 +23,8 @@ pub fn build(b: *std.Build) void {
     // Add PostgreSQL library (libpq)
     exe.linkSystemLibrary("pq");
 
-    // Add Kafka library (librdkafka) - will be added later when implementing Kafka integration
-    // exe.linkSystemLibrary("rdkafka");
+    // Add Kafka library (librdkafka)
+    exe.linkSystemLibrary("rdkafka");
 
     // Add include paths from environment (useful for Nix and custom installs)
     if (std.process.getEnvVarOwned(b.allocator, "C_INCLUDE_PATH")) |include_path| {
@@ -41,6 +41,7 @@ pub fn build(b: *std.Build) void {
     }
 
     b.installArtifact(exe);
+
 
     // Create run step
     const run_cmd = b.addRunArtifact(exe);
@@ -73,12 +74,36 @@ pub fn build(b: *std.Build) void {
     wal_reader_tests.linkLibC();
     wal_reader_tests.linkSystemLibrary("pq");
 
+    // Message and WAL parser tests
+    const message_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/processor/message.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
+    // Kafka producer tests (need both libpq and librdkafka for integration)
+    const kafka_producer_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/kafka/producer.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    kafka_producer_tests.linkLibC();
+    kafka_producer_tests.linkSystemLibrary("rdkafka");
+
     const run_unit_tests = b.addRunArtifact(unit_tests);
     const run_wal_reader_tests = b.addRunArtifact(wal_reader_tests);
+    const run_message_tests = b.addRunArtifact(message_tests);
+    const run_kafka_producer_tests = b.addRunArtifact(kafka_producer_tests);
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_wal_reader_tests.step);
+    test_step.dependOn(&run_message_tests.step);
+    test_step.dependOn(&run_kafka_producer_tests.step);
 
     // Integration tests (moved to src/ for simplicity)
     const integration_tests = b.addTest(.{
@@ -90,10 +115,25 @@ pub fn build(b: *std.Build) void {
     });
     integration_tests.linkLibC();
     integration_tests.linkSystemLibrary("pq");
+    integration_tests.linkSystemLibrary("rdkafka");
+
+    // Kafka integration tests (in kafka directory)
+    const kafka_integration_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/kafka/producer_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    kafka_integration_tests.linkLibC();
+    kafka_integration_tests.linkSystemLibrary("rdkafka");
 
     const run_integration_tests = b.addRunArtifact(integration_tests);
+    const run_kafka_integration_tests = b.addRunArtifact(kafka_integration_tests);
+
     const integration_test_step = b.step("test-integration", "Run integration tests");
     integration_test_step.dependOn(&run_integration_tests.step);
+    integration_test_step.dependOn(&run_kafka_integration_tests.step);
 
     // Single integration test with filter
     const single_integration_test = b.addRunArtifact(integration_tests);

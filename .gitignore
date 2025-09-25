@@ -48,3 +48,6 @@ CLAUDE.local.md
 # Direnv
 .direnv
 .envrc
+
+# IDE configuration (environment-specific)
+compile_flags.txt

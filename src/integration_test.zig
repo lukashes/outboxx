@@ -111,8 +111,7 @@ fn executeSql(allocator: std.mem.Allocator, _: []const u8, sql: []const u8) !voi
     });
 
     // Create non-replication connection string
-    const regular_conn_str = try std.fmt.allocPrint(allocator,
-        "host=127.0.0.1 port=5432 dbname=outboxx_test user=postgres password=password", .{});
+    const regular_conn_str = try std.fmt.allocPrint(allocator, "host=127.0.0.1 port=5432 dbname=outboxx_test user=postgres password=password", .{});
     defer allocator.free(regular_conn_str);
 
     const conn = c.PQconnectdb(regular_conn_str.ptr);
@@ -211,7 +210,8 @@ test "WAL reader can detect INSERT operations" {
     var found_insert = false;
     for (changes.items) |change| {
         if (std.mem.indexOf(u8, change.data, "INSERT") != null and
-            std.mem.indexOf(u8, change.data, "test_insert@example.com") != null) {
+            std.mem.indexOf(u8, change.data, "test_insert@example.com") != null)
+        {
             found_insert = true;
             std.debug.print("Found INSERT change: {s}\n", .{change.data});
             break;
@@ -307,7 +307,8 @@ test "WAL reader can detect UPDATE operations" {
     var found_update = false;
     for (changes.items) |change| {
         if (std.mem.indexOf(u8, change.data, "UPDATE") != null and
-            std.mem.indexOf(u8, change.data, "test_update@example.com") != null) {
+            std.mem.indexOf(u8, change.data, "test_update@example.com") != null)
+        {
             found_update = true;
             std.debug.print("Found UPDATE change: {s}\n", .{change.data});
             break;
@@ -337,7 +338,7 @@ test "WAL reader can detect DELETE operations" {
         error.ConnectionFailed => {
             std.debug.print("PostgreSQL not available - skipping test\n", .{});
             return;
-    },
+        },
         else => return err,
     };
 
@@ -398,7 +399,8 @@ test "WAL reader can detect DELETE operations" {
     var found_delete = false;
     for (changes.items) |change| {
         if (std.mem.indexOf(u8, change.data, "DELETE") != null and
-            std.mem.indexOf(u8, change.data, "test_delete@example.com") != null) {
+            std.mem.indexOf(u8, change.data, "test_delete@example.com") != null)
+        {
             found_delete = true;
             std.debug.print("Found DELETE change: {s}\n", .{change.data});
             break;

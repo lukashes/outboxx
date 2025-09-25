@@ -75,12 +75,7 @@ pub const WalReader = struct {
         if (self.connection == null) return WalReaderError.ConnectionFailed;
 
         // Create SQL command for creating replication slot
-        const sql = std.fmt.allocPrintSentinel(
-            self.allocator,
-            "SELECT pg_create_logical_replication_slot('{s}', 'test_decoding');",
-            .{self.slot_name},
-            0
-        ) catch return WalReaderError.OutOfMemory;
+        const sql = std.fmt.allocPrintSentinel(self.allocator, "SELECT pg_create_logical_replication_slot('{s}', 'test_decoding');", .{self.slot_name}, 0) catch return WalReaderError.OutOfMemory;
         defer self.allocator.free(sql);
 
         print("Creating replication slot: {s}\n", .{self.slot_name});
@@ -101,12 +96,7 @@ pub const WalReader = struct {
     pub fn dropSlot(self: *Self) WalReaderError!void {
         if (self.connection == null) return WalReaderError.ConnectionFailed;
 
-        const sql = std.fmt.allocPrintSentinel(
-            self.allocator,
-            "SELECT pg_drop_replication_slot('{s}');",
-            .{self.slot_name},
-            0
-        ) catch return WalReaderError.OutOfMemory;
+        const sql = std.fmt.allocPrintSentinel(self.allocator, "SELECT pg_drop_replication_slot('{s}');", .{self.slot_name}, 0) catch return WalReaderError.OutOfMemory;
         defer self.allocator.free(sql);
 
         print("Dropping replication slot: {s}\n", .{self.slot_name});
@@ -127,12 +117,7 @@ pub const WalReader = struct {
     pub fn readChanges(self: *Self, limit: u32) WalReaderError!std.ArrayList(WalEvent) {
         if (self.connection == null) return WalReaderError.ConnectionFailed;
 
-        const sql = std.fmt.allocPrintSentinel(
-            self.allocator,
-            "SELECT lsn, xid, data FROM pg_logical_slot_get_changes('{s}', NULL, NULL) LIMIT {d};",
-            .{ self.slot_name, limit },
-            0
-        ) catch return WalReaderError.OutOfMemory;
+        const sql = std.fmt.allocPrintSentinel(self.allocator, "SELECT lsn, xid, data FROM pg_logical_slot_get_changes('{s}', NULL, NULL) LIMIT {d};", .{ self.slot_name, limit }, 0) catch return WalReaderError.OutOfMemory;
         defer self.allocator.free(sql);
 
         print("Reading WAL changes from slot: {s}\n", .{self.slot_name});
