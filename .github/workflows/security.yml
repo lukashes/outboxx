@@ -83,9 +83,15 @@ jobs:
 
       - name: Check file permissions
         run: |
-          # Check for files with overly permissive permissions
-          if find . -type f -perm -o+w -not -path "./.git/*"; then
-            echo "FAIL: Found world-writable files"
+          # Check for files with overly permissive permissions (exclude common exceptions)
+          world_writable=$(find . -type f -perm -o+w \
+            -not -path "./.git/*" \
+            -not -path "./zig-cache/*" \
+            -not -path "./zig-out/*" \
+            2>/dev/null || true)
+          if [ -n "$world_writable" ]; then
+            echo "FAIL: Found world-writable files:"
+            echo "$world_writable"
             exit 1
           fi
           echo "PASS: File permissions are secure"
