@@ -1,0 +1,194 @@
+name: Security
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 2 * * 1'  # Weekly security scan on Mondays at 2 AM
+
+jobs:
+  codeql:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ 'cpp' ]  # Closest to Zig for static analysis
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+
+      - name: Build project for analysis
+        run: nix develop --command make build
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+
+  secret-scanning:
+    name: Secret Detection
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for secret scanning
+
+      - name: Run secret detection
+        run: |
+          # Check for common secret patterns
+          echo "Scanning for potential secrets..."
+
+          # Database credentials
+          if grep -r -i "password.*=" src/ --include="*.zig" | grep -v "_test" | grep -v "// "; then
+            echo "❌ Found potential hardcoded passwords"
+            exit 1
+          fi
+
+          # API keys and tokens
+          if grep -r -E "(api_key|apikey|token|secret).*=" src/ --include="*.zig" | grep -v "_test" | grep -v "// "; then
+            echo "❌ Found potential API keys or tokens"
+            exit 1
+          fi
+
+          # Connection strings
+          if grep -r -E "postgres://|kafka://|mongodb://" src/ --include="*.zig" | grep -v "_test" | grep -v "// "; then
+            echo "❌ Found potential hardcoded connection strings"
+            exit 1
+          fi
+
+          # Private keys
+          if grep -r -E "PRIVATE KEY|BEGIN RSA|BEGIN DSA" src/ --include="*.zig"; then
+            echo "❌ Found potential private keys"
+            exit 1
+          fi
+
+          echo "✅ No hardcoded secrets detected"
+
+      - name: Check file permissions
+        run: |
+          # Check for files with overly permissive permissions
+          if find . -type f -perm -o+w -not -path "./.git/*"; then
+            echo "❌ Found world-writable files"
+            exit 1
+          fi
+          echo "✅ File permissions are secure"
+
+  dependency-security:
+    name: Dependency Security
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+
+      - name: Check Nix flake security
+        run: |
+          # Verify flake inputs are using secure channels
+          if grep -q "github:" flake.nix; then
+            echo "✅ Using GitHub inputs in flake.nix"
+          fi
+
+          # Check for any insecure HTTP URLs
+          if grep -r "http://" flake.nix flake.lock 2>/dev/null | grep -v "localhost"; then
+            echo "❌ Found insecure HTTP URLs in Nix configuration"
+            exit 1
+          fi
+
+          echo "✅ Nix dependencies look secure"
+
+      - name: Verify build reproducibility
+        run: |
+          # Build twice and compare (basic reproducibility check)
+          nix develop --command make build
+          cp zig-out/bin/outboxx build1 2>/dev/null || echo "No binary output to check"
+
+          nix develop --command make clean
+          nix develop --command make build
+          cp zig-out/bin/outboxx build2 2>/dev/null || echo "No binary output to check"
+
+          if [ -f build1 ] && [ -f build2 ]; then
+            if cmp -s build1 build2; then
+              echo "✅ Build is reproducible"
+            else
+              echo "⚠️ Build is not reproducible (this may be expected)"
+            fi
+          fi
+
+      - name: Check for vulnerable patterns
+        run: |
+          # Check for common vulnerability patterns in Zig code
+          echo "Scanning for vulnerable patterns..."
+
+          # Buffer overflow patterns
+          if grep -r "std.mem.copy\|@memcpy" src/ --include="*.zig"; then
+            echo "⚠️ Found memory copy operations - ensure bounds checking"
+          fi
+
+          # Unsafe C interop
+          if grep -r "@ptrCast\|@bitCast" src/ --include="*.zig"; then
+            echo "⚠️ Found unsafe pointer operations - review carefully"
+          fi
+
+          # SQL injection potential
+          if grep -r "std.fmt.allocPrint.*SELECT\|std.fmt.allocPrint.*INSERT\|std.fmt.allocPrint.*UPDATE" src/ --include="*.zig"; then
+            echo "⚠️ Found SQL string formatting - ensure against SQL injection"
+          fi
+
+          echo "✅ Vulnerability pattern scan completed"
+
+  supply-chain:
+    name: Supply Chain Security
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Verify dependencies integrity
+        run: |
+          # Check that flake.lock exists and is committed
+          if [ ! -f flake.lock ]; then
+            echo "❌ flake.lock missing - dependencies not pinned"
+            exit 1
+          fi
+
+          # Verify flake.lock is up to date with flake.nix
+          if [ flake.nix -nt flake.lock ]; then
+            echo "⚠️ flake.lock may be outdated compared to flake.nix"
+          fi
+
+          echo "✅ Dependency integrity checks passed"
+
+      - name: Check for typosquatting
+        run: |
+          # Basic check for common typos in dependency names
+          if grep -r -i "postgre[^s]" flake.nix; then
+            echo "❌ Potential typosquatting: 'postgre' instead of 'postgresql'"
+            exit 1
+          fi
+
+          if grep -r -i "rdkafka.*[^0-9]\.[0-9]" flake.nix; then
+            echo "⚠️ Check rdkafka version format"
+          fi
+
+          echo "✅ No obvious typosquatting detected"

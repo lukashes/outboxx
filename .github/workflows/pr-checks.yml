@@ -1,0 +1,202 @@
+name: PR Quality Gates
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+    types: [ opened, synchronize, reopened, ready_for_review ]
+
+jobs:
+  pr-validation:
+    name: PR Validation
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+
+      - name: Validate PR title
+        run: |
+          PR_TITLE="${{ github.event.pull_request.title }}"
+
+          # Check for conventional commit format (optional but recommended)
+          if ! echo "$PR_TITLE" | grep -qE "^(feat|fix|docs|style|refactor|perf|test|chore|ci)(\(.+\))?: .+"; then
+            echo "⚠️ PR title doesn't follow conventional commit format"
+            echo "Consider using: feat|fix|docs|style|refactor|perf|test|chore|ci: description"
+          fi
+
+          # Check title length
+          if [ ${#PR_TITLE} -gt 72 ]; then
+            echo "❌ PR title too long (${#PR_TITLE} characters, max 72)"
+            exit 1
+          fi
+
+          echo "✅ PR title validation passed"
+
+      - name: Check for breaking changes
+        run: |
+          # Look for potential breaking changes in the diff
+          BREAKING_PATTERNS="pub fn.*init\|pub const.*Error\|pub fn.*deinit"
+
+          if git diff origin/${{ github.base_ref }}...HEAD -- src/ | grep -E "^-.*($BREAKING_PATTERNS)"; then
+            echo "⚠️ Potential breaking changes detected"
+            echo "Please ensure backward compatibility or document breaking changes"
+          fi
+
+          echo "✅ Breaking change check completed"
+
+      - name: Validate commit messages
+        run: |
+          # Check recent commit messages in PR
+          git log --format="%s" origin/${{ github.base_ref }}..HEAD | while read commit_msg; do
+            if [ ${#commit_msg} -gt 72 ]; then
+              echo "❌ Commit message too long: $commit_msg"
+              exit 1
+            fi
+
+            if [ ${#commit_msg} -lt 10 ]; then
+              echo "❌ Commit message too short: $commit_msg"
+              exit 1
+            fi
+          done
+
+          echo "✅ Commit message validation passed"
+
+      - name: Check file changes
+        run: |
+          # Ensure no sensitive files are modified
+          SENSITIVE_FILES=".github/workflows/security.yml flake.nix"
+
+          for file in $SENSITIVE_FILES; do
+            if git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -q "^$file$"; then
+              echo "⚠️ Sensitive file modified: $file"
+              echo "Please ensure this change is intentional and secure"
+            fi
+          done
+
+          # Check for large files
+          git diff --name-only origin/${{ github.base_ref }}...HEAD | while read file; do
+            if [ -f "$file" ] && [ $(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null || echo 0) -gt 1048576 ]; then
+              echo "❌ Large file detected: $file (>1MB)"
+              echo "Consider using Git LFS for large files"
+              exit 1
+            fi
+          done
+
+          echo "✅ File change validation passed"
+
+  additional-checks:
+    name: Additional PR Checks
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: outboxx_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+
+      # Integration Tests
+      - name: Setup PostgreSQL
+        run: |
+          until pg_isready -h localhost -p 5432 -U postgres; do
+            echo "Waiting for PostgreSQL..."
+            sleep 1
+          done
+
+      - name: Initialize database
+        run: |
+          PGPASSWORD=password psql -h localhost -p 5432 -U postgres -d outboxx_test -f dev/postgres-init.sql
+
+      - name: Run integration tests
+        run: |
+          nix develop --command make test-integration
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: 5432
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: outboxx_test
+
+      # Code Coverage
+      - name: Generate coverage report
+        run: |
+          nix develop --command bash -c '
+            test_funcs=$(grep -r "test \"" src/ --include="*.zig" | wc -l)
+            pub_funcs=$(grep -r "pub fn" src/ --include="*.zig" | grep -v "_test.zig" | wc -l)
+
+            if [ "$test_funcs" -eq 0 ]; then
+              echo "❌ No tests found"
+              exit 1
+            fi
+
+            coverage_ratio=$((test_funcs * 100 / (pub_funcs + 1)))
+            echo "Test coverage estimate: ${coverage_ratio}% ($test_funcs tests for $pub_funcs public functions)"
+
+            if [ "$coverage_ratio" -lt 30 ]; then
+              echo "⚠️ Low test coverage - consider adding more tests"
+            else
+              echo "✅ Test coverage looks reasonable"
+            fi
+          '
+
+  performance-check:
+    name: Performance Baseline
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+
+      - name: Build optimized binary
+        run: |
+          nix develop --command zig build -Doptimize=ReleaseFast
+          ls -la zig-out/bin/ || echo "No binary output"
+
+      - name: Basic performance check
+        run: |
+          # Check binary size (should be reasonable for a CDC tool)
+          if [ -f zig-out/bin/outboxx ]; then
+            size=$(stat -f%z zig-out/bin/outboxx 2>/dev/null || stat -c%s zig-out/bin/outboxx 2>/dev/null)
+            size_mb=$((size / 1024 / 1024))
+
+            echo "Binary size: ${size_mb}MB"
+
+            if [ "$size_mb" -gt 50 ]; then
+              echo "⚠️ Binary size is large (${size_mb}MB) - consider optimization"
+            else
+              echo "✅ Binary size is reasonable"
+            fi
+          else
+            echo "No binary to check"
+          fi
+
+      - name: Memory usage check
+        run: |
+          # Build-time memory usage
+          echo "Checking build memory usage..."
+          /usr/bin/time -v nix develop --command make build 2>&1 | grep "Maximum resident set size" || echo "Memory usage check completed"
