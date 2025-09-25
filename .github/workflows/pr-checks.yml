@@ -26,17 +26,17 @@ jobs:
 
           # Check for conventional commit format (optional but recommended)
           if ! echo "$PR_TITLE" | grep -qE "^(feat|fix|docs|style|refactor|perf|test|chore|ci)(\(.+\))?: .+"; then
-            echo "⚠️ PR title doesn't follow conventional commit format"
+            echo "WARN: PR title doesn't follow conventional commit format"
             echo "Consider using: feat|fix|docs|style|refactor|perf|test|chore|ci: description"
           fi
 
           # Check title length
           if [ ${#PR_TITLE} -gt 72 ]; then
-            echo "❌ PR title too long (${#PR_TITLE} characters, max 72)"
+            echo "FAIL: PR title too long (${#PR_TITLE} characters, max 72)"
             exit 1
           fi
 
-          echo "✅ PR title validation passed"
+          echo "PASS: PR title validation passed"
 
       - name: Check for breaking changes
         run: |
@@ -44,28 +44,28 @@ jobs:
           BREAKING_PATTERNS="pub fn.*init\|pub const.*Error\|pub fn.*deinit"
 
           if git diff origin/${{ github.base_ref }}...HEAD -- src/ | grep -E "^-.*($BREAKING_PATTERNS)"; then
-            echo "⚠️ Potential breaking changes detected"
+            echo "WARN: Potential breaking changes detected"
             echo "Please ensure backward compatibility or document breaking changes"
           fi
 
-          echo "✅ Breaking change check completed"
+          echo "PASS: Breaking change check completed"
 
       - name: Validate commit messages
         run: |
           # Check recent commit messages in PR
           git log --format="%s" origin/${{ github.base_ref }}..HEAD | while read commit_msg; do
             if [ ${#commit_msg} -gt 72 ]; then
-              echo "❌ Commit message too long: $commit_msg"
+              echo "FAIL: Commit message too long: $commit_msg"
               exit 1
             fi
 
             if [ ${#commit_msg} -lt 10 ]; then
-              echo "❌ Commit message too short: $commit_msg"
+              echo "FAIL: Commit message too short: $commit_msg"
               exit 1
             fi
           done
 
-          echo "✅ Commit message validation passed"
+          echo "PASS: Commit message validation passed"
 
       - name: Check file changes
         run: |
@@ -74,7 +74,7 @@ jobs:
 
           for file in $SENSITIVE_FILES; do
             if git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -q "^$file$"; then
-              echo "⚠️ Sensitive file modified: $file"
+              echo "WARN: Sensitive file modified: $file"
               echo "Please ensure this change is intentional and secure"
             fi
           done
@@ -82,13 +82,13 @@ jobs:
           # Check for large files
           git diff --name-only origin/${{ github.base_ref }}...HEAD | while read file; do
             if [ -f "$file" ] && [ $(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null || echo 0) -gt 1048576 ]; then
-              echo "❌ Large file detected: $file (>1MB)"
+              echo "FAIL: Large file detected: $file (>1MB)"
               echo "Consider using Git LFS for large files"
               exit 1
             fi
           done
 
-          echo "✅ File change validation passed"
+          echo "PASS: File change validation passed"
 
   additional-checks:
     name: Additional PR Checks
@@ -146,7 +146,7 @@ jobs:
             pub_funcs=$(grep -r "pub fn" src/ --include="*.zig" | grep -v "_test.zig" | wc -l)
 
             if [ "$test_funcs" -eq 0 ]; then
-              echo "❌ No tests found"
+              echo "FAIL: No tests found"
               exit 1
             fi
 
@@ -154,9 +154,9 @@ jobs:
             echo "Test coverage estimate: ${coverage_ratio}% ($test_funcs tests for $pub_funcs public functions)"
 
             if [ "$coverage_ratio" -lt 30 ]; then
-              echo "⚠️ Low test coverage - consider adding more tests"
+              echo "WARN: Low test coverage - consider adding more tests"
             else
-              echo "✅ Test coverage looks reasonable"
+              echo "PASS: Test coverage looks reasonable"
             fi
           '
 
@@ -187,9 +187,9 @@ jobs:
             echo "Binary size: ${size_mb}MB"
 
             if [ "$size_mb" -gt 50 ]; then
-              echo "⚠️ Binary size is large (${size_mb}MB) - consider optimization"
+              echo "WARN: Binary size is large (${size_mb}MB) - consider optimization"
             else
-              echo "✅ Binary size is reasonable"
+              echo "PASS: Binary size is reasonable"
             fi
           else
             echo "No binary to check"

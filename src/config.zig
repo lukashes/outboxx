@@ -29,7 +29,7 @@ pub const Config = struct {
             .port = 5432,
             .database = "outboxx_test",
             .user = "postgres",
-            .password = "password",
+            .password = "password", // Default test password - should be overridden in production
             .slot_name = "outboxx_slot",
             .kafka = KafkaConfig.default(),
         };

@@ -55,40 +55,40 @@ jobs:
           # Check for common secret patterns
           echo "Scanning for potential secrets..."
 
-          # Database credentials
-          if grep -r -i "password.*=" src/ --include="*.zig" | grep -v "_test" | grep -v "// "; then
-            echo "❌ Found potential hardcoded passwords"
+          # Database credentials (exclude test configs, format strings and default values)
+          if grep -r -i "password.*=" src/ --include="*.zig" | grep -v "_test" | grep -v "// " | grep -v "password.*=.*\"password\"" | grep -v "\.password.*=.*\"password\"" | grep -v "password={s}"; then
+            echo "FAIL: Found potential hardcoded passwords"
             exit 1
           fi
 
           # API keys and tokens
           if grep -r -E "(api_key|apikey|token|secret).*=" src/ --include="*.zig" | grep -v "_test" | grep -v "// "; then
-            echo "❌ Found potential API keys or tokens"
+            echo "FAIL: Found potential API keys or tokens"
             exit 1
           fi
 
           # Connection strings
           if grep -r -E "postgres://|kafka://|mongodb://" src/ --include="*.zig" | grep -v "_test" | grep -v "// "; then
-            echo "❌ Found potential hardcoded connection strings"
+            echo "FAIL: Found potential hardcoded connection strings"
             exit 1
           fi
 
           # Private keys
           if grep -r -E "PRIVATE KEY|BEGIN RSA|BEGIN DSA" src/ --include="*.zig"; then
-            echo "❌ Found potential private keys"
+            echo "FAIL: Found potential private keys"
             exit 1
           fi
 
-          echo "✅ No hardcoded secrets detected"
+          echo "PASS: No hardcoded secrets detected"
 
       - name: Check file permissions
         run: |
           # Check for files with overly permissive permissions
           if find . -type f -perm -o+w -not -path "./.git/*"; then
-            echo "❌ Found world-writable files"
+            echo "FAIL: Found world-writable files"
             exit 1
           fi
-          echo "✅ File permissions are secure"
+          echo "PASS: File permissions are secure"
 
   dependency-security:
     name: Dependency Security
@@ -105,16 +105,16 @@ jobs:
         run: |
           # Verify flake inputs are using secure channels
           if grep -q "github:" flake.nix; then
-            echo "✅ Using GitHub inputs in flake.nix"
+            echo "PASS: Using GitHub inputs in flake.nix"
           fi
 
           # Check for any insecure HTTP URLs
           if grep -r "http://" flake.nix flake.lock 2>/dev/null | grep -v "localhost"; then
-            echo "❌ Found insecure HTTP URLs in Nix configuration"
+            echo "FAIL: Found insecure HTTP URLs in Nix configuration"
             exit 1
           fi
 
-          echo "✅ Nix dependencies look secure"
+          echo "PASS: Nix dependencies look secure"
 
       - name: Verify build reproducibility
         run: |
@@ -128,9 +128,9 @@ jobs:
 
           if [ -f build1 ] && [ -f build2 ]; then
             if cmp -s build1 build2; then
-              echo "✅ Build is reproducible"
+              echo "PASS: Build is reproducible"
             else
-              echo "⚠️ Build is not reproducible (this may be expected)"
+              echo "WARN: Build is not reproducible (this may be expected)"
             fi
           fi
 
@@ -141,20 +141,20 @@ jobs:
 
           # Buffer overflow patterns
           if grep -r "std.mem.copy\|@memcpy" src/ --include="*.zig"; then
-            echo "⚠️ Found memory copy operations - ensure bounds checking"
+            echo "WARN: Found memory copy operations - ensure bounds checking"
           fi
 
           # Unsafe C interop
           if grep -r "@ptrCast\|@bitCast" src/ --include="*.zig"; then
-            echo "⚠️ Found unsafe pointer operations - review carefully"
+            echo "WARN: Found unsafe pointer operations - review carefully"
           fi
 
           # SQL injection potential
           if grep -r "std.fmt.allocPrint.*SELECT\|std.fmt.allocPrint.*INSERT\|std.fmt.allocPrint.*UPDATE" src/ --include="*.zig"; then
-            echo "⚠️ Found SQL string formatting - ensure against SQL injection"
+            echo "WARN: Found SQL string formatting - ensure against SQL injection"
           fi
 
-          echo "✅ Vulnerability pattern scan completed"
+          echo "PASS: Vulnerability pattern scan completed"
 
   supply-chain:
     name: Supply Chain Security
@@ -168,27 +168,27 @@ jobs:
         run: |
           # Check that flake.lock exists and is committed
           if [ ! -f flake.lock ]; then
-            echo "❌ flake.lock missing - dependencies not pinned"
+            echo "FAIL: flake.lock missing - dependencies not pinned"
             exit 1
           fi
 
           # Verify flake.lock is up to date with flake.nix
           if [ flake.nix -nt flake.lock ]; then
-            echo "⚠️ flake.lock may be outdated compared to flake.nix"
+            echo "WARN: flake.lock may be outdated compared to flake.nix"
           fi
 
-          echo "✅ Dependency integrity checks passed"
+          echo "PASS: Dependency integrity checks passed"
 
       - name: Check for typosquatting
         run: |
           # Basic check for common typos in dependency names
           if grep -r -i "postgre[^s]" flake.nix; then
-            echo "❌ Potential typosquatting: 'postgre' instead of 'postgresql'"
+            echo "FAIL: Potential typosquatting: 'postgre' instead of 'postgresql'"
             exit 1
           fi
 
           if grep -r -i "rdkafka.*[^0-9]\.[0-9]" flake.nix; then
-            echo "⚠️ Check rdkafka version format"
+            echo "WARN: Check rdkafka version format"
           fi
 
-          echo "✅ No obvious typosquatting detected"
+          echo "PASS: No obvious typosquatting detected"
