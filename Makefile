@@ -1,4 +1,4 @@
-.PHONY: help build run test clean fmt dev install-deps check-deps env-up env-down env-restart env-logs env-status nix-shell
+.PHONY: help build run test clean fmt lint dev install-deps check-deps env-up env-down env-restart env-logs env-status nix-shell
 
 # Default target
 help:
@@ -12,6 +12,7 @@ help:
 	@echo "  make test-all      - Run all tests with database setup"
 	@echo "  make dev           - Development workflow (format + test + build)"
 	@echo "  make fmt           - Format code"
+	@echo "  make lint          - Check code formatting"
 	@echo "  make clean         - Clean build artifacts"
 	@echo ""
 	@echo "Development Environment:"
@@ -57,6 +58,12 @@ dev:
 # Format code
 fmt:
 	zig build fmt
+
+# Check code formatting
+lint:
+	@echo "Checking code formatting..."
+	zig fmt --check src/
+	@echo "Success: Code formatting is correct"
 
 # Clean build artifacts
 clean:

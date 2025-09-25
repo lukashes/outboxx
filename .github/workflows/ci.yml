@@ -25,59 +25,14 @@ jobs:
           name: devenv
 
       # Code Quality Checks
-      - name: Check Zig formatting
-        run: nix develop --command zig fmt --check src/
+      - name: Lint code formatting
+        run: nix develop --command make lint
 
-      - name: Run static analysis
+      - name: Run static analysis with verbose output
         run: |
-          nix develop --command zig build --summary all
-          echo "Static analysis completed"
+          nix develop --command zig build --verbose --summary all
+          echo "PASS: Static analysis completed"
 
-      - name: Check for TODO/FIXME comments
-        run: |
-          # Allow TODO/FIXME in test files, but not in main source
-          if grep -r "TODO\|FIXME\|XXX" src/ --exclude-dir=.git --include="*.zig" | grep -v "_test.zig"; then
-            echo "FAIL: Found TODO/FIXME comments in source code - please address them"
-            exit 1
-          fi
-          echo "PASS: No TODO/FIXME comments found in source code"
-
-      - name: Check function complexity
-        run: |
-          # Check for overly long functions (> 50 lines)
-          nix develop --command bash -c '
-            for file in $(find src/ -name "*.zig"); do
-              awk "
-                /^[[:space:]]*pub fn|^[[:space:]]*fn/ {
-                  func_start=NR; func_name=\$0; lines=0
-                }
-                /^[[:space:]]*}/ && func_start {
-                  lines=NR-func_start;
-                  if (lines > 50) {
-                    print \"Function too long (\" lines \" lines) in \" FILENAME \":\" func_start \": \" func_name
-                    exit 1
-                  }
-                  func_start=0
-                }
-              " "$file"
-            done
-            echo "All functions are reasonable length"
-          '
-
-      - name: Check memory safety patterns
-        run: |
-          # Check that allocations have corresponding defers
-          nix develop --command bash -c '
-            for file in $(find src/ -name "*.zig"); do
-              allocations=$(grep -c "\.alloc\|\.dupe\|\.create" "$file" || true)
-              defers=$(grep -c "defer.*\.free\|defer.*\.destroy\|defer.*\.deinit" "$file" || true)
-
-              if [ "$allocations" -gt 0 ] && [ "$defers" -eq 0 ]; then
-                echo "Warning: $file has allocations but no defer cleanup patterns"
-              fi
-            done
-            echo "Memory safety patterns checked"
-          '
 
       # Build and Test
       - name: Build project

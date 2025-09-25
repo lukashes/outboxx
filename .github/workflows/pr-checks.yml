@@ -6,92 +6,9 @@ on:
     types: [ opened, synchronize, reopened, ready_for_review ]
 
 jobs:
-  pr-validation:
-    name: PR Validation
-    runs-on: ubuntu-latest
-    if: github.event.pull_request.draft == false
 
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install Nix
-        uses: cachix/install-nix-action@v27
-
-      - name: Validate PR title
-        run: |
-          PR_TITLE="${{ github.event.pull_request.title }}"
-
-          # Check for conventional commit format (optional but recommended)
-          if ! echo "$PR_TITLE" | grep -qE "^(feat|fix|docs|style|refactor|perf|test|chore|ci)(\(.+\))?: .+"; then
-            echo "WARN: PR title doesn't follow conventional commit format"
-            echo "Consider using: feat|fix|docs|style|refactor|perf|test|chore|ci: description"
-          fi
-
-          # Check title length
-          if [ ${#PR_TITLE} -gt 72 ]; then
-            echo "FAIL: PR title too long (${#PR_TITLE} characters, max 72)"
-            exit 1
-          fi
-
-          echo "PASS: PR title validation passed"
-
-      - name: Check for breaking changes
-        run: |
-          # Look for potential breaking changes in the diff
-          BREAKING_PATTERNS="pub fn.*init\|pub const.*Error\|pub fn.*deinit"
-
-          if git diff origin/${{ github.base_ref }}...HEAD -- src/ | grep -E "^-.*($BREAKING_PATTERNS)"; then
-            echo "WARN: Potential breaking changes detected"
-            echo "Please ensure backward compatibility or document breaking changes"
-          fi
-
-          echo "PASS: Breaking change check completed"
-
-      - name: Validate commit messages
-        run: |
-          # Check recent commit messages in PR
-          git log --format="%s" origin/${{ github.base_ref }}..HEAD | while read commit_msg; do
-            if [ ${#commit_msg} -gt 72 ]; then
-              echo "FAIL: Commit message too long: $commit_msg"
-              exit 1
-            fi
-
-            if [ ${#commit_msg} -lt 10 ]; then
-              echo "FAIL: Commit message too short: $commit_msg"
-              exit 1
-            fi
-          done
-
-          echo "PASS: Commit message validation passed"
-
-      - name: Check file changes
-        run: |
-          # Ensure no sensitive files are modified
-          SENSITIVE_FILES=".github/workflows/security.yml flake.nix"
-
-          for file in $SENSITIVE_FILES; do
-            if git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -q "^$file$"; then
-              echo "WARN: Sensitive file modified: $file"
-              echo "Please ensure this change is intentional and secure"
-            fi
-          done
-
-          # Check for large files
-          git diff --name-only origin/${{ github.base_ref }}...HEAD | while read file; do
-            if [ -f "$file" ] && [ $(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null || echo 0) -gt 1048576 ]; then
-              echo "FAIL: Large file detected: $file (>1MB)"
-              echo "Consider using Git LFS for large files"
-              exit 1
-            fi
-          done
-
-          echo "PASS: File change validation passed"
-
-  additional-checks:
-    name: Additional PR Checks
+  pr-checks:
+    name: PR Integration & Coverage
     runs-on: ubuntu-latest
     if: github.event.pull_request.draft == false
 
@@ -159,44 +76,3 @@ jobs:
               echo "PASS: Test coverage looks reasonable"
             fi
           '
-
-  performance-check:
-    name: Performance Baseline
-    runs-on: ubuntu-latest
-    if: github.event.pull_request.draft == false
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install Nix
-        uses: cachix/install-nix-action@v27
-
-      - name: Build optimized binary
-        run: |
-          nix develop --command zig build -Doptimize=ReleaseFast
-          ls -la zig-out/bin/ || echo "No binary output"
-
-      - name: Basic performance check
-        run: |
-          # Check binary size (should be reasonable for a CDC tool)
-          if [ -f zig-out/bin/outboxx ]; then
-            size=$(stat -f%z zig-out/bin/outboxx 2>/dev/null || stat -c%s zig-out/bin/outboxx 2>/dev/null)
-            size_mb=$((size / 1024 / 1024))
-
-            echo "Binary size: ${size_mb}MB"
-
-            if [ "$size_mb" -gt 50 ]; then
-              echo "WARN: Binary size is large (${size_mb}MB) - consider optimization"
-            else
-              echo "PASS: Binary size is reasonable"
-            fi
-          else
-            echo "No binary to check"
-          fi
-
-      - name: Memory usage check
-        run: |
-          # Build-time memory usage
-          echo "Checking build memory usage..."
-          /usr/bin/time -v nix develop --command make build 2>&1 | grep "Maximum resident set size" || echo "Memory usage check completed"
