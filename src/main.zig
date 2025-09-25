@@ -1,7 +1,7 @@
 const std = @import("std");
 const print = std.debug.print;
 const Config = @import("config.zig").Config;
-const KafkaWalReader = @import("wal/kafka_reader.zig").KafkaWalReader;
+const CdcProcessor = @import("processor/cdc_processor.zig").CdcProcessor;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{
@@ -32,9 +32,9 @@ pub fn main() !void {
     print("  Slot: {s}\n", .{config.slot_name});
     print("  Kafka: localhost:9092\n\n", .{});
 
-    // Initialize Kafka WAL reader
-    var kafka_wal_reader = KafkaWalReader.init(allocator, config.slot_name, "localhost:9092");
-    defer kafka_wal_reader.deinit();
+    // Initialize CDC processor
+    var cdc_processor = CdcProcessor.init(allocator, config.slot_name, "localhost:9092");
+    defer cdc_processor.deinit();
 
     // Connect to PostgreSQL
     const conn_str = try config.connectionString(allocator);
@@ -42,16 +42,16 @@ pub fn main() !void {
 
     print("Connecting to PostgreSQL and Kafka...\n", .{});
 
-    kafka_wal_reader.connect(conn_str) catch |err| {
+    cdc_processor.connect(conn_str) catch |err| {
         print("Failed to connect: {}\n", .{err});
         return;
     };
 
     // Clean up any existing slot (ignore errors)
-    kafka_wal_reader.dropSlot() catch {};
+    cdc_processor.dropSlot() catch {};
 
     // Create replication slot
-    kafka_wal_reader.createSlot() catch |err| {
+    cdc_processor.createSlot() catch |err| {
         print("Failed to create replication slot: {}\n", .{err});
         return;
     };
@@ -64,7 +64,7 @@ pub fn main() !void {
     while (iteration < 50) : (iteration += 1) { // Limit iterations for testing
         print("--- Polling for changes (iteration {}) ---\n", .{iteration + 1});
 
-        kafka_wal_reader.streamChangesToKafka(10) catch |err| {
+        cdc_processor.processChangesToKafka(10) catch |err| {
             print("Error in streaming: {}\n", .{err});
             std.Thread.sleep(1000000000); // Sleep 1 second
             continue;
@@ -76,6 +76,6 @@ pub fn main() !void {
 
     // Clean up replication slot
     print("\nShutting down...\n", .{});
-    kafka_wal_reader.dropSlot() catch {};
+    cdc_processor.dropSlot() catch {};
     print("CDC streaming stopped.\n", .{});
 }

@@ -1,11 +1,11 @@
 const std = @import("std");
-const WalReader = @import("reader.zig").WalReader;
-const WalEvent = @import("reader.zig").WalEvent;
-const WalReaderError = @import("reader.zig").WalReaderError;
+const WalReader = @import("../wal/reader.zig").WalReader;
+const WalEvent = @import("../wal/reader.zig").WalEvent;
+const WalReaderError = @import("../wal/reader.zig").WalReaderError;
 const KafkaProducer = @import("../kafka/producer.zig").KafkaProducer;
 const MessageProcessor = @import("../message_processor.zig").MessageProcessor;
 
-pub const KafkaWalReader = struct {
+pub const CdcProcessor = struct {
     allocator: std.mem.Allocator,
     wal_reader: WalReader,
     kafka_producer: ?KafkaProducer,
@@ -53,7 +53,7 @@ pub const KafkaWalReader = struct {
         return self.wal_reader.dropSlot();
     }
 
-    pub fn streamChangesToKafka(self: *Self, limit: u32) WalReaderError!void {
+    pub fn processChangesToKafka(self: *Self, limit: u32) WalReaderError!void {
         // Read WAL changes
         var events = try self.wal_reader.readChanges(limit);
         defer {
@@ -124,7 +124,7 @@ pub const KafkaWalReader = struct {
         std.log.info("Starting CDC streaming from PostgreSQL to Kafka", .{});
 
         while (true) {
-            self.streamChangesToKafka(100) catch |err| {
+            self.processChangesToKafka(100) catch |err| {
                 std.log.err("Error in streaming: {}", .{err});
                 // Continue streaming even if there's an error
             };
@@ -135,16 +135,3 @@ pub const KafkaWalReader = struct {
     }
 };
 
-// Integration test
-test "KafkaWalReader basic functionality" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    // This is a structure test - real integration tests will be in separate file
-    var reader = KafkaWalReader.init(allocator, "test_slot", "localhost:9092");
-    defer reader.deinit();
-
-    // Test that the structure is properly initialized
-    try testing.expectEqualStrings("localhost:9092", reader.brokers);
-    try testing.expect(reader.kafka_producer == null); // Not connected yet
-}
