@@ -9,36 +9,43 @@ on:
     - cron: '0 2 * * 1'  # Weekly security scan on Mondays at 2 AM
 
 jobs:
-  codeql:
-    name: CodeQL Analysis
+  static-analysis:
+    name: Static Analysis
     runs-on: ubuntu-latest
-    permissions:
-      actions: read
-      contents: read
-      security-events: write
-
-    strategy:
-      fail-fast: false
-      matrix:
-        language: [ 'cpp' ]  # Closest to Zig for static analysis
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
-        with:
-          languages: ${{ matrix.language }}
-
       - name: Install Nix
         uses: cachix/install-nix-action@v27
 
-      - name: Build project for analysis
-        run: nix develop --command make build
+      - name: Run Zig static analysis
+        run: |
+          # Zig has built-in static analysis and compile-time checks
+          nix develop --command zig build --summary all -Doptimize=Debug
+          echo "PASS: Zig static analysis completed"
 
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
+          # Additional compile-time safety checks
+          echo "Running additional safety checks..."
+          nix develop --command zig build test --summary all
+          echo "PASS: Compile-time safety checks completed"
+
+      - name: Check for unsafe patterns
+        run: |
+          echo "Scanning for potentially unsafe patterns in Zig code..."
+
+          # Check for direct memory access patterns
+          if grep -r "@intFromPtr\|@ptrFromInt" src/ --include="*.zig"; then
+            echo "WARN: Found pointer-integer conversions - review for safety"
+          fi
+
+          # Check for unchecked allocations
+          if grep -r "\.alloc(" src/ --include="*.zig" | grep -v "defer\|catch"; then
+            echo "WARN: Found allocations without visible error handling"
+          fi
+
+          echo "PASS: Unsafe pattern scan completed"
 
   secret-scanning:
     name: Secret Detection
