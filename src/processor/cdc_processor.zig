@@ -4,23 +4,24 @@ const WalEvent = @import("../wal/reader.zig").WalEvent;
 const WalReaderError = @import("../wal/reader.zig").WalReaderError;
 const KafkaProducer = @import("../kafka/producer.zig").KafkaProducer;
 const WalMessageParser = @import("message.zig").WalMessageParser;
+const KafkaConfig = @import("../config.zig").KafkaConfig;
 
 pub const CdcProcessor = struct {
     allocator: std.mem.Allocator,
     wal_reader: WalReader,
     kafka_producer: ?KafkaProducer,
     wal_message_parser: WalMessageParser,
-    brokers: []const u8,
+    kafka_config: KafkaConfig,
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, slot_name: []const u8, brokers: []const u8) Self {
+    pub fn init(allocator: std.mem.Allocator, slot_name: []const u8, kafka_config: KafkaConfig) Self {
         return Self{
             .allocator = allocator,
             .wal_reader = WalReader.init(allocator, slot_name),
             .kafka_producer = null,
             .wal_message_parser = WalMessageParser.init(allocator),
-            .brokers = brokers,
+            .kafka_config = kafka_config,
         };
     }
 
@@ -37,7 +38,7 @@ pub const CdcProcessor = struct {
         try self.wal_reader.connect(connection_string);
 
         // Initialize Kafka producer
-        self.kafka_producer = KafkaProducer.init(self.allocator, self.brokers) catch |err| {
+        self.kafka_producer = KafkaProducer.init(self.allocator, self.kafka_config.brokers) catch |err| {
             std.log.err("Failed to initialize Kafka producer: {}", .{err});
             return WalReaderError.ConnectionFailed;
         };
@@ -116,11 +117,11 @@ pub const CdcProcessor = struct {
         }
 
         // Flush Kafka producer to ensure messages are sent
-        kafka_producer.flush(5000); // 5 second timeout
+        kafka_producer.flush(self.kafka_config.flush_timeout_ms);
         std.log.info("Flushed messages to Kafka", .{});
     }
 
-    pub fn startStreaming(self: *Self, poll_interval_ms: u64) !void {
+    pub fn startStreaming(self: *Self) !void {
         std.log.info("Starting CDC streaming from PostgreSQL to Kafka", .{});
 
         while (true) {
@@ -130,7 +131,7 @@ pub const CdcProcessor = struct {
             };
 
             // Sleep between polls
-            std.time.sleep(poll_interval_ms * std.time.ns_per_ms);
+            std.time.sleep(self.kafka_config.poll_interval_ms * std.time.ns_per_ms);
         }
     }
 };

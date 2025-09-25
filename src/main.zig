@@ -30,10 +30,12 @@ pub fn main() !void {
     print("  Database: {s}\n", .{config.database});
     print("  User: {s}\n", .{config.user});
     print("  Slot: {s}\n", .{config.slot_name});
-    print("  Kafka: localhost:9092\n\n", .{});
+    print("  Kafka: {s}\n", .{config.kafka.brokers});
+    print("  Flush timeout: {}ms\n", .{config.kafka.flush_timeout_ms});
+    print("  Poll interval: {}ms\n\n", .{config.kafka.poll_interval_ms});
 
     // Initialize CDC processor
-    var cdc_processor = CdcProcessor.init(allocator, config.slot_name, "localhost:9092");
+    var cdc_processor = CdcProcessor.init(allocator, config.slot_name, config.kafka);
     defer cdc_processor.deinit();
 
     // Connect to PostgreSQL
@@ -70,8 +72,8 @@ pub fn main() !void {
             continue;
         };
 
-        // Sleep for 3 seconds between polls
-        std.Thread.sleep(3000000000);
+        // Sleep between polls using configuration
+        std.Thread.sleep(config.kafka.poll_interval_ms * std.time.ns_per_ms);
     }
 
     // Clean up replication slot
