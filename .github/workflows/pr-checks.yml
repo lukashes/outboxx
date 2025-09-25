@@ -46,8 +46,7 @@ jobs:
           PGPASSWORD=password psql -h localhost -p 5432 -U postgres -d outboxx_test -f dev/postgres-init.sql
 
       - name: Run integration tests
-        run: |
-          nix develop --command make test-integration
+        run: make nix-test-integration
         env:
           POSTGRES_HOST: localhost
           POSTGRES_PORT: 5432
@@ -57,22 +56,4 @@ jobs:
 
       # Code Coverage
       - name: Generate coverage report
-        run: |
-          nix develop --command bash -c '
-            test_funcs=$(grep -r "test \"" src/ --include="*.zig" | wc -l)
-            pub_funcs=$(grep -r "pub fn" src/ --include="*.zig" | grep -v "_test.zig" | wc -l)
-
-            if [ "$test_funcs" -eq 0 ]; then
-              echo "FAIL: No tests found"
-              exit 1
-            fi
-
-            coverage_ratio=$((test_funcs * 100 / (pub_funcs + 1)))
-            echo "Test coverage estimate: ${coverage_ratio}% ($test_funcs tests for $pub_funcs public functions)"
-
-            if [ "$coverage_ratio" -lt 30 ]; then
-              echo "WARN: Low test coverage - consider adding more tests"
-            else
-              echo "PASS: Test coverage looks reasonable"
-            fi
-          '
+        run: make nix-coverage

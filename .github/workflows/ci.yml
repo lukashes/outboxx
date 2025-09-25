@@ -24,33 +24,32 @@ jobs:
         with:
           name: devenv
 
+      # Build First - fail fast if code doesn't compile
+      - name: Build project
+        run: make nix-build
+
       # Code Quality Checks
       - name: Lint code formatting
-        run: nix develop --command make lint
+        run: make nix-lint
 
       - name: Run static analysis with verbose output
         run: |
           nix develop --command zig build --verbose --summary all
           echo "PASS: Static analysis completed"
 
-
-      # Build and Test
-      - name: Build project
-        run: nix develop --command make build
-
       - name: Run unit tests
-        run: nix develop --command make test
+        run: make nix-test
 
       - name: Start PostgreSQL for integration tests
-        run: nix develop --command make env-up
+        run: make nix-env-up
 
       - name: Run integration tests
-        run: nix develop --command make test-integration
+        run: make nix-test-integration
         env:
           POSTGRES_HOST: localhost
           POSTGRES_PORT: 5432
 
       - name: Stop test environment
         if: always()
-        run: nix develop --command make env-down
+        run: make nix-env-down
 
