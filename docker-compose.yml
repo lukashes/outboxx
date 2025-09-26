@@ -3,7 +3,7 @@ version: '3.8'
 services:
   # PostgreSQL with logical replication enabled for CDC testing
   postgres:
-    image: postgres:15
+    image: postgres:17
     container_name: outboxx-postgres
     restart: unless-stopped
     environment:

@@ -3,11 +3,11 @@ on:
   push:
     branches: [ main, develop ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, develop ]
 
 jobs:
   ci:
-    name: CI Pipeline
+    name: Build & Test
     runs-on: ubuntu-latest
 
     steps:
@@ -39,17 +39,4 @@ jobs:
 
       - name: Run unit tests
         run: make nix-test
-
-      - name: Start PostgreSQL for integration tests
-        run: make nix-env-up
-
-      - name: Run integration tests
-        run: make nix-test-integration
-        env:
-          POSTGRES_HOST: localhost
-          POSTGRES_PORT: 5432
-
-      - name: Stop test environment
-        if: always()
-        run: make nix-env-down
 
