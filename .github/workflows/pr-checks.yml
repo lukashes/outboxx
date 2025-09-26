@@ -57,7 +57,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Nix
-        uses: cachix/install-nix-action@v27
+        uses: cachix/install-nix-action@v31
 
       # Integration Tests
       - name: Setup PostgreSQL
