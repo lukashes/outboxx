@@ -1,4 +1,4 @@
-.PHONY: help build run test clean fmt dev install-deps check-deps env-up env-down env-restart env-logs env-status nix-shell
+.PHONY: help build run test clean fmt lint dev install-deps check-deps env-up env-down env-restart env-logs env-status nix-shell
 
 # Default target
 help:
@@ -12,6 +12,7 @@ help:
 	@echo "  make test-all      - Run all tests with database setup"
 	@echo "  make dev           - Development workflow (format + test + build)"
 	@echo "  make fmt           - Format code"
+	@echo "  make lint          - Check code formatting"
 	@echo "  make clean         - Clean build artifacts"
 	@echo ""
 	@echo "Development Environment:"
@@ -21,8 +22,11 @@ help:
 	@echo "  make env-logs      - Show PostgreSQL logs"
 	@echo "  make env-status    - Show environment status"
 	@echo ""
+	@echo "Nix Commands:"
+	@echo "  make nix-<target>  - Run any target in Nix environment (e.g., nix-build, nix-test)"
+	@echo "  make nix-shell     - Enter Nix development shell (interactive)"
+	@echo ""
 	@echo "Dependencies:"
-	@echo "  make nix-shell     - Enter Nix development shell (recommended)"
 	@echo "  make check-deps    - Check system dependencies"
 	@echo "  make install-deps  - Install system dependencies (Ubuntu/Debian)"
 	@echo ""
@@ -58,9 +62,37 @@ dev:
 fmt:
 	zig build fmt
 
+# Check code formatting
+lint:
+	@echo "Checking code formatting..."
+	zig fmt --check src/
+	@echo "Success: Code formatting is correct"
+
 # Clean build artifacts
 clean:
 	zig build clean
+
+# Generate coverage report
+coverage:
+	@echo "Generating test coverage report..."
+	@test_funcs=$$(grep -r "test \"" src/ --include="*.zig" | wc -l); \
+	pub_funcs=$$(grep -r "pub fn" src/ --include="*.zig" | grep -v "_test.zig" | wc -l); \
+	if [ "$$test_funcs" -eq 0 ]; then \
+		echo "FAIL: No tests found"; \
+		exit 1; \
+	fi; \
+	coverage_ratio=$$((test_funcs * 100 / (pub_funcs + 1))); \
+	echo "Test coverage estimate: $${coverage_ratio}% ($$test_funcs tests for $$pub_funcs public functions)"; \
+	if [ "$$coverage_ratio" -lt 30 ]; then \
+		echo "WARN: Low test coverage - consider adding more tests"; \
+	else \
+		echo "PASS: Test coverage looks reasonable"; \
+	fi
+
+# Nix wrapper: nix-<target> runs <target> in nix develop environment
+nix-%:
+	@echo "Running '$*' in Nix development environment..."
+	nix develop --command make $*
 
 # Check if required system dependencies are installed
 check-deps:
