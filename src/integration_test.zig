@@ -2,8 +2,34 @@ const std = @import("std");
 const testing = std.testing;
 
 // Direct imports work now because we're in src/
-const Config = @import("config.zig").Config;
+const Config = @import("config/config.zig").Config;
 const WalReader = @import("wal/reader.zig").WalReader;
+
+// Helper function to create test config without TOML
+fn createTestConfig(allocator: std.mem.Allocator) !Config {
+    var config = Config.init(allocator);
+
+    // Set up PostgreSQL source configuration
+    config.source.postgres = @import("config/config.zig").PostgresSource{
+        .host = "localhost",
+        .port = 5432,
+        .database = "outboxx_test",
+        .user = "postgres",
+        .password_env = "POSTGRES_PASSWORD",
+        .slot_name = "outboxx_test_slot",
+        .publication_name = "outboxx_publication",
+    };
+
+    // Load password from environment
+    const password = std.process.getEnvVarOwned(allocator, "POSTGRES_PASSWORD") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => try allocator.dupe(u8, "password"), // fallback for tests
+        else => return err,
+    };
+
+    try config.runtime_passwords.put("postgres", password);
+
+    return config;
+}
 
 test "WAL reader integration tests" {
     // These tests require PostgreSQL running (use 'make env-up' first)
@@ -15,11 +41,14 @@ test "WAL reader can connect to PostgreSQL" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const config = Config.default();
-    var wal_reader = WalReader.init(allocator, config.slot_name);
+    var config = try createTestConfig(allocator);
+    defer config.deinit(allocator);
+
+    const postgres = config.source.postgres.?;
+    var wal_reader = WalReader.init(allocator, postgres.slot_name, postgres.publication_name, "users");
     defer wal_reader.deinit();
 
-    const conn_str = try config.connectionString(allocator);
+    const conn_str = try config.postgresConnectionString(allocator);
     defer allocator.free(conn_str);
 
     // This should not fail if PostgreSQL is running
@@ -37,12 +66,14 @@ test "WAL reader can create and drop replication slot" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const config = Config.default();
+    var config = try createTestConfig(allocator);
+    defer config.deinit(allocator);
+    const postgres = config.source.postgres.?;
     const test_slot_name = "test_slot_integration";
-    var wal_reader = WalReader.init(allocator, test_slot_name);
+    var wal_reader = WalReader.init(allocator, test_slot_name, postgres.publication_name, "users");
     defer wal_reader.deinit();
 
-    const conn_str = try config.connectionString(allocator);
+    const conn_str = try config.postgresConnectionString(allocator);
     defer allocator.free(conn_str);
 
     wal_reader.connect(conn_str) catch |err| switch (err) {
@@ -68,12 +99,14 @@ test "WAL reader can read changes from empty slot" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const config = Config.default();
+    var config = try createTestConfig(allocator);
+    defer config.deinit(allocator);
+    const postgres = config.source.postgres.?;
     const test_slot_name = "test_slot_read_empty";
-    var wal_reader = WalReader.init(allocator, test_slot_name);
+    var wal_reader = WalReader.init(allocator, test_slot_name, postgres.publication_name, "users");
     defer wal_reader.deinit();
 
-    const conn_str = try config.connectionString(allocator);
+    const conn_str = try config.postgresConnectionString(allocator);
     defer allocator.free(conn_str);
 
     wal_reader.connect(conn_str) catch |err| switch (err) {
@@ -141,8 +174,9 @@ test "PostgreSQL logical replication configuration" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const config = Config.default();
-    const conn_str = try config.connectionString(allocator);
+    var config = try createTestConfig(allocator);
+    defer config.deinit(allocator);
+    const conn_str = try config.postgresConnectionString(allocator);
     defer allocator.free(conn_str);
 
     // This will help us debug the PostgreSQL configuration
@@ -157,12 +191,14 @@ test "WAL reader can detect INSERT operations" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const config = Config.default();
+    var config = try createTestConfig(allocator);
+    defer config.deinit(allocator);
+    const postgres = config.source.postgres.?;
     const test_slot_name = "test_slot_insert";
-    var wal_reader = WalReader.init(allocator, test_slot_name);
+    var wal_reader = WalReader.init(allocator, test_slot_name, postgres.publication_name, "users");
     defer wal_reader.deinit();
 
-    const conn_str = try config.connectionString(allocator);
+    const conn_str = try config.postgresConnectionString(allocator);
     defer allocator.free(conn_str);
 
     wal_reader.connect(conn_str) catch |err| switch (err) {
@@ -229,12 +265,14 @@ test "WAL reader can detect UPDATE operations" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const config = Config.default();
+    var config = try createTestConfig(allocator);
+    defer config.deinit(allocator);
+    const postgres = config.source.postgres.?;
     const test_slot_name = "test_slot_update";
-    var wal_reader = WalReader.init(allocator, test_slot_name);
+    var wal_reader = WalReader.init(allocator, test_slot_name, postgres.publication_name, "users");
     defer wal_reader.deinit();
 
-    const conn_str = try config.connectionString(allocator);
+    const conn_str = try config.postgresConnectionString(allocator);
     defer allocator.free(conn_str);
 
     wal_reader.connect(conn_str) catch |err| switch (err) {
@@ -326,12 +364,14 @@ test "WAL reader can detect DELETE operations" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const config = Config.default();
+    var config = try createTestConfig(allocator);
+    defer config.deinit(allocator);
+    const postgres = config.source.postgres.?;
     const test_slot_name = "test_slot_delete";
-    var wal_reader = WalReader.init(allocator, test_slot_name);
+    var wal_reader = WalReader.init(allocator, test_slot_name, postgres.publication_name, "users");
     defer wal_reader.deinit();
 
-    const conn_str = try config.connectionString(allocator);
+    const conn_str = try config.postgresConnectionString(allocator);
     defer allocator.free(conn_str);
 
     wal_reader.connect(conn_str) catch |err| switch (err) {

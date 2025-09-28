@@ -51,3 +51,7 @@ CLAUDE.local.md
 
 # IDE configuration (environment-specific)
 compile_flags.txt
+
+# Binary artifacts
+*.o
+main

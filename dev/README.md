@@ -1,14 +1,19 @@
 # Outboxx Development Environment
 
-This development environment is configured for testing PostgreSQL logical replication and developing Outboxx.
+**Purpose**: Working development environment for active Outboxx development.
+
+This directory contains everything needed for contributing to Outboxx development. For architecture examples and design documentation, see `/docs/examples/`.
 
 ## Quick Start
 
-### 1. Start PostgreSQL
+### 1. Start Development Environment
 
 ```bash
-# Start PostgreSQL with logical replication
+# Start development stack (PostgreSQL + Kafka)
 docker-compose up -d
+
+# Or use the dev script
+./run-dev.sh
 
 # Check status
 docker-compose ps

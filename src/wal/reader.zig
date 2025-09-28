@@ -27,14 +27,18 @@ pub const WalReader = struct {
     allocator: std.mem.Allocator,
     connection: ?*c.PGconn,
     slot_name: []const u8,
+    publication_name: []const u8,
+    table_name: []const u8,
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, slot_name: []const u8) Self {
+    pub fn init(allocator: std.mem.Allocator, slot_name: []const u8, publication_name: []const u8, table_name: []const u8) Self {
         return Self{
             .allocator = allocator,
             .connection = null,
             .slot_name = slot_name,
+            .publication_name = publication_name,
+            .table_name = table_name,
         };
     }
 
@@ -71,6 +75,20 @@ pub const WalReader = struct {
         print("Connected to PostgreSQL successfully\n", .{});
     }
 
+    /// Initialize PostgreSQL connection, publication and replication slot
+    pub fn initialize(self: *Self, connection_string: []const u8) WalReaderError!void {
+        // Connect to PostgreSQL
+        try self.connect(connection_string);
+
+        // Create publication (will be idempotent - no error if exists)
+        try self.createPublication();
+
+        // Create replication slot (will be idempotent in the future)
+        try self.createSlot();
+
+        print("PostgreSQL WAL reader initialized successfully\n", .{});
+    }
+
     pub fn createSlot(self: *Self) WalReaderError!void {
         if (self.connection == null) return WalReaderError.ConnectionFailed;
 
@@ -86,11 +104,49 @@ pub const WalReader = struct {
         const status = c.PQresultStatus(result);
         if (status != c.PGRES_TUPLES_OK) {
             const error_msg = c.PQresultErrorMessage(result);
+            const error_str = std.mem.span(@as([*:0]const u8, @ptrCast(error_msg)));
+
+            // Check if slot already exists (this is expected and OK)
+            if (std.mem.indexOf(u8, error_str, "already exists") != null) {
+                print("Replication slot '{s}' already exists, continuing...\n", .{self.slot_name});
+                return;
+            }
+
             print("Failed to create slot: {s}\n", .{error_msg});
             return WalReaderError.SlotCreationFailed;
         }
 
         print("Replication slot '{s}' created successfully\n", .{self.slot_name});
+    }
+
+    pub fn createPublication(self: *Self) WalReaderError!void {
+        if (self.connection == null) return WalReaderError.ConnectionFailed;
+
+        // Create SQL command for creating publication for specific table
+        const sql = std.fmt.allocPrintSentinel(self.allocator, "CREATE PUBLICATION {s} FOR TABLE {s};", .{ self.publication_name, self.table_name }, 0) catch return WalReaderError.OutOfMemory;
+        defer self.allocator.free(sql);
+
+        print("Creating publication: {s}\n", .{self.publication_name});
+
+        const result = c.PQexec(self.connection, sql.ptr);
+        defer c.PQclear(result);
+
+        const status = c.PQresultStatus(result);
+        if (status != c.PGRES_COMMAND_OK) {
+            const error_msg = c.PQresultErrorMessage(result);
+            const error_str = std.mem.span(@as([*:0]const u8, @ptrCast(error_msg)));
+
+            // Check if publication already exists (this is expected and OK)
+            if (std.mem.indexOf(u8, error_str, "already exists") != null) {
+                print("Publication '{s}' already exists, continuing...\n", .{self.publication_name});
+                return;
+            }
+
+            print("Failed to create publication: {s}\n", .{error_msg});
+            return WalReaderError.SlotCreationFailed;
+        }
+
+        print("Publication '{s}' created successfully\n", .{self.publication_name});
     }
 
     pub fn dropSlot(self: *Self) WalReaderError!void {
@@ -114,6 +170,10 @@ pub const WalReader = struct {
         }
     }
 
+    // TODO: Add filtering based on stream configuration
+    // - Filter by resource (table): streams[0].source.resource
+    // - Filter by operations: streams[0].source.operations (INSERT, UPDATE, DELETE)
+    // Currently reads all changes from all tables
     pub fn readChanges(self: *Self, limit: u32) WalReaderError!std.ArrayList(WalEvent) {
         if (self.connection == null) return WalReaderError.ConnectionFailed;
 
