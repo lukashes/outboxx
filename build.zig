@@ -7,6 +7,11 @@ pub fn build(b: *std.Build) void {
     // Standard optimization options allow the person running zig build to pick the optimization level
     const optimize = b.standardOptimizeOption(.{});
 
+    // Add TOML dependency, sadly it was not working with 0.15.1 zig version
+    // TODO: Check it later again
+    const toml_dep = b.dependency("toml", .{});
+    const toml_module = toml_dep.module("toml");
+
     // Main executable
     const exe = b.addExecutable(.{
         .name = "outboxx",
@@ -16,6 +21,9 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+
+    // Dependencies for the main executable
+    exe.root_module.addImport("toml", toml_module);
 
     // Link libc for PostgreSQL and Kafka C libraries
     exe.linkLibC();
@@ -42,7 +50,6 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
-
     // Create run step
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
@@ -55,14 +62,15 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
-    // Unit tests - test all *_test.zig files
-    const unit_tests = b.addTest(.{
+    // Config tests - now in config directory
+    const config_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/config_test.zig"),
+            .root_source_file = b.path("src/config/config_test.zig"),
             .target = target,
             .optimize = optimize,
         }),
     });
+    config_tests.root_module.addImport("toml", toml_module);
 
     const wal_reader_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -94,13 +102,13 @@ pub fn build(b: *std.Build) void {
     kafka_producer_tests.linkLibC();
     kafka_producer_tests.linkSystemLibrary("rdkafka");
 
-    const run_unit_tests = b.addRunArtifact(unit_tests);
+    const run_config_tests = b.addRunArtifact(config_tests);
     const run_wal_reader_tests = b.addRunArtifact(wal_reader_tests);
     const run_message_tests = b.addRunArtifact(message_tests);
     const run_kafka_producer_tests = b.addRunArtifact(kafka_producer_tests);
 
     const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_unit_tests.step);
+    test_step.dependOn(&run_config_tests.step);
     test_step.dependOn(&run_wal_reader_tests.step);
     test_step.dependOn(&run_message_tests.step);
     test_step.dependOn(&run_kafka_producer_tests.step);
@@ -200,6 +208,6 @@ pub fn build(b: *std.Build) void {
     // Development workflow: format, test, and build
     const dev_step = b.step("dev", "Development workflow: format, test, and build");
     dev_step.dependOn(&fmt.step);
-    dev_step.dependOn(&run_unit_tests.step);
+    dev_step.dependOn(&run_config_tests.step);
     dev_step.dependOn(b.getInstallStep());
 }

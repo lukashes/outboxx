@@ -4,7 +4,8 @@ const WalEvent = @import("../wal/reader.zig").WalEvent;
 const WalReaderError = @import("../wal/reader.zig").WalReaderError;
 const KafkaProducer = @import("../kafka/producer.zig").KafkaProducer;
 const WalMessageParser = @import("message.zig").WalMessageParser;
-const KafkaConfig = @import("../config.zig").KafkaConfig;
+const KafkaConfig = @import("../config/config.zig").KafkaSink;
+const Stream = @import("../config/config.zig").Stream;
 
 pub const CdcProcessor = struct {
     allocator: std.mem.Allocator,
@@ -12,16 +13,18 @@ pub const CdcProcessor = struct {
     kafka_producer: ?KafkaProducer,
     wal_message_parser: WalMessageParser,
     kafka_config: KafkaConfig,
+    stream_config: Stream,
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, slot_name: []const u8, kafka_config: KafkaConfig) Self {
+    pub fn init(allocator: std.mem.Allocator, slot_name: []const u8, publication_name: []const u8, kafka_config: KafkaConfig, stream_config: Stream) Self {
         return Self{
             .allocator = allocator,
-            .wal_reader = WalReader.init(allocator, slot_name),
+            .wal_reader = WalReader.init(allocator, slot_name, publication_name, stream_config.source.resource),
             .kafka_producer = null,
             .wal_message_parser = WalMessageParser.init(allocator),
             .kafka_config = kafka_config,
+            .stream_config = stream_config,
         };
     }
 
@@ -33,17 +36,27 @@ pub const CdcProcessor = struct {
         self.wal_message_parser.deinit();
     }
 
-    pub fn connect(self: *Self, connection_string: []const u8) WalReaderError!void {
-        // Connect WAL reader
-        try self.wal_reader.connect(connection_string);
+    pub fn initialize(self: *Self, connection_string: []const u8) WalReaderError!void {
+        // Initialize WAL reader (connect + create publication + create slot)
+        try self.wal_reader.initialize(connection_string);
 
         // Initialize Kafka producer
-        self.kafka_producer = KafkaProducer.init(self.allocator, self.kafka_config.brokers) catch |err| {
+        // Join brokers array into a single comma-separated string
+        const brokers_str = try std.mem.join(self.allocator, ",", self.kafka_config.brokers);
+        defer self.allocator.free(brokers_str);
+
+        self.kafka_producer = KafkaProducer.init(self.allocator, brokers_str) catch |err| {
             std.log.err("Failed to initialize Kafka producer: {}", .{err});
             return WalReaderError.ConnectionFailed;
         };
+        self.kafka_producer.?.flush(10_000); // Initial flush to ensure connection
 
-        std.log.info("Connected to PostgreSQL and Kafka successfully", .{});
+        std.log.info("CDC processor initialized successfully", .{});
+    }
+
+    // Keep connect method for backward compatibility
+    pub fn connect(self: *Self, connection_string: []const u8) WalReaderError!void {
+        return self.initialize(connection_string);
     }
 
     pub fn createSlot(self: *Self) WalReaderError!void {
@@ -81,6 +94,12 @@ pub const CdcProcessor = struct {
                         }
                     }
 
+                    // Filter: Skip messages that don't match this stream's table
+                    if (!std.mem.eql(u8, message.table_name, self.stream_config.source.resource)) {
+                        std.log.debug("Skipping message for table '{s}' (stream watches '{s}')", .{ message.table_name, self.stream_config.source.resource });
+                        continue;
+                    }
+
                     // Convert to JSON
                     const json_message = message.toJson(self.allocator) catch |err| {
                         std.log.err("Failed to serialize message to JSON: {}", .{err});
@@ -88,18 +107,24 @@ pub const CdcProcessor = struct {
                     };
                     defer self.allocator.free(json_message);
 
-                    // Get topic name
-                    const topic_name = message.getTopicName(self.allocator) catch |err| {
-                        std.log.err("Failed to generate topic name: {}", .{err});
+                    // Get topic name from stream config
+                    const topic_name = self.allocator.dupe(u8, self.stream_config.sink.destination) catch |err| {
+                        std.log.err("Failed to allocate topic name: {}", .{err});
                         continue;
                     };
                     defer self.allocator.free(topic_name);
 
-                    // Get partition key
-                    const partition_key = message.getPartitionKey(self.allocator) catch |err| {
-                        std.log.err("Failed to generate partition key: {}", .{err});
-                        continue;
-                    };
+                    // Get partition key from stream config (fallback to table name if routing_key is null)
+                    const partition_key = if (self.stream_config.sink.routing_key) |key|
+                        self.allocator.dupe(u8, key) catch |err| {
+                            std.log.err("Failed to allocate partition key: {}", .{err});
+                            continue;
+                        }
+                    else
+                        message.getPartitionKey(self.allocator) catch |err| {
+                            std.log.err("Failed to generate partition key: {}", .{err});
+                            continue;
+                        };
                     defer self.allocator.free(partition_key);
 
                     // Send to Kafka
@@ -117,7 +142,7 @@ pub const CdcProcessor = struct {
         }
 
         // Flush Kafka producer to ensure messages are sent
-        kafka_producer.flush(self.kafka_config.flush_timeout_ms);
+        kafka_producer.flush(10_000); // 10 seconds timeout
         std.log.info("Flushed messages to Kafka", .{});
     }
 
@@ -131,7 +156,7 @@ pub const CdcProcessor = struct {
             };
 
             // Sleep between polls
-            std.time.sleep(self.kafka_config.poll_interval_ms * std.time.ns_per_ms);
+            std.Thread.sleep(1 * std.time.ns_per_s); // 10 seconds
         }
     }
 };

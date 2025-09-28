@@ -15,9 +15,9 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./dev/postgres-init.sql:/docker-entrypoint-initdb.d/01-init.sql
-      - ./dev/postgres.conf:/etc/postgresql/postgresql.conf
-      - ./dev/pg_hba.conf:/etc/postgresql/pg_hba.conf
+      - ./dev/postgres/postgres-init.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./dev/postgres/postgres.conf:/etc/postgresql/postgresql.conf
+      - ./dev/postgres/pg_hba.conf:/etc/postgresql/pg_hba.conf
     command: >
       postgres
       -c config_file=/etc/postgresql/postgresql.conf

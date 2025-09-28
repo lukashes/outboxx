@@ -1,0 +1,84 @@
+# Outboxx Configuration Example
+# Extensible Change Data Capture streaming configuration
+#
+# DESIGN DOCUMENT: This configuration file represents the current vision for Outboxx.
+# The format and options shown here are part of the architectural design and may evolve
+# as the project develops. Not all features shown are fully implemented yet.
+#
+# Environment Variables Required:
+# export POSTGRES_PASSWORD="your_postgres_password"
+# export MYSQL_PASSWORD="your_mysql_password"
+
+[metadata]
+version = "v0"
+
+# Plugin registry - defines available source and sink types
+# NOTE: This section is DEPRECATED and not used by the application.
+# Supported types are now hardcoded: sources=["postgres","mysql"], sinks=["kafka","webhook"], formats=["json","avro","xml"]
+# This section is kept for documentation purposes only.
+[plugins]
+sources = ["postgres", "mysql"]
+sinks = ["kafka", "webhook"]
+flows = ["direct", "transform"]
+
+# Default source configuration (can be overridden per stream)
+# DESIGN: Currently supports PostgreSQL, MySQL support is planned
+[source]
+type = "postgres"  # Available: "postgres", "mysql" (mysql implementation pending)
+
+[source.postgres]
+host = "localhost"
+port = 5432
+database = "outboxx_test"
+user = "postgres"
+password_env = "POSTGRES_PASSWORD"  # Security: Always use environment variables for passwords
+slot_name = "outboxx_slot"           # PostgreSQL logical replication slot name
+plugin_type = "test_decoding"        # DESIGN: Currently "test_decoding", "pgoutput" planned
+publication_name = "outboxx_publication"  # PostgreSQL publication for logical replication
+
+# DESIGN: MySQL source configuration (not yet implemented)
+[source.mysql]
+host = "localhost"
+port = 3306
+database = "myapp"
+user = "root"
+password_env = "MYSQL_PASSWORD"  # Security: Environment variable for MySQL password
+server_id = 1                    # DESIGN: MySQL replication server ID
+binlog_format = "ROW"            # DESIGN: MySQL binary log format for CDC
+
+# Default sink configuration (can be overridden per stream)
+# DESIGN: Currently supports Kafka, webhook support is planned
+[sink]
+type = "kafka"  # Available: "kafka", "webhook" (webhook implementation pending)
+
+[sink.kafka]
+brokers = ["localhost:9092"]         # Kafka broker addresses
+topic_prefix = "cdc"                 # DESIGN: Prefix for auto-generated topic names (not yet used)
+acks = "all"                         # DESIGN: Kafka producer acknowledgment setting (not yet implemented)
+
+# DESIGN: Webhook sink configuration (not yet implemented)
+[sink.webhook]
+url = "https://api.example.com/webhooks/cdc"    # DESIGN: Webhook endpoint URL
+method = "POST"                                  # DESIGN: HTTP method for webhook calls
+headers = { "Content-Type" = "application/json" }  # DESIGN: HTTP headers for webhook requests
+
+# Event Stream Definition - Multiple streams can be defined to capture changes from different resources
+# DESIGN: Streams are the core concept for defining what data to capture and where to send it
+[[streams]]
+name = "users-stream"  # Unique identifier for this stream (used for logging and metrics)
+
+[streams.source]
+resource = "users"                           # Table/collection name in the source database
+operations = ["insert", "update", "delete"] # CDC operations to capture
+fields = ["id", "email", "name"]            # DESIGN: Field filtering (not yet implemented)
+condition = "active = true"                  # DESIGN: Row filtering conditions (not yet implemented)
+
+[streams.flow]
+format = "json"                   # Message format - currently only "json" is implemented
+include_schema = true             # DESIGN: Include table schema in messages (not yet implemented)
+include_metadata = true           # DESIGN: Include CDC metadata (LSN, timestamp, etc.) (not yet implemented)
+
+[streams.sink]
+destination = "user_changes"      # Kafka topic name or webhook endpoint
+routing_key = "user_id"           # DESIGN: Field used for message partitioning (not yet implemented)
+delivery_mode = "at_least_once"   # DESIGN: Message delivery guarantees (not yet implemented)

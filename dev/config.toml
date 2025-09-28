@@ -1,0 +1,58 @@
+# Outboxx Development Configuration
+# This config allows you to run the binary and test CDC functionality
+#
+# Usage:
+# From the project root directory: ./dev/run-dev.sh or:
+# 1. Start development environment: make env-up
+# 2. Set password: export POSTGRES_PASSWORD="password"
+# 3. Run application: zig build run -- --config dev/config.toml
+
+[metadata]
+version = "v0"
+
+[source]
+type = "postgres" # Reference to the "source.postgres"
+
+[source.postgres]
+host = "localhost"
+port = 5432
+database = "outboxx_test"
+user = "postgres"
+password_env = "POSTGRES_PASSWORD"  # Set with: export POSTGRES_PASSWORD="password"
+slot_name = "outboxx_dev_slot"
+publication_name = "outboxx_publication"
+
+[sink]
+type = "kafka" # Reference to the "sink.kafka"
+
+[sink.kafka]
+brokers = ["localhost:9092"]
+
+# Multiple streams can be defined to capture changes from different resources
+[[streams]]
+name = "users_dev_stream" # Name could be used for logging or metrics and new entites
+
+[streams.source]
+resource = "users" # Table or collection name in the source database
+operations = ["insert", "update"]
+
+[streams.flow]
+format = "json" # Not used yet, but could be "json", "avro", etc.
+
+[streams.sink]
+destination = "outboxx.users" # Kafka topic name
+routing_key = "id" # Field used for partitioning in Kafka
+
+[[streams]] # Second stream example
+name = "orders_dev_stream"
+
+[streams.source]
+resource = "orders"
+operations = ["insert", "update"]
+
+[streams.flow]
+format = "json"
+
+[streams.sink]
+destination = "outboxx.orders"
+routing_key = "id"

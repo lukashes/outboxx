@@ -8,12 +8,14 @@ const WalEvent = reader.WalEvent;
 test "WalReader.init" {
     const allocator = testing.allocator;
     const slot_name = "test_slot";
+    const publication_name = "test_publication";
 
-    const wal_reader = WalReader.init(allocator, slot_name);
+    const wal_reader = WalReader.init(allocator, slot_name, publication_name, "test_table");
 
     try testing.expectEqual(allocator, wal_reader.allocator);
     try testing.expectEqual(@as(?*anyopaque, null), @as(?*anyopaque, @ptrCast(wal_reader.connection)));
     try testing.expectEqualStrings(slot_name, wal_reader.slot_name);
+    try testing.expectEqualStrings(publication_name, wal_reader.publication_name);
 }
 
 test "WalEvent.deinit" {

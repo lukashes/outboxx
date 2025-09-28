@@ -119,10 +119,17 @@ The project emphasizes robust testing:
 │       ├── producer.zig   # Kafka producer implementation
 │       └── producer_test.zig # Kafka integration tests with embedded test consumer
 ├── dev/                   # Development environment
-│   ├── postgres-init.sql  # Database schema and test data
-│   ├── postgres.conf      # PostgreSQL configuration for CDC
-│   ├── pg_hba.conf        # PostgreSQL authentication config
+│   ├── config.toml        # Development configuration
+│   ├── run-dev.sh         # Development startup script
+│   ├── postgres/          # PostgreSQL configuration files
+│   │   ├── postgres-init.sql  # Database schema and test data
+│   │   ├── postgres.conf      # PostgreSQL configuration for CDC
+│   │   └── pg_hba.conf        # PostgreSQL authentication config
 │   └── README.md          # Development environment documentation
+├── docs/                  # Documentation
+│   └── examples/          # Configuration examples and architectural documentation
+│       ├── config.toml    # Complete configuration example with design vision
+│       └── README.md      # Examples documentation
 ├── docker-compose.yml     # PostgreSQL and Kafka container setup
 ├── build.zig             # Zig build configuration with Kafka targets
 ├── Makefile              # Development convenience commands

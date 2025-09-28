@@ -1,0 +1,12 @@
+.{
+    .name = .outboxx,
+    .version = "0.15.1",
+    .dependencies = .{
+        .toml = .{
+            .url = "git+https://github.com/sam701/zig-toml?ref=zig-0.15#475b03c630c802f8b6bd3e239d8fc2279b4fadb8",
+            .hash = "toml-0.3.0-bV14BfV7AQD8DkuQI7skP8ekQTaBYKTO0MY_35Cw_EXo",
+        },
+    },
+    .paths = .{""},
+    .fingerprint = 0xdcb3806ad7417129,
+}

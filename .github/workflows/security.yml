@@ -62,8 +62,8 @@ jobs:
           # Check for common secret patterns
           echo "Scanning for potential secrets..."
 
-          # Database credentials (exclude test configs, format strings and default values)
-          if grep -r -i "password.*=" src/ --include="*.zig" | grep -v "_test" | grep -v "// " | grep -v "password.*=.*\"password\"" | grep -v "\.password.*=.*\"password\"" | grep -v "password={s}"; then
+          # Database credentials (exclude test configs, format strings, default values, and env var names)
+          if grep -r -i "password.*=" src/ --include="*.zig" | grep -v "_test" | grep -v "// " | grep -v "password.*=.*\"password\"" | grep -v "\.password.*=.*\"password\"" | grep -v "password={s}" | grep -v "password_env" | grep -v "runtime_passwords" | grep -v "getPassword"; then
             echo "FAIL: Found potential hardcoded passwords"
             exit 1
           fi

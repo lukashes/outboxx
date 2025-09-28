@@ -49,6 +49,10 @@ pub const WalMessageParser = struct {
         };
     }
 
+    // TODO: Add filtering based on stream configuration
+    // - Filter by resource (table): streams[0].source.resource
+    // - Filter by operations: streams[0].source.operations (INSERT, UPDATE, DELETE)
+    // Currently parses all messages from all tables
     pub fn parseWalMessage(self: *Self, wal_data: []const u8) !?ChangeMessage {
         // Parse test_decoding output format
         // Example: "table public.users: INSERT: id[integer]:1 email[character varying]:'alice@example.com' name[character varying]:'Alice Johnson'"
