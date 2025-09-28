@@ -73,7 +73,7 @@ pub fn main() !void {
     defer config.deinit(allocator);
 
     // Validate configuration - fail fast if invalid
-    config.validate() catch |err| {
+    config.validate(allocator) catch |err| {
         print("ERROR: Configuration validation failed: {}\n", .{err});
         print("Please check your configuration file and ensure all required fields are present.\n", .{});
         std.process.exit(1);

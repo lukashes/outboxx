@@ -37,7 +37,7 @@ resource = "users" # Table or collection name in the source database
 operations = ["insert", "update"]
 
 [streams.flow]
-format = "json" # Not used yet, but could be "json", "avro", etc.
+format = "json" # Only "json" format is currently supported
 
 [streams.sink]
 destination = "outboxx.users" # Kafka topic name
