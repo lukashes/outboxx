@@ -1,19 +1,27 @@
 const std = @import("std");
-const WalReader = @import("../wal/reader.zig").WalReader;
-const WalEvent = @import("../wal/reader.zig").WalEvent;
-const WalReaderError = @import("../wal/reader.zig").WalReaderError;
+const WalReader = @import("../source/postgres/wal_reader.zig").WalReader;
+const WalEvent = @import("../source/postgres/wal_reader.zig").WalEvent;
+const WalReaderError = @import("../source/postgres/wal_reader.zig").WalReaderError;
 const KafkaProducer = @import("../kafka/producer.zig").KafkaProducer;
-const StructuredWalMessageParser = @import("message.zig").StructuredWalMessageParser;
 const KafkaConfig = @import("../config/config.zig").KafkaSink;
 const Stream = @import("../config/config.zig").Stream;
+
+// New architecture imports
+const domain = @import("domain");
+const ChangeEvent = domain.ChangeEvent;
+const postgres_parser = @import("postgres_wal_parser");
+const WalParser = postgres_parser.WalParser;
+const json_serializer = @import("json_serialization");
+const JsonSerializer = json_serializer.JsonSerializer;
 
 pub const CdcProcessor = struct {
     allocator: std.mem.Allocator,
     wal_reader: WalReader,
     kafka_producer: ?KafkaProducer,
-    structured_parser: StructuredWalMessageParser,
     kafka_config: KafkaConfig,
     stream_config: Stream,
+    wal_parser: WalParser,
+    serializer: JsonSerializer,
 
     const Self = @This();
 
@@ -22,9 +30,10 @@ pub const CdcProcessor = struct {
             .allocator = allocator,
             .wal_reader = WalReader.init(allocator, slot_name, publication_name, stream_config.source.resource),
             .kafka_producer = null,
-            .structured_parser = StructuredWalMessageParser.init(allocator),
             .kafka_config = kafka_config,
             .stream_config = stream_config,
+            .wal_parser = WalParser.init(allocator),
+            .serializer = JsonSerializer.init(),
         };
     }
 
@@ -33,7 +42,7 @@ pub const CdcProcessor = struct {
             producer.deinit();
         }
         self.wal_reader.deinit();
-        self.structured_parser.deinit();
+        self.wal_parser.deinit();
     }
 
     pub fn initialize(self: *Self, connection_string: []const u8) WalReaderError!void {
@@ -79,62 +88,49 @@ pub const CdcProcessor = struct {
 
         var kafka_producer = &(self.kafka_producer orelse return WalReaderError.ConnectionFailed);
 
-        std.log.info("Processing {} WAL events", .{events.items.len});
+        if (events.items.len > 0) {
+            std.log.info("Processing {} WAL events", .{events.items.len});
+        }
 
-        for (events.items) |event| {
-            std.log.debug("Processing WAL event: {s}", .{event.data});
-            std.log.debug("Stream config - resource: {s}, sink: {s}", .{ self.stream_config.source.resource, self.stream_config.sink.destination });
+        for (events.items) |wal_event| {
+            // Parse WAL event into domain model using new architecture
+            if (self.wal_parser.parse(wal_event.data, "postgres", self.stream_config.source.resource)) |change_event_opt| {
+                if (change_event_opt) |domain_event| {
+                    var event = domain_event;
+                    defer event.deinit(self.allocator);
 
-            // Parse WAL event into structured message using new parser
-            if (self.structured_parser.parseWalMessage(event.data, "postgres", self.stream_config.source.resource)) |message_opt| {
-                if (message_opt) |msg| {
-                    std.log.debug("Successfully parsed WAL message for operation: {s}", .{msg.op});
-
-                    // Make mutable copy
-                    var message = msg;
-                    defer message.deinit(self.allocator);
-
-                    // Filtering already done in parseWalMessage, so if message returned - it matches
-
-                    // Convert to JSON using new structured format (op/data/meta)
-                    const json_message = message.toJson(self.allocator) catch |err| {
+                    // Serialize domain event to JSON
+                    const json_bytes = self.serializer.serialize(event, self.allocator) catch |err| {
                         std.log.err("Failed to serialize message to JSON: {}", .{err});
                         continue;
                     };
-                    defer self.allocator.free(json_message);
-                    std.log.debug("Generated JSON: {s}", .{json_message});
+                    defer self.allocator.free(json_bytes);
 
-                    // Get topic name from stream config
-                    const topic_name = self.allocator.dupe(u8, self.stream_config.sink.destination) catch |err| {
-                        std.log.err("Failed to allocate topic name: {}", .{err});
-                        continue;
-                    };
-                    defer self.allocator.free(topic_name);
-
-                    // Get partition key from stream config (fallback to resource name if routing_key is null)
-                    const partition_key = if (self.stream_config.sink.routing_key) |key|
-                        self.allocator.dupe(u8, key) catch |err| {
-                            std.log.err("Failed to allocate partition key: {}", .{err});
-                            continue;
+                    // Extract partition key value from event data
+                    const partition_key_field = self.stream_config.sink.routing_key orelse "id";
+                    const partition_key = if (event.getPartitionKeyValue(self.allocator, partition_key_field)) |key_opt| blk: {
+                        if (key_opt) |key| {
+                            break :blk key;
+                        } else {
+                            // Field not found or complex type - fallback to table name
+                            break :blk try self.allocator.dupe(u8, event.meta.resource);
                         }
-                    else
-                        message.getPartitionKey(self.allocator) catch |err| {
-                            std.log.err("Failed to generate partition key: {}", .{err});
-                            continue;
-                        };
+                    } else |_| blk: {
+                        // Error getting key - fallback to table name
+                        break :blk try self.allocator.dupe(u8, event.meta.resource);
+                    };
                     defer self.allocator.free(partition_key);
 
+                    // Extract topic name from config
+                    const topic_name = self.stream_config.sink.destination;
+
                     // Send to Kafka
-                    std.log.debug("About to send to Kafka - topic: {s}, partition_key: {s}", .{ topic_name, partition_key });
-                    kafka_producer.sendMessage(topic_name, partition_key, json_message) catch |err| {
+                    kafka_producer.sendMessage(topic_name, partition_key, json_bytes) catch |err| {
                         std.log.err("Failed to send message to Kafka: {}", .{err});
                         continue;
                     };
-                    std.log.debug("Successfully sent message to Kafka", .{});
 
-                    std.log.info("Sent {s} message for {s}.{s}", .{ message.op, message.meta.schema, message.meta.resource });
-                } else {
-                    std.log.debug("Parser returned null for WAL event (filtered out or not recognized)", .{});
+                    std.log.info("Sent {s} message for {s}.{s} (partition key: {s})", .{ event.op, event.meta.schema, event.meta.resource, partition_key });
                 }
             } else |err| {
                 std.log.err("Failed to parse WAL message: {}", .{err});
@@ -143,8 +139,9 @@ pub const CdcProcessor = struct {
         }
 
         // Flush Kafka producer to ensure messages are sent
-        kafka_producer.flush(10_000); // 10 seconds timeout
-        std.log.info("Flushed messages to Kafka", .{});
+        if (events.items.len > 0) {
+            kafka_producer.flush(10_000); // 10 seconds timeout
+        }
     }
 
     pub fn startStreaming(self: *Self) !void {

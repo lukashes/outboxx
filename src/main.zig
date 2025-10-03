@@ -1,7 +1,6 @@
 const std = @import("std");
 const print = std.debug.print;
 const Config = @import("config/config.zig").Config;
-const WalReader = @import("wal/reader.zig").WalReader;
 const CdcProcessor = @import("processor/cdc_processor.zig").CdcProcessor;
 
 /// Sanitize stream name for PostgreSQL publication name

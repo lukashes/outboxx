@@ -131,7 +131,7 @@ env-up:
 
 env-down:
 	@echo "Stopping development environment..."
-	docker-compose down
+	docker-compose down -v
 
 env-restart:
 	@echo "Restarting development environment..."

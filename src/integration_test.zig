@@ -3,7 +3,7 @@ const testing = std.testing;
 
 // Direct imports work now because we're in src/
 const Config = @import("config/config.zig").Config;
-const WalReader = @import("wal/reader.zig").WalReader;
+const WalReader = @import("source/postgres/wal_reader.zig").WalReader;
 
 // Helper function to create test config without TOML
 fn createTestConfig(allocator: std.mem.Allocator) !Config {

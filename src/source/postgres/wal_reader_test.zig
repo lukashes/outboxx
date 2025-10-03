@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-const reader = @import("reader.zig");
+const reader = @import("wal_reader.zig");
 const WalReader = reader.WalReader;
 const WalEvent = reader.WalEvent;
 

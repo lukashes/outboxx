@@ -12,6 +12,29 @@ pub fn build(b: *std.Build) void {
     const toml_dep = b.dependency("toml", .{});
     const toml_module = toml_dep.module("toml");
 
+    // Domain module (new architecture) - must be defined before use
+    const domain_module = b.createModule(.{
+        .root_source_file = b.path("src/domain/change_event.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // JSON serialization module (new architecture)
+    const json_serialization_module = b.createModule(.{
+        .root_source_file = b.path("src/serialization/json.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    json_serialization_module.addImport("domain", domain_module);
+
+    // PostgreSQL WAL parser module (new architecture)
+    const postgres_wal_parser_module = b.createModule(.{
+        .root_source_file = b.path("src/source/postgres/wal_parser.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    postgres_wal_parser_module.addImport("domain", domain_module);
+
     // Main executable
     const exe = b.addExecutable(.{
         .name = "outboxx",
@@ -24,6 +47,9 @@ pub fn build(b: *std.Build) void {
 
     // Dependencies for the main executable
     exe.root_module.addImport("toml", toml_module);
+    exe.root_module.addImport("domain", domain_module);
+    exe.root_module.addImport("json_serialization", json_serialization_module);
+    exe.root_module.addImport("postgres_wal_parser", postgres_wal_parser_module);
 
     // Link libc for PostgreSQL and Kafka C libraries
     exe.linkLibC();
@@ -74,7 +100,7 @@ pub fn build(b: *std.Build) void {
 
     const wal_reader_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/wal/reader_test.zig"),
+            .root_source_file = b.path("src/source/postgres/wal_reader_test.zig"),
             .target = target,
             .optimize = optimize,
         }),
@@ -82,14 +108,31 @@ pub fn build(b: *std.Build) void {
     wal_reader_tests.linkLibC();
     wal_reader_tests.linkSystemLibrary("pq");
 
-    // Message and WAL parser tests
-    const message_tests = b.addTest(.{
+
+    // Domain layer tests (new)
+    const domain_tests = b.addTest(.{
+        .root_module = domain_module,
+    });
+
+    // JSON serialization tests (new)
+    const json_serialization_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/processor/message.zig"),
+            .root_source_file = b.path("src/serialization/json.zig"),
             .target = target,
             .optimize = optimize,
         }),
     });
+    json_serialization_tests.root_module.addImport("domain", domain_module);
+
+    // PostgreSQL WAL parser tests (new)
+    const postgres_wal_parser_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/source/postgres/wal_parser.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    postgres_wal_parser_tests.root_module.addImport("domain", domain_module);
 
     // Kafka producer tests (need both libpq and librdkafka for integration)
     const kafka_producer_tests = b.addTest(.{
@@ -104,13 +147,17 @@ pub fn build(b: *std.Build) void {
 
     const run_config_tests = b.addRunArtifact(config_tests);
     const run_wal_reader_tests = b.addRunArtifact(wal_reader_tests);
-    const run_message_tests = b.addRunArtifact(message_tests);
+    const run_domain_tests = b.addRunArtifact(domain_tests);
+    const run_json_serialization_tests = b.addRunArtifact(json_serialization_tests);
+    const run_postgres_wal_parser_tests = b.addRunArtifact(postgres_wal_parser_tests);
     const run_kafka_producer_tests = b.addRunArtifact(kafka_producer_tests);
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_config_tests.step);
     test_step.dependOn(&run_wal_reader_tests.step);
-    test_step.dependOn(&run_message_tests.step);
+    test_step.dependOn(&run_domain_tests.step);
+    test_step.dependOn(&run_json_serialization_tests.step);
+    test_step.dependOn(&run_postgres_wal_parser_tests.step);
     test_step.dependOn(&run_kafka_producer_tests.step);
 
     // Integration tests (moved to src/ for simplicity)
@@ -121,6 +168,9 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    integration_tests.root_module.addImport("domain", domain_module);
+    integration_tests.root_module.addImport("json_serialization", json_serialization_module);
+    integration_tests.root_module.addImport("postgres_wal_parser", postgres_wal_parser_module);
     integration_tests.linkLibC();
     integration_tests.linkSystemLibrary("pq");
     integration_tests.linkSystemLibrary("rdkafka");
