@@ -78,7 +78,7 @@ jobs:
           echo "Kafka is ready!"
 
       - name: Run integration tests
-        run: make nix-test-integration
+        run: make test-integration
         env:
           POSTGRES_HOST: localhost
           POSTGRES_PORT: 5432
@@ -89,4 +89,4 @@ jobs:
 
       # Code Coverage
       - name: Generate coverage report
-        run: make nix-coverage
+        run: make coverage

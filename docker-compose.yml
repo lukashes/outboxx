@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # PostgreSQL with logical replication enabled for CDC testing
   postgres:

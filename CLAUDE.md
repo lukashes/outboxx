@@ -28,11 +28,20 @@ Outboxx is a lightweight PostgreSQL Change Data Capture (CDC) tool written in Zi
 
 ## Development Workflow
 
+### Environment Setup
+
+This project uses **Nix** for reproducible builds and **direnv** (optional) for automatic environment activation.
+
+**Smart Environment Loading:**
+- Make commands auto-detect and use the appropriate Nix environment
+- `.make-shell` wrapper uses priority: already in Nix > direnv (fast) > `nix develop` (fallback)
+- No manual `nix develop` needed for make commands
+- direnv is optional but recommended for faster iteration
+
 ### Quick Start
 ```bash
-# Enter isolated development environment (recommended)
-make nix-shell
-# OR: cd into project directory if direnv is installed (automatic)
+# Optional: Enable direnv for automatic environment (recommended for contributors)
+direnv allow
 
 # Start PostgreSQL development environment
 make env-up
@@ -46,29 +55,28 @@ make dev
 
 ### Common Commands
 ```bash
-# Development environment setup
-make nix-shell      # Enter Nix development environment
-make help           # Show all available commands
-
-# Build and test (inside Nix shell or with compatible system setup)
-zig build                    # Build the project
-zig build test              # Run unit tests
-zig build test-integration  # Run integration tests
-
-# Makefile convenience commands
+# Build and test (works everywhere - auto-loads Nix environment)
 make build          # Build the project
 make test           # Run unit tests
 make test-all       # Run all tests (starts PostgreSQL if needed)
 make dev            # Development workflow (format + test + build)
 
+# Direct zig commands (require direnv or manual nix develop)
+zig build                    # Build the project
+zig build test              # Run unit tests
+zig build test-integration  # Run integration tests
+
 # Development environment
 make env-up         # Start PostgreSQL and Kafka with Docker Compose
 make env-down       # Stop development environment
+make help           # Show all available commands
 
 # Kafka debugging (use standard tools)
 kafka-console-consumer --bootstrap-server localhost:9092 --topic public.users --from-beginning
 kcat -C -b localhost:9092 -t public.users -f 'Topic: %t, Partition: %p, Offset: %o, Key: %k, Payload: %s\n'
 ```
+
+**Note:** The `make nix-*` commands are primarily for CI/CD or when direnv is not available. Regular `make` commands work everywhere and are preferred.
 
 ## Architecture and Implementation Notes
 
@@ -219,9 +227,13 @@ The project emphasizes robust testing:
 - **Memory Management**: Use proper `defer` cleanup patterns with Zig allocators
 - **Error Handling**: Leverage Zig's error unions for comprehensive error management
 - **Testing**: Write both unit tests and integration tests for new functionality
+- **Logging Levels**:
+  - Use `std.log.err()` only when the error is **handled** at this level (e.g., in `main.zig` where the application exits)
+  - Use `std.log.warn()` when an error is **propagated upward** - the caller will decide if it's truly an error
+  - Use `std.log.info()` for successful operations and informational messages
+  - Example: Library functions should use `warn()` for errors they return, while `main.zig` uses `err()` before `std.process.exit(1)`
 
 ### Development Process
-1. Enter development environment: `make nix-shell` (or use direnv)
 2. Start development environment: `make env-up` (PostgreSQL + Kafka)
 3. Run tests to ensure baseline: `make test-all`
 4. Implement changes following Zig idioms

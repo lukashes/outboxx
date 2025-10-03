@@ -125,7 +125,7 @@ test "WAL reader can read changes from empty slot" {
     defer wal_reader.dropSlot() catch {};
 
     // Read changes (should be empty initially)
-    var changes = try wal_reader.readChanges(10);
+    var changes = try wal_reader.peekChanges(10);
     defer {
         for (changes.items) |*change| {
             change.deinit(allocator);
@@ -231,7 +231,7 @@ test "WAL reader can detect INSERT operations" {
     std.Thread.sleep(50_000_000); // 50ms
 
     // Read changes
-    var changes = try wal_reader.readChanges(10);
+    var changes = try wal_reader.peekChanges(10);
     defer {
         for (changes.items) |*change| {
             change.deinit(allocator);
@@ -309,8 +309,16 @@ test "WAL reader can detect UPDATE operations" {
     std.Thread.sleep(50_000_000); // 50ms
 
     // Clear any existing changes from the insert
-    var initial_changes = try wal_reader.readChanges(100);
+    var initial_changes = try wal_reader.peekChanges(100);
     std.debug.print("Initial changes from INSERT: {d}\n", .{initial_changes.items.len});
+
+    // Advance slot past all these events to clear them
+    if (initial_changes.items.len > 0) {
+        const last_lsn = initial_changes.items[initial_changes.items.len - 1].lsn;
+        try wal_reader.advanceSlot(last_lsn);
+        std.debug.print("Advanced slot past INSERT events to LSN: {s}\n", .{last_lsn});
+    }
+
     for (initial_changes.items) |*change| {
         std.debug.print("INSERT change: {s}\n", .{change.data});
         change.deinit(allocator);
@@ -330,7 +338,7 @@ test "WAL reader can detect UPDATE operations" {
     std.Thread.sleep(100_000_000); // 100ms
 
     // Read changes
-    var changes = try wal_reader.readChanges(10);
+    var changes = try wal_reader.peekChanges(10);
     defer {
         for (changes.items) |*change| {
             change.deinit(allocator);
@@ -408,7 +416,14 @@ test "WAL reader can detect DELETE operations" {
     std.Thread.sleep(50_000_000); // 50ms
 
     // Clear any existing changes from the insert
-    var initial_changes = try wal_reader.readChanges(100);
+    var initial_changes = try wal_reader.peekChanges(100);
+
+    // Advance slot past all these events to clear them
+    if (initial_changes.items.len > 0) {
+        const last_lsn = initial_changes.items[initial_changes.items.len - 1].lsn;
+        try wal_reader.advanceSlot(last_lsn);
+    }
+
     for (initial_changes.items) |*change| {
         change.deinit(allocator);
     }
@@ -424,7 +439,7 @@ test "WAL reader can detect DELETE operations" {
     std.Thread.sleep(100_000_000); // 100ms
 
     // Read changes
-    var changes = try wal_reader.readChanges(10);
+    var changes = try wal_reader.peekChanges(10);
     defer {
         for (changes.items) |*change| {
             change.deinit(allocator);

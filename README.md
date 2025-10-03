@@ -114,20 +114,30 @@ For complete configuration examples and architectural documentation, see [`docs/
 ### Development Setup
 
 ```bash
-# Enter development environment (recommended)
-make nix-shell
-
-# Start PostgreSQL and Kafka services
+# Start development environment
 make env-up
 
-# Set database password
-export POSTGRES_PASSWORD="password"
+# Build and test
+make build
+make test
 
-# Run the application with development config
+# Run the application
+export POSTGRES_PASSWORD="password"
 zig build run -- --config dev/config.toml
 ```
 
-For complete development setup instructions, see [`dev/README.md`](dev/README.md).
+For complete development setup and contribution guidelines, see [`dev/README.md`](dev/README.md).
+
+### Production Deployment
+
+⚠️ **Outboxx requires a process supervisor** (systemd, Kubernetes, Docker restart policy, supervisord) as it uses fail-fast error handling. PostgreSQL replication slots preserve state across restarts.
+
+### Kafka Topics
+
+Outboxx relies on **Kafka auto-create topics** feature:
+- Topics are created automatically on first message if `auto.create.topics.enable=true` (Kafka default)
+- If auto-create is disabled and topic doesn't exist, Outboxx will fail-fast with clear error
+- For production: pre-create topics with desired settings (partitions, replication factor, retention)
 
 ## Contributing
 

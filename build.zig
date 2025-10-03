@@ -108,7 +108,6 @@ pub fn build(b: *std.Build) void {
     wal_reader_tests.linkLibC();
     wal_reader_tests.linkSystemLibrary("pq");
 
-
     // Domain layer tests (new)
     const domain_tests = b.addTest(.{
         .root_module = domain_module,
@@ -145,12 +144,41 @@ pub fn build(b: *std.Build) void {
     kafka_producer_tests.linkLibC();
     kafka_producer_tests.linkSystemLibrary("rdkafka");
 
+    // PostgresValidator tests
+    const validator_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/source/postgres/validator_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    validator_tests.linkLibC();
+    validator_tests.linkSystemLibrary("pq");
+
+    // CdcProcessor tests (integration tests requiring PostgreSQL and Kafka)
+    const cdc_processor_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/cdc_processor_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    cdc_processor_tests.root_module.addImport("domain", domain_module);
+    cdc_processor_tests.root_module.addImport("postgres_wal_parser", postgres_wal_parser_module);
+    cdc_processor_tests.root_module.addImport("json_serialization", json_serialization_module);
+    cdc_processor_tests.root_module.addImport("toml", toml_module);
+    cdc_processor_tests.linkLibC();
+    cdc_processor_tests.linkSystemLibrary("pq");
+    cdc_processor_tests.linkSystemLibrary("rdkafka");
+
     const run_config_tests = b.addRunArtifact(config_tests);
     const run_wal_reader_tests = b.addRunArtifact(wal_reader_tests);
     const run_domain_tests = b.addRunArtifact(domain_tests);
     const run_json_serialization_tests = b.addRunArtifact(json_serialization_tests);
     const run_postgres_wal_parser_tests = b.addRunArtifact(postgres_wal_parser_tests);
     const run_kafka_producer_tests = b.addRunArtifact(kafka_producer_tests);
+    const run_validator_tests = b.addRunArtifact(validator_tests);
+    const run_cdc_processor_tests = b.addRunArtifact(cdc_processor_tests);
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_config_tests.step);
@@ -159,6 +187,44 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_json_serialization_tests.step);
     test_step.dependOn(&run_postgres_wal_parser_tests.step);
     test_step.dependOn(&run_kafka_producer_tests.step);
+    test_step.dependOn(&run_validator_tests.step);
+    test_step.dependOn(&run_cdc_processor_tests.step);
+
+    // Multistream integration test
+    const multistream_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/multistream_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    multistream_tests.root_module.addImport("domain", domain_module);
+    multistream_tests.root_module.addImport("postgres_wal_parser", postgres_wal_parser_module);
+    multistream_tests.root_module.addImport("json_serialization", json_serialization_module);
+    multistream_tests.root_module.addImport("toml", toml_module);
+    multistream_tests.linkLibC();
+    multistream_tests.linkSystemLibrary("pq");
+    multistream_tests.linkSystemLibrary("rdkafka");
+
+    const run_multistream_tests = b.addRunArtifact(multistream_tests);
+
+    // Multistream race condition test
+    const multistream_race_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/multistream_race_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    multistream_race_tests.root_module.addImport("domain", domain_module);
+    multistream_race_tests.root_module.addImport("postgres_wal_parser", postgres_wal_parser_module);
+    multistream_race_tests.root_module.addImport("json_serialization", json_serialization_module);
+    multistream_race_tests.root_module.addImport("toml", toml_module);
+    multistream_race_tests.linkLibC();
+    multistream_race_tests.linkSystemLibrary("pq");
+    multistream_race_tests.linkSystemLibrary("rdkafka");
+
+    const run_multistream_race_tests = b.addRunArtifact(multistream_race_tests);
 
     // Integration tests (moved to src/ for simplicity)
     const integration_tests = b.addTest(.{
@@ -192,6 +258,8 @@ pub fn build(b: *std.Build) void {
     const integration_test_step = b.step("test-integration", "Run integration tests");
     integration_test_step.dependOn(&run_integration_tests.step);
     integration_test_step.dependOn(&run_kafka_integration_tests.step);
+    integration_test_step.dependOn(&run_multistream_tests.step);
+    integration_test_step.dependOn(&run_multistream_race_tests.step);
 
     // Single integration test with filter
     const single_integration_test = b.addRunArtifact(integration_tests);

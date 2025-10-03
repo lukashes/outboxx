@@ -1,0 +1,18 @@
+#!/bin/sh
+# Smart wrapper for make to auto-load Nix environment
+# Priority: already in Nix > direnv (fast) > nix develop (fallback)
+
+if [ -n "$IN_NIX_SHELL" ]; then
+    # Already in Nix environment (via direnv or manual nix develop)
+    # Just execute the command directly (zero overhead)
+    exec sh -c "$@"
+elif command -v direnv >/dev/null 2>&1 && [ -f .envrc ]; then
+    # direnv is available - use it (fast: ~50ms overhead)
+    exec direnv exec . sh -c "$@"
+elif command -v nix >/dev/null 2>&1 && [ -f flake.nix ]; then
+    # Only Nix available - use nix develop (slower: ~1-2s overhead, but works everywhere)
+    exec nix develop --command sh -c "$@"
+else
+    # No Nix setup found - try to execute as-is (will likely fail but maintains compatibility)
+    exec sh -c "$@"
+fi
