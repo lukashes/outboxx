@@ -71,6 +71,13 @@ CREATE TABLE IF NOT EXISTS system_logs (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Set REPLICA IDENTITY FULL to capture all columns in UPDATE/DELETE events
+-- This is required to get full row data in WAL for CDC
+ALTER TABLE users REPLICA IDENTITY FULL;
+ALTER TABLE products REPLICA IDENTITY FULL;
+ALTER TABLE orders REPLICA IDENTITY FULL;
+ALTER TABLE order_items REPLICA IDENTITY FULL;
+
 -- Create indexes for better performance
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);

@@ -180,8 +180,6 @@ pub const WalReader = struct {
         const sql = std.fmt.allocPrintSentinel(self.allocator, "SELECT lsn, xid, data FROM pg_logical_slot_get_changes('{s}', NULL, NULL) LIMIT {d};", .{ self.slot_name, limit }, 0) catch return WalReaderError.OutOfMemory;
         defer self.allocator.free(sql);
 
-        print("Reading WAL changes from slot: {s}\n", .{self.slot_name});
-
         const result = c.PQexec(self.connection, sql.ptr);
         defer c.PQclear(result);
 
@@ -193,7 +191,11 @@ pub const WalReader = struct {
         }
 
         const num_rows = c.PQntuples(result);
-        print("Found {d} WAL changes\n", .{num_rows});
+
+        // Only log when there are actual changes
+        if (num_rows > 0) {
+            print("Found {d} WAL changes from slot: {s}\n", .{ num_rows, self.slot_name });
+        }
 
         var events = std.ArrayList(WalEvent){};
 

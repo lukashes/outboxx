@@ -1,4 +1,13 @@
-.PHONY: help build run test clean fmt lint dev install-deps check-deps env-up env-down env-restart env-logs env-status nix-shell
+.PHONY: help build run test test-integration test-all clean fmt lint dev install-deps check-deps env-up env-down env-restart env-logs env-status nix-shell coverage
+
+# Helper function for running commands with spinner
+define run_with_spinner
+	@(while true; do for s in / - \\ \|; do printf "\b$$s"; sleep 0.1; done; done) & spinner=$$!; \
+	$(1) >/dev/null 2>test_errors.tmp; result=$$?; \
+	kill $$spinner 2>/dev/null; printf "\b"; \
+	if [ $$result -eq 0 ]; then echo "✅ $(2) passed"; rm -f test_errors.tmp; \
+	else echo "❌ $(2) failed:"; cat test_errors.tmp; rm -f test_errors.tmp; exit 1; fi
+endef
 
 # Default target
 help:
@@ -41,18 +50,23 @@ run:
 
 # Run unit tests
 test:
-	zig build test && echo "Success: Unit tests passed"
+	@echo -n "Running unit tests... "
+	$(call run_with_spinner,zig build test,Unit tests)
 
 # Run integration tests (requires PostgreSQL)
 test-integration:
-	zig build test-integration && echo "Success: Integration tests passed"
+	@echo -n "Running integration tests... "
+	$(call run_with_spinner,zig build test-integration,Integration tests)
+
 # Run all tests with database setup
 test-all: env-up
 	@echo "Waiting for PostgreSQL to be ready..."
 	@sleep 5
-	@docker exec outboxx-postgres pg_isready -U postgres -d outboxx_test
-	zig build test && echo "Success: Unit tests passed!"
-	zig build test-integration && echo "Success: Integration tests passed!"
+	@docker exec outboxx-postgres pg_isready -U postgres -d outboxx_test >/dev/null 2>&1
+	@echo -n "Running unit tests... "
+	$(call run_with_spinner,zig build test,Unit tests)
+	@echo -n "Running integration tests... "
+	$(call run_with_spinner,zig build test-integration,Integration tests)
 
 # Development workflow
 dev:
@@ -70,7 +84,8 @@ lint:
 
 # Clean build artifacts
 clean:
-	zig build clean
+	@zig build clean
+	@rm -f test_errors.tmp
 
 # Generate coverage report
 coverage:
@@ -103,15 +118,6 @@ check-deps:
 	@echo "OK: libpq: $$(pkg-config --modversion libpq)"
 	@echo "All dependencies are installed!"
 
-# Install system dependencies (Ubuntu/Debian)
-install-deps:
-	@echo "Installing system dependencies for Ubuntu/Debian..."
-	sudo apt update
-	sudo apt install -y libpq-dev postgresql-client
-	@echo "Dependencies installed!"
-	@echo "Note: You may also want to install PostgreSQL server and Kafka for development:"
-	@echo "  sudo apt install -y postgresql"
-
 # Development environment management
 env-up:
 	@echo "Starting PostgreSQL development environment..."
@@ -125,7 +131,7 @@ env-up:
 
 env-down:
 	@echo "Stopping development environment..."
-	docker-compose down
+	docker-compose down -v
 
 env-restart:
 	@echo "Restarting development environment..."

@@ -14,7 +14,7 @@ version = "v0"
 
 # Plugin registry - defines available source and sink types
 # NOTE: This section is DEPRECATED and not used by the application.
-# Supported types are now hardcoded: sources=["postgres","mysql"], sinks=["kafka","webhook"], formats=["json","avro","xml"]
+# Supported types are now hardcoded: sources=["postgres","mysql"], sinks=["kafka","webhook"], formats=["json"]
 # This section is kept for documentation purposes only.
 [plugins]
 sources = ["postgres", "mysql"]

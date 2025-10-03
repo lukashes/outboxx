@@ -73,21 +73,87 @@ kcat -C -b localhost:9092 -t public.users -f 'Topic: %t, Partition: %p, Offset: 
 ## Architecture and Implementation Notes
 
 ### Current Architecture
+The project follows a clean separation of concerns with distinct layers:
+
 ```
-PostgreSQL WAL → WAL Reader → Message Processor → Kafka Producer → Kafka Topics
+┌─────────────┐
+│ PostgreSQL  │ (Source)
+└──────┬──────┘
+       │ WAL events
+       ↓
+┌─────────────────────┐
+│ WAL Parser          │ src/source/postgres/
+│ (PostgreSQL-specific)│
+└──────┬──────────────┘
+       │ Domain Model (ChangeEvent)
+       ↓
+┌─────────────────────┐
+│ Domain Layer        │ src/domain/
+│ (Pure Data Model)   │
+└──────┬──────────────┘
+       │ ChangeEvent
+       ↓
+┌─────────────────────┐
+│ JSON Serializer     │ src/serialization/
+│ (Format-specific)   │
+└──────┬──────────────┘
+       │ Binary JSON
+       ↓
+┌─────────────────────┐
+│ CDC Processor       │ src/processor/
+│ (Orchestration)     │
+└──────┬──────────────┘
+       │ (topic, key, payload)
+       ↓
+┌─────────────────────┐
+│ Kafka Producer      │ src/kafka/
+│ (Sink)              │
+└──────┬──────────────┘
+       │
+┌──────▼──────┐
+│   Kafka     │ (Target)
+└─────────────┘
 ```
 
 ### Implemented Components
-- **WAL Reader**: PostgreSQL logical replication using `test_decoding` plugin
-- **Message Processor**: WAL message parsing, JSON serialization, topic/partition key generation
-- **Kafka Producer**: High-performance message publishing with librdkafka
-- **Test Consumer**: Simplified consumer integrated in tests for end-to-end validation
-- **Config Module**: Database connection management with proper error handling
+
+#### Domain Layer (`src/domain/`)
+- **ChangeEvent**: Pure domain model for CDC events
+- **ChangeOperation**: INSERT, UPDATE, DELETE operations
+- **Metadata**: Source metadata (schema, resource, timestamp, LSN)
+- **DataSection**: Union type for operation-specific data
+- No external dependencies, easily testable
+
+#### Source Layer (`src/source/postgres/`)
+- **WalReader**: Connects to PostgreSQL logical replication, manages slots and publications
+- **WalParser**: Parses PostgreSQL WAL messages into domain model
+- **FieldParser**: Handles PostgreSQL-specific field type parsing
+- Converts `test_decoding` output to `ChangeEvent`
+- Independent from serialization format
+
+#### Serialization Layer (`src/serialization/`)
+- **JsonSerializer**: Converts domain model to JSON format
+- Stateless, pure function approach
+- Easy to add new formats (Avro, Protobuf) in the future
+
+#### Flow Layer (`src/processor/`)
+- **CdcProcessor**: Orchestrates the entire pipeline
+- Manages WAL reader, parser, serializer, and Kafka producer
+- Handles routing logic (topic, partition key)
+- Multi-stream support with isolated replication slots
+
+#### Sink Layer (`src/kafka/`)
+- **KafkaProducer**: Minimal wrapper around librdkafka
+- Accepts pre-serialized binary data
+- High-performance message publishing
+
+#### Infrastructure
+- **Config Module** (`src/config/`): TOML-based configuration with validation
 - **Integration Tests**: Comprehensive testing with real PostgreSQL and Kafka
 
 ### Testing Strategy
 The project emphasizes robust testing:
-- **Unit Tests**: For individual modules (config, WAL reader, message processor)
+- **Unit Tests**: For individual modules (config, WAL reader, WAL parser, JSON serializer, domain model)
 - **Integration Tests**: Real PostgreSQL and Kafka with Docker Compose
 - **Kafka Integration Tests**: Producer/consumer message flow validation
 - **Memory Safety**: All tests verify proper cleanup with Zig allocators
@@ -107,17 +173,25 @@ The project emphasizes robust testing:
 
 ```
 ├── src/                    # Main source code
-│   ├── main.zig           # Application entry point (placeholder)
-│   ├── config.zig         # Configuration management
-│   ├── config_test.zig    # Configuration unit tests
-│   ├── integration_test.zig # Integration tests with PostgreSQL
-│   ├── message_processor.zig # WAL message parsing and JSON serialization
-│   ├── wal/               # WAL streaming components
-│   │   ├── reader.zig     # WAL reader with logical replication
-│   │   └── reader_test.zig # WAL reader unit tests
-│   └── kafka/             # Kafka integration components
-│       ├── producer.zig   # Kafka producer implementation
-│       └── producer_test.zig # Kafka integration tests with embedded test consumer
+│   ├── main.zig           # Application entry point
+│   ├── domain/            # Domain layer (pure data model)
+│   │   └── change_event.zig  # ChangeEvent, Metadata, DataSection
+│   ├── source/            # Source adapters
+│   │   └── postgres/      # PostgreSQL-specific components
+│   │       ├── wal_parser.zig      # WAL message parser (to domain model)
+│   │       ├── wal_reader.zig      # WAL reader (logical replication)
+│   │       └── wal_reader_test.zig # WAL reader unit tests
+│   ├── serialization/     # Serialization layer
+│   │   └── json.zig       # JSON serializer
+│   ├── processor/         # Flow orchestration
+│   │   └── cdc_processor.zig # CDC pipeline orchestrator
+│   ├── kafka/             # Kafka sink adapter
+│   │   ├── producer.zig      # Kafka producer
+│   │   └── producer_test.zig # Kafka integration tests
+│   ├── config/            # Configuration management
+│   │   ├── config.zig     # TOML-based configuration
+│   │   └── config_test.zig # Configuration tests
+│   └── integration_test.zig # End-to-end integration tests
 ├── dev/                   # Development environment
 │   ├── config.toml        # Development configuration
 │   ├── run-dev.sh         # Development startup script
@@ -127,11 +201,11 @@ The project emphasizes robust testing:
 │   │   └── pg_hba.conf        # PostgreSQL authentication config
 │   └── README.md          # Development environment documentation
 ├── docs/                  # Documentation
-│   └── examples/          # Configuration examples and architectural documentation
-│       ├── config.toml    # Complete configuration example with design vision
+│   └── examples/          # Configuration examples
+│       ├── config.toml    # Complete configuration example
 │       └── README.md      # Examples documentation
 ├── docker-compose.yml     # PostgreSQL and Kafka container setup
-├── build.zig             # Zig build configuration with Kafka targets
+├── build.zig             # Zig build configuration
 ├── Makefile              # Development convenience commands
 ├── flake.nix             # Nix development environment
 ├── .envrc                # direnv configuration for auto-activation
@@ -164,13 +238,19 @@ The project emphasizes robust testing:
 
 ### Development and Debugging Commands
 
-#### Message Processing Testing
+#### Layer-Specific Testing
 ```bash
-# Test message processor unit tests
-zig test src/message_processor.zig --library c --library pq
+# Test domain layer (pure unit tests)
+zig test --dep domain -Mroot=src/domain/change_event.zig
+
+# Test serialization layer
+zig test --dep domain -Mroot=src/serialization/json.zig -Mdomain=src/domain/change_event.zig
+
+# Test PostgreSQL parser
+zig test --dep domain -Mroot=src/source/postgres/wal_parser.zig -Mdomain=src/domain/change_event.zig
 
 # Test individual components
-zig test src/config_test.zig --library c --library pq
+zig test src/config/config_test.zig --library c --library pq
 zig test src/wal/reader_test.zig --library c --library pq
 ```
 
@@ -198,4 +278,22 @@ SELECT * FROM pg_replication_slots;
 SELECT pg_create_logical_replication_slot('manual_slot', 'test_decoding');
 SELECT * FROM pg_logical_slot_get_changes('manual_slot', NULL, NULL);
 ```
+
+## Architecture Benefits
+
+### Separation of Concerns
+- **Domain Layer**: Pure data structures, no dependencies on sources or formats
+- **Source Adapters**: Parse source-specific formats into domain model
+- **Serialization**: Convert domain model to target formats
+- **Flow Orchestration**: Coordinate the pipeline without knowing implementation details
+
+### Extensibility
+- Easy to add new sources (MySQL, MongoDB) by creating new source adapters
+- Easy to add new formats (Avro, Protobuf) by creating new serializers
+- Easy to add new sinks (Pulsar, RabbitMQ) by creating new sink adapters
+
+### Testability
+- Each layer can be tested in isolation
+- Domain model has no external dependencies
+- Integration tests validate the full pipeline
 

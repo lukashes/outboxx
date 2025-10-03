@@ -169,12 +169,12 @@ test "Config validation" {
     // Test valid default config
     var valid_config = createTestDefault(allocator);
     defer valid_config.deinit(allocator);
-    try valid_config.validate();
+    try valid_config.validate(allocator);
 
     // Test invalid config - missing version
     var invalid_config = Config.init(allocator);
     defer invalid_config.deinit(allocator);
-    try testing.expectError(error.MissingConfigVersion, invalid_config.validate());
+    try testing.expectError(error.MissingConfigVersion, invalid_config.validate(allocator));
 }
 
 test "Config validation - unsupported version" {
@@ -184,7 +184,7 @@ test "Config validation - unsupported version" {
     var invalid_version_config = createTestDefault(allocator);
     defer invalid_version_config.deinit(allocator);
     invalid_version_config.metadata.version = "1"; // Unsupported version
-    try testing.expectError(error.UnsupportedConfigVersion, invalid_version_config.validate());
+    try testing.expectError(error.UnsupportedConfigVersion, invalid_version_config.validate(allocator));
 }
 
 test "parse PostgreSQL config section" {
@@ -395,4 +395,107 @@ test "Custom TOML parser can parse streams array" {
     try testing.expectEqualStrings("json", stream.flow.format);
     try testing.expectEqualStrings("outboxx.users", stream.sink.destination);
     try testing.expectEqualStrings("id", stream.sink.routing_key.?);
+}
+
+test "Config validation - unsupported format should fail" {
+    const allocator = testing.allocator;
+
+    // Create a valid default config
+    var test_config = createTestDefault(allocator);
+    defer test_config.deinit(allocator);
+
+    // Modify only the format to test unsupported value
+    // Access the existing stream and change only the format
+    var modified_stream = test_config.streams[0];
+    modified_stream.flow.format = "avro"; // This should be rejected
+
+    // Replace the streams array with our modified stream
+    allocator.free(test_config.streams);
+    test_config.streams = try allocator.dupe(config.Stream, &[_]config.Stream{modified_stream});
+
+    // Validation should fail due to unsupported format
+    try testing.expectError(error.InvalidEnumValue, test_config.validate(allocator));
+}
+
+test "Config validation - json format should pass" {
+    const allocator = testing.allocator;
+
+    // Create a valid default config (already has json format)
+    var test_config = createTestDefault(allocator);
+    defer test_config.deinit(allocator);
+
+    // Validation should pass (default config already uses json format)
+    try test_config.validate(allocator);
+}
+
+test "Config validation - invalid source type shows proper error format" {
+    const allocator = testing.allocator;
+
+    var test_config = createTestDefault(allocator);
+    defer test_config.deinit(allocator);
+    test_config.source.type = "invalid_source_type";
+
+    try testing.expectError(error.InvalidEnumValue, test_config.validate(allocator));
+}
+
+test "Config validation - invalid sink type shows proper error format" {
+    const allocator = testing.allocator;
+
+    var test_config = createTestDefault(allocator);
+    defer test_config.deinit(allocator);
+    test_config.sink.type = "invalid_sink_type";
+
+    try testing.expectError(error.InvalidEnumValue, test_config.validate(allocator));
+}
+
+test "Config validation - port 0 should fail" {
+    const allocator = testing.allocator;
+
+    var test_config = createTestDefault(allocator);
+    defer test_config.deinit(allocator);
+    test_config.source.postgres.?.port = 0;
+
+    try testing.expectError(error.InvalidPort, test_config.validate(allocator));
+}
+
+test "Config validation - missing required PostgreSQL fields" {
+    const allocator = testing.allocator;
+
+    var test_config = createTestDefault(allocator);
+    defer test_config.deinit(allocator);
+    test_config.source.postgres.?.host = "";
+
+    try testing.expectError(error.MissingPostgresHost, test_config.validate(allocator));
+}
+
+test "Config validation - empty streams array should fail" {
+    const allocator = testing.allocator;
+
+    var test_config = createTestDefault(allocator);
+    defer test_config.deinit(allocator);
+
+    // Properly clean up existing streams before setting empty array
+    for (test_config.streams) |stream| {
+        for (stream.source.operations) |operation| {
+            allocator.free(operation);
+        }
+        allocator.free(stream.source.operations);
+    }
+    allocator.free(test_config.streams);
+    test_config.streams = &[_]config.Stream{};
+
+    try testing.expectError(error.EmptyArray, test_config.validate(allocator));
+}
+
+test "parseIntValue with invalid input fails correctly" {
+    const allocator = testing.allocator;
+
+    const toml_content =
+        \\[source.postgres]
+        \\port = "invalid_port"
+    ;
+
+    var parser = config.ConfigParser.init(allocator);
+    const result = parser.parseToml(toml_content);
+    try testing.expectError(error.InvalidCharacter, result);
 }

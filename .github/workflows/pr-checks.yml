@@ -30,7 +30,7 @@ jobs:
           - 5432:5432
 
       kafka:
-        image: bitnami/kafka:latest
+        image: bitnamilegacy/kafka:latest
         env:
           KAFKA_CFG_NODE_ID: 1
           KAFKA_CFG_PROCESS_ROLES: broker,controller

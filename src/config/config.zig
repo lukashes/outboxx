@@ -20,7 +20,7 @@ pub const SupportedValues = struct {
     pub const SOURCE_TYPES = [_][]const u8{ "postgres", "mysql" };
     pub const SINK_TYPES = [_][]const u8{ "kafka", "webhook" };
     pub const OPERATIONS = [_][]const u8{ "insert", "update", "delete" };
-    pub const FORMATS = [_][]const u8{ "json", "avro", "xml" };
+    pub const FORMATS = [_][]const u8{"json"};
 };
 
 // Configuration structures matching TOML format
@@ -79,7 +79,7 @@ pub const StreamSource = struct {
 };
 
 pub const StreamFlow = struct {
-    format: []const u8, // "json", "avro", "xml"
+    format: []const u8,
 };
 
 pub const StreamSink = struct {
@@ -230,39 +230,57 @@ pub const Config = struct {
     // Helper validation functions
 
     /// Validate that a string is in the allowed enum values
-    fn validateEnum(value: []const u8, allowed_values: []const []const u8, field_name: []const u8) !void {
+    fn validateEnum(allocator: std.mem.Allocator, value: []const u8, allowed_values: []const []const u8, field_name: []const u8) !void {
         for (allowed_values) |allowed| {
             if (std.mem.eql(u8, value, allowed)) return;
         }
-        std.log.err("Invalid {s}: '{s}'. Allowed values: [", .{ field_name, value });
+
+        // Build allowed values list as a single string
+        var allowed_list = std.ArrayList(u8).empty;
+        defer allowed_list.deinit(allocator);
+
+        try allowed_list.appendSlice(allocator, "[");
         for (allowed_values, 0..) |allowed, i| {
-            if (i > 0) std.log.err(", ", .{});
-            std.log.err("'{s}'", .{allowed});
+            if (i > 0) try allowed_list.appendSlice(allocator, ", ");
+            try allowed_list.appendSlice(allocator, "'");
+            try allowed_list.appendSlice(allocator, allowed);
+            try allowed_list.appendSlice(allocator, "'");
         }
-        std.log.err("]", .{});
+        try allowed_list.appendSlice(allocator, "]");
+
+        std.log.warn("Invalid {s}: '{s}'. Allowed values: {s}", .{ field_name, value, allowed_list.items });
         return error.InvalidEnumValue;
     }
 
     /// Validate string length limits
     fn validateStringLength(value: []const u8, max_len: usize, field_name: []const u8) !void {
         if (value.len == 0) {
-            std.log.err("Empty {s} not allowed", .{field_name});
+            std.log.warn("Empty {s} not allowed", .{field_name});
             return error.EmptyString;
         }
         if (value.len > max_len) {
-            std.log.err("{s} too long: {d} chars (max: {d})", .{ field_name, value.len, max_len });
+            std.log.warn("{s} too long: {d} chars (max: {d})", .{ field_name, value.len, max_len });
             return error.StringTooLong;
         }
+    }
+
+    /// Validate port number range (1-65535)
+    fn validatePort(port: u16, field_name: []const u8) !void {
+        if (port == 0) {
+            std.log.warn("Invalid {s}: {d} (must be 1-65535)", .{ field_name, port });
+            return error.InvalidPort;
+        }
+        // u16 max is 65535, so no upper bound check needed
     }
 
     /// Validate array size limits
     fn validateArraySize(len: usize, max_len: usize, field_name: []const u8) !void {
         if (len == 0) {
-            std.log.err("Empty {s} array not allowed", .{field_name});
+            std.log.warn("Empty {s} array not allowed", .{field_name});
             return error.EmptyArray;
         }
         if (len > max_len) {
-            std.log.err("{s} array too large: {d} items (max: {d})", .{ field_name, len, max_len });
+            std.log.warn("{s} array too large: {d} items (max: {d})", .{ field_name, len, max_len });
             return error.ArrayTooLarge;
         }
     }
@@ -276,14 +294,14 @@ pub const Config = struct {
         // First character must be letter or underscore
         const first_char = value[0];
         if (!std.ascii.isAlphabetic(first_char) and first_char != '_') {
-            std.log.err("Invalid {s}: '{s}' must start with letter or underscore", .{ field_name, value });
+            std.log.warn("Invalid {s}: '{s}' must start with letter or underscore", .{ field_name, value });
             return error.InvalidIdentifierFormat;
         }
 
         // Rest can be alphanumeric or underscore
         for (value[1..]) |char| {
             if (!std.ascii.isAlphanumeric(char) and char != '_') {
-                std.log.err("Invalid {s}: '{s}' contains invalid character '{c}'", .{ field_name, value, char });
+                std.log.warn("Invalid {s}: '{s}' contains invalid character '{c}'", .{ field_name, value, char });
                 return error.InvalidIdentifierFormat;
             }
         }
@@ -296,7 +314,7 @@ pub const Config = struct {
         // Kafka topic names can contain a-z, A-Z, 0-9, ., _, -
         for (value) |char| {
             if (!std.ascii.isAlphanumeric(char) and char != '.' and char != '_' and char != '-') {
-                std.log.err("Invalid {s}: '{s}' contains invalid character '{c}'", .{ field_name, value, char });
+                std.log.warn("Invalid {s}: '{s}' contains invalid character '{c}'", .{ field_name, value, char });
                 return error.InvalidTopicFormat;
             }
         }
@@ -309,18 +327,18 @@ pub const Config = struct {
         // Basic hostname validation: alphanumeric, dots, hyphens
         for (value) |char| {
             if (!std.ascii.isAlphanumeric(char) and char != '.' and char != '-') {
-                std.log.err("Invalid {s}: '{s}' contains invalid character '{c}'", .{ field_name, value, char });
+                std.log.warn("Invalid {s}: '{s}' contains invalid character '{c}'", .{ field_name, value, char });
                 return error.InvalidHostnameFormat;
             }
         }
     }
 
     /// Validate stream operations array
-    fn validateOperations(operations: []const []const u8) !void {
+    fn validateOperations(allocator: std.mem.Allocator, operations: []const []const u8) !void {
         try validateArraySize(operations.len, ValidationLimits.MAX_OPERATIONS_COUNT, "operations");
 
         for (operations) |operation| {
-            try validateEnum(operation, &SupportedValues.OPERATIONS, "operation");
+            try validateEnum(allocator, operation, &SupportedValues.OPERATIONS, "operation");
         }
     }
 
@@ -333,30 +351,30 @@ pub const Config = struct {
         // First character must be letter or underscore
         const first_char = value[0];
         if (!std.ascii.isAlphabetic(first_char) and first_char != '_') {
-            std.log.err("Invalid {s}: '{s}' must start with letter or underscore", .{ field_name, value });
+            std.log.warn("Invalid {s}: '{s}' must start with letter or underscore", .{ field_name, value });
             return error.InvalidIdentifierFormat;
         }
 
         // Rest can be alphanumeric, underscore, or dash
         for (value[1..]) |char| {
             if (!std.ascii.isAlphanumeric(char) and char != '_' and char != '-') {
-                std.log.err("Invalid {s}: '{s}' contains invalid character '{c}'", .{ field_name, value, char });
+                std.log.warn("Invalid {s}: '{s}' contains invalid character '{c}'", .{ field_name, value, char });
                 return error.InvalidIdentifierFormat;
             }
         }
     }
 
     /// Validate individual stream configuration
-    fn validateStream(stream: Stream) !void {
+    fn validateStream(allocator: std.mem.Allocator, stream: Stream) !void {
         // Stream name validation (allow dashes)
         try validateStreamName(stream.name, "stream.name");
 
         // Source validation
         try validatePostgresIdentifier(stream.source.resource, "stream.source.resource");
-        try validateOperations(stream.source.operations);
+        try validateOperations(allocator, stream.source.operations);
 
         // Flow validation
-        try validateEnum(stream.flow.format, &SupportedValues.FORMATS, "stream.flow.format");
+        try validateEnum(allocator, stream.flow.format, &SupportedValues.FORMATS, "stream.flow.format");
 
         // Sink validation
         try validateKafkaTopicName(stream.sink.destination, "stream.sink.destination");
@@ -366,19 +384,19 @@ pub const Config = struct {
     }
 
     /// Validate all streams
-    fn validateStreams(streams: []const Stream) !void {
+    fn validateStreams(allocator: std.mem.Allocator, streams: []const Stream) !void {
         try validateArraySize(streams.len, ValidationLimits.MAX_STREAMS_COUNT, "streams");
 
         // Validate each stream
         for (streams) |stream| {
-            try validateStream(stream);
+            try validateStream(allocator, stream);
         }
 
         // Check for duplicate stream names
         for (streams, 0..) |stream1, i| {
             for (streams[i + 1 ..]) |stream2| {
                 if (std.mem.eql(u8, stream1.name, stream2.name)) {
-                    std.log.err("Duplicate stream name: '{s}'", .{stream1.name});
+                    std.log.warn("Duplicate stream name: '{s}'", .{stream1.name});
                     return error.DuplicateStreamName;
                 }
             }
@@ -386,8 +404,8 @@ pub const Config = struct {
     }
 
     /// Validate configuration for completeness and correctness
-    pub fn validate(self: Config) !void {
-        // Check metadata
+    pub fn validate(self: Config, allocator: std.mem.Allocator) !void {
+        // 1. METADATA VALIDATION
         if (self.metadata.version.len == 0) {
             return error.MissingConfigVersion;
         }
@@ -395,11 +413,21 @@ pub const Config = struct {
             return error.UnsupportedConfigVersion;
         }
 
-        // Check source configuration
+        // 2. ENUM VALIDATION (with detailed error messages)
+        // Validate source type first to get detailed error message
         if (self.source.type.len == 0) {
             return error.MissingSourceType;
         }
+        try validateEnum(allocator, self.source.type, &SupportedValues.SOURCE_TYPES, "source.type");
 
+        // Validate sink type with detailed error message
+        if (self.sink.type.len == 0) {
+            return error.MissingSinkType;
+        }
+        try validateEnum(allocator, self.sink.type, &SupportedValues.SINK_TYPES, "sink.type");
+
+        // 3. STRUCTURAL INTEGRITY (after enum validation)
+        // Check source configuration structure
         if (std.mem.eql(u8, self.source.type, "postgres")) {
             if (self.source.postgres == null) {
                 return error.MissingPostgresConfig;
@@ -417,15 +445,9 @@ pub const Config = struct {
             if (mysql.host.len == 0) return error.MissingMysqlHost;
             if (mysql.database.len == 0) return error.MissingMysqlDatabase;
             if (mysql.user.len == 0) return error.MissingMysqlUser;
-        } else {
-            return error.UnsupportedSourceType;
         }
 
-        // Check sink configuration
-        if (self.sink.type.len == 0) {
-            return error.MissingSinkType;
-        }
-
+        // Check sink configuration structure
         if (std.mem.eql(u8, self.sink.type, "kafka")) {
             if (self.sink.kafka == null) {
                 return error.MissingKafkaConfig;
@@ -436,51 +458,44 @@ pub const Config = struct {
             if (self.sink.webhook == null) {
                 return error.MissingWebhookConfig;
             }
-        } else {
-            return error.UnsupportedSinkType;
         }
 
-        // Enhanced validation with strict enum and format checking
-
-        // Validate source type strictly
-        try validateEnum(self.source.type, &SupportedValues.SOURCE_TYPES, "source.type");
-
+        // 4. DETAILED FIELD VALIDATION
         // Enhanced source validation with string limits and format checks
         if (std.mem.eql(u8, self.source.type, "postgres")) {
-            const postgres = self.source.postgres.?; // Already checked above
+            const postgres = self.source.postgres.?;
             try validateHostname(postgres.host, "postgres.host");
+            try validatePort(postgres.port, "postgres.port");
             try validatePostgresIdentifier(postgres.database, "postgres.database");
             try validatePostgresIdentifier(postgres.user, "postgres.user");
             try validatePostgresIdentifier(postgres.slot_name, "postgres.slot_name");
             try validatePostgresIdentifier(postgres.publication_name, "postgres.publication_name");
             try validateStringLength(postgres.password_env, ValidationLimits.MAX_IDENTIFIER_LEN, "postgres.password_env");
         } else if (std.mem.eql(u8, self.source.type, "mysql")) {
-            const mysql = self.source.mysql.?; // Already checked above
+            const mysql = self.source.mysql.?;
             try validateHostname(mysql.host, "mysql.host");
+            try validatePort(mysql.port, "mysql.port");
             try validatePostgresIdentifier(mysql.database, "mysql.database");
             try validatePostgresIdentifier(mysql.user, "mysql.user");
             try validateStringLength(mysql.password_env, ValidationLimits.MAX_IDENTIFIER_LEN, "mysql.password_env");
             try validateStringLength(mysql.binlog_format, ValidationLimits.MAX_IDENTIFIER_LEN, "mysql.binlog_format");
         }
 
-        // Validate sink type strictly
-        try validateEnum(self.sink.type, &SupportedValues.SINK_TYPES, "sink.type");
-
         // Enhanced sink validation with string limits and format checks
         if (std.mem.eql(u8, self.sink.type, "kafka")) {
-            const kafka = self.sink.kafka.?; // Already checked above
+            const kafka = self.sink.kafka.?;
             try validateArraySize(kafka.brokers.len, ValidationLimits.MAX_BROKERS_COUNT, "kafka.brokers");
             for (kafka.brokers) |broker| {
                 try validateStringLength(broker, ValidationLimits.MAX_HOSTNAME_LEN, "kafka.broker");
             }
         } else if (std.mem.eql(u8, self.sink.type, "webhook")) {
-            const webhook = self.sink.webhook.?; // Already checked above
+            const webhook = self.sink.webhook.?;
             try validateStringLength(webhook.url, ValidationLimits.MAX_URL_LEN, "webhook.url");
             try validateStringLength(webhook.method, ValidationLimits.MAX_IDENTIFIER_LEN, "webhook.method");
         }
 
-        // Validate streams (this was completely missing before!)
-        try validateStreams(self.streams);
+        // 5. STREAMS VALIDATION
+        try validateStreams(allocator, self.streams);
     }
 
     /// Load configuration from TOML file
@@ -672,7 +687,10 @@ pub const ConfigParser = struct {
         if (std.mem.eql(u8, key, "host")) {
             postgres.host = try self.parseStringValue(config, value_str);
         } else if (std.mem.eql(u8, key, "port")) {
-            postgres.port = self.parseIntValue(u16, value_str) catch 5432;
+            postgres.port = self.parseIntValue(u16, value_str) catch |err| {
+                std.log.warn("Invalid postgres.port value '{s}': {}, using default 5432", .{ value_str, err });
+                return err;
+            };
         } else if (std.mem.eql(u8, key, "database")) {
             postgres.database = try self.parseStringValue(config, value_str);
         } else if (std.mem.eql(u8, key, "user")) {
@@ -704,7 +722,10 @@ pub const ConfigParser = struct {
         if (std.mem.eql(u8, key, "host")) {
             mysql.host = try self.parseStringValue(config, value_str);
         } else if (std.mem.eql(u8, key, "port")) {
-            mysql.port = self.parseIntValue(u16, value_str) catch 3306;
+            mysql.port = self.parseIntValue(u16, value_str) catch |err| {
+                std.log.warn("Invalid mysql.port value '{s}': {}, using default 3306", .{ value_str, err });
+                return err;
+            };
         } else if (std.mem.eql(u8, key, "database")) {
             mysql.database = try self.parseStringValue(config, value_str);
         } else if (std.mem.eql(u8, key, "user")) {
@@ -712,7 +733,10 @@ pub const ConfigParser = struct {
         } else if (std.mem.eql(u8, key, "password_env")) {
             mysql.password_env = try self.parseStringValue(config, value_str);
         } else if (std.mem.eql(u8, key, "server_id")) {
-            mysql.server_id = self.parseIntValue(u32, value_str) catch 1;
+            mysql.server_id = self.parseIntValue(u32, value_str) catch |err| {
+                std.log.warn("Invalid mysql.server_id value '{s}': {}, using default 1", .{ value_str, err });
+                return err;
+            };
         } else if (std.mem.eql(u8, key, "binlog_format")) {
             mysql.binlog_format = try self.parseStringValue(config, value_str);
         }
