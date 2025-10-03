@@ -111,23 +111,57 @@ For complete configuration examples and architectural documentation, see [`docs/
 
 ## Quick Start
 
-### Development Setup
+### 1. Prerequisites
 
-```bash
-# Enter development environment (recommended)
-make nix-shell
+**PostgreSQL Requirements**: Version 12 or later
 
-# Start PostgreSQL and Kafka services
-make env-up
-
-# Set database password
-export POSTGRES_PASSWORD="password"
-
-# Run the application with development config
-zig build run -- --config dev/config.toml
+**Configure PostgreSQL** (`postgresql.conf`):
+```ini
+wal_level = logical              # Required for logical replication (CDC)
 ```
 
-For complete development setup instructions, see [`dev/README.md`](dev/README.md).
+Restart PostgreSQL after configuration changes.
+
+**Create User** (run as PostgreSQL superuser):
+
+```sql
+-- Create user with REPLICATION attribute (required for replication slots and WAL access)
+CREATE USER outboxx_user WITH REPLICATION PASSWORD 'secure_password';
+
+-- Grant database access
+GRANT CONNECT ON DATABASE my_database TO outboxx_user;
+
+-- Grant schema access (CREATE needed for creating publications)
+GRANT USAGE, CREATE ON SCHEMA public TO outboxx_user;
+
+-- Grant table access (SELECT needed for logical replication)
+GRANT SELECT ON TABLE my_table TO outboxx_user;
+
+-- Enable REPLICA IDENTITY FULL (required for capturing complete row data in UPDATE/DELETE)
+ALTER TABLE my_table REPLICA IDENTITY FULL;
+```
+
+**Note**: Currently supports `public` schema only.
+
+**Kafka Setup**:
+- Topics are auto-created by default (`auto.create.topics.enable=true`)
+- For production: pre-create topics with desired partitions and replication factor
+- Outboxx will fail-fast if topic doesn't exist and auto-create is disabled
+
+### 2. Running Outboxx
+
+```bash
+# Build the application
+make build
+
+# Run with your configuration
+export POSTGRES_PASSWORD="your_password"
+./zig-out/bin/outboxx --config config.toml
+```
+
+### 3. Production Deployment
+
+⚠️ **Outboxx requires a process supervisor** (systemd, Kubernetes, Docker restart policy, supervisord) as it uses fail-fast error handling. PostgreSQL replication slots preserve state across restarts.
 
 ## Contributing
 

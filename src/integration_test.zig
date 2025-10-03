@@ -45,7 +45,7 @@ test "WAL reader can connect to PostgreSQL" {
     defer config.deinit(allocator);
 
     const postgres = config.source.postgres.?;
-    var wal_reader = WalReader.init(allocator, postgres.slot_name, postgres.publication_name, "users");
+    var wal_reader = WalReader.init(allocator, postgres.slot_name, postgres.publication_name, &[_][]const u8{});
     defer wal_reader.deinit();
 
     const conn_str = try config.postgresConnectionString(allocator);
@@ -70,7 +70,7 @@ test "WAL reader can create and drop replication slot" {
     defer config.deinit(allocator);
     const postgres = config.source.postgres.?;
     const test_slot_name = "test_slot_integration";
-    var wal_reader = WalReader.init(allocator, test_slot_name, postgres.publication_name, "users");
+    var wal_reader = WalReader.init(allocator, test_slot_name, postgres.publication_name, &[_][]const u8{});
     defer wal_reader.deinit();
 
     const conn_str = try config.postgresConnectionString(allocator);
@@ -103,7 +103,7 @@ test "WAL reader can read changes from empty slot" {
     defer config.deinit(allocator);
     const postgres = config.source.postgres.?;
     const test_slot_name = "test_slot_read_empty";
-    var wal_reader = WalReader.init(allocator, test_slot_name, postgres.publication_name, "users");
+    var wal_reader = WalReader.init(allocator, test_slot_name, postgres.publication_name, &[_][]const u8{});
     defer wal_reader.deinit();
 
     const conn_str = try config.postgresConnectionString(allocator);
@@ -125,7 +125,7 @@ test "WAL reader can read changes from empty slot" {
     defer wal_reader.dropSlot() catch {};
 
     // Read changes (should be empty initially)
-    var changes = try wal_reader.readChanges(10);
+    var changes = try wal_reader.peekChanges(10);
     defer {
         for (changes.items) |*change| {
             change.deinit(allocator);
@@ -195,7 +195,8 @@ test "WAL reader can detect INSERT operations" {
     defer config.deinit(allocator);
     const postgres = config.source.postgres.?;
     const test_slot_name = "test_slot_insert";
-    var wal_reader = WalReader.init(allocator, test_slot_name, postgres.publication_name, "users");
+    const tables = [_][]const u8{"users"}; // Monitor "users" table
+    var wal_reader = WalReader.init(allocator, test_slot_name, postgres.publication_name, &tables);
     defer wal_reader.deinit();
 
     const conn_str = try config.postgresConnectionString(allocator);
@@ -231,7 +232,7 @@ test "WAL reader can detect INSERT operations" {
     std.Thread.sleep(50_000_000); // 50ms
 
     // Read changes
-    var changes = try wal_reader.readChanges(10);
+    var changes = try wal_reader.peekChanges(10);
     defer {
         for (changes.items) |*change| {
             change.deinit(allocator);
@@ -269,7 +270,8 @@ test "WAL reader can detect UPDATE operations" {
     defer config.deinit(allocator);
     const postgres = config.source.postgres.?;
     const test_slot_name = "test_slot_update";
-    var wal_reader = WalReader.init(allocator, test_slot_name, postgres.publication_name, "users");
+    const tables = [_][]const u8{"users"}; // Monitor "users" table
+    var wal_reader = WalReader.init(allocator, test_slot_name, postgres.publication_name, &tables);
     defer wal_reader.deinit();
 
     const conn_str = try config.postgresConnectionString(allocator);
@@ -309,8 +311,16 @@ test "WAL reader can detect UPDATE operations" {
     std.Thread.sleep(50_000_000); // 50ms
 
     // Clear any existing changes from the insert
-    var initial_changes = try wal_reader.readChanges(100);
+    var initial_changes = try wal_reader.peekChanges(100);
     std.debug.print("Initial changes from INSERT: {d}\n", .{initial_changes.items.len});
+
+    // Advance slot past all these events to clear them
+    if (initial_changes.items.len > 0) {
+        const last_lsn = initial_changes.items[initial_changes.items.len - 1].lsn;
+        try wal_reader.advanceSlot(last_lsn);
+        std.debug.print("Advanced slot past INSERT events to LSN: {s}\n", .{last_lsn});
+    }
+
     for (initial_changes.items) |*change| {
         std.debug.print("INSERT change: {s}\n", .{change.data});
         change.deinit(allocator);
@@ -330,7 +340,7 @@ test "WAL reader can detect UPDATE operations" {
     std.Thread.sleep(100_000_000); // 100ms
 
     // Read changes
-    var changes = try wal_reader.readChanges(10);
+    var changes = try wal_reader.peekChanges(10);
     defer {
         for (changes.items) |*change| {
             change.deinit(allocator);
@@ -368,7 +378,8 @@ test "WAL reader can detect DELETE operations" {
     defer config.deinit(allocator);
     const postgres = config.source.postgres.?;
     const test_slot_name = "test_slot_delete";
-    var wal_reader = WalReader.init(allocator, test_slot_name, postgres.publication_name, "users");
+    const tables = [_][]const u8{"users"}; // Monitor "users" table
+    var wal_reader = WalReader.init(allocator, test_slot_name, postgres.publication_name, &tables);
     defer wal_reader.deinit();
 
     const conn_str = try config.postgresConnectionString(allocator);
@@ -408,7 +419,14 @@ test "WAL reader can detect DELETE operations" {
     std.Thread.sleep(50_000_000); // 50ms
 
     // Clear any existing changes from the insert
-    var initial_changes = try wal_reader.readChanges(100);
+    var initial_changes = try wal_reader.peekChanges(100);
+
+    // Advance slot past all these events to clear them
+    if (initial_changes.items.len > 0) {
+        const last_lsn = initial_changes.items[initial_changes.items.len - 1].lsn;
+        try wal_reader.advanceSlot(last_lsn);
+    }
+
     for (initial_changes.items) |*change| {
         change.deinit(allocator);
     }
@@ -424,7 +442,7 @@ test "WAL reader can detect DELETE operations" {
     std.Thread.sleep(100_000_000); // 100ms
 
     // Read changes
-    var changes = try wal_reader.readChanges(10);
+    var changes = try wal_reader.peekChanges(10);
     defer {
         for (changes.items) |*change| {
             change.deinit(allocator);

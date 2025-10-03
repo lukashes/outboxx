@@ -19,7 +19,7 @@ port = 5432
 database = "outboxx_test"
 user = "postgres"
 password_env = "POSTGRES_PASSWORD"  # Set with: export POSTGRES_PASSWORD="password"
-slot_name = "outboxx_dev_slot"
+slot_name = "outboxx_slot"
 publication_name = "outboxx_publication"
 
 [sink]

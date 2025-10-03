@@ -151,7 +151,7 @@ pub const WalParser = struct {
     }
 
     // Parses PostgreSQL WAL message into ChangeEvent domain model
-    pub fn parse(self: *Self, wal_data: []const u8, source_name: []const u8, resource_name: []const u8) !?ChangeEvent {
+    pub fn parse(self: *Self, wal_data: []const u8, source_name: []const u8) !?ChangeEvent {
         if (wal_data.len == 0) return null;
 
         // Skip non-table messages
@@ -176,15 +176,10 @@ pub const WalParser = struct {
         const schema_name = full_table_name[0..dot_pos];
         const table_name = full_table_name[dot_pos + 1 ..];
 
-        // Check that this is the needed table
-        if (!std.mem.eql(u8, table_name, resource_name)) {
-            return null; // Not the right table
-        }
-
         // Create metadata
         const metadata = Metadata{
             .source = source_name,
-            .resource = resource_name,
+            .resource = table_name,
             .schema = schema_name,
             .timestamp = std.time.timestamp(),
             .lsn = null, // TODO: extract LSN if available
@@ -307,7 +302,7 @@ test "WalParser parse INSERT" {
 
     const wal_data = "table public.users: INSERT: id[integer]:1 email[character varying]:'alice@example.com' active[boolean]:true";
 
-    const event_opt = try parser.parse(wal_data, "postgres", "users");
+    const event_opt = try parser.parse(wal_data, "postgres");
     try testing.expect(event_opt != null);
 
     var event = event_opt.?;
@@ -330,26 +325,4 @@ test "WalParser parse INSERT" {
         },
         else => try testing.expect(false), // Should be insert
     }
-}
-
-test "WalParser filters by resource name" {
-    const testing = std.testing;
-
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer {
-        const deinit_status = gpa.deinit();
-        if (deinit_status == .leak) {
-            std.debug.panic("Memory leak in test!", .{});
-        }
-    }
-    const allocator = gpa.allocator();
-
-    var parser = WalParser.init(allocator);
-    defer parser.deinit();
-
-    const wal_data = "table public.orders: INSERT: id[integer]:1";
-
-    // Looking for "users" but WAL has "orders" - should return null
-    const event = try parser.parse(wal_data, "postgres", "users");
-    try testing.expect(event == null);
 }
