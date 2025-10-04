@@ -1,12 +1,29 @@
-.PHONY: help build run test test-integration test-all clean fmt lint dev install-deps check-deps env-up env-down env-restart env-logs env-status nix-shell coverage
+.PHONY: help build run test test-integration test-all clean fmt lint dev install-deps check-deps env-up env-down env-restart env-logs env-status coverage
+
+# Use direnv to auto-load Nix environment for local development
+# This allows commands to work without 'nix develop' wrapper
+SHELL := $(CURDIR)/.make-shell
+.SHELLFLAGS :=
 
 # Helper function for running commands with spinner
+# Captures both stdout and stderr, shows full output on failure
 define run_with_spinner
 	@(while true; do for s in / - \\ \|; do printf "\b$$s"; sleep 0.1; done; done) & spinner=$$!; \
-	$(1) >/dev/null 2>test_errors.tmp; result=$$?; \
+	$(1) >test_output.tmp 2>&1; result=$$?; \
 	kill $$spinner 2>/dev/null; printf "\b"; \
-	if [ $$result -eq 0 ]; then echo "✅ $(2) passed"; rm -f test_errors.tmp; \
-	else echo "❌ $(2) failed:"; cat test_errors.tmp; rm -f test_errors.tmp; exit 1; fi
+	if [ $$result -eq 0 ]; then \
+		echo "✅ $(2) passed"; \
+		rm -f test_output.tmp; \
+	else \
+		echo "❌ $(2) failed"; \
+		echo ""; \
+		echo "Full output:"; \
+		echo "----------------------------------------"; \
+		cat test_output.tmp; \
+		echo "----------------------------------------"; \
+		rm -f test_output.tmp; \
+		exit 1; \
+	fi
 endef
 
 # Default target
@@ -31,10 +48,6 @@ help:
 	@echo "  make env-logs      - Show PostgreSQL logs"
 	@echo "  make env-status    - Show environment status"
 	@echo ""
-	@echo "Nix Commands:"
-	@echo "  make nix-<target>  - Run any target in Nix environment (e.g., nix-build, nix-test)"
-	@echo "  make nix-shell     - Enter Nix development shell (interactive)"
-	@echo ""
 	@echo "Dependencies:"
 	@echo "  make check-deps    - Check system dependencies"
 	@echo "  make install-deps  - Install system dependencies (Ubuntu/Debian)"
@@ -42,7 +55,9 @@ help:
 
 # Build the project
 build:
-	zig build
+# macro-prefix-map is not supported at darwin
+	@echo "zig build"
+	@zig build 2>&1 | grep -v "macro-prefix-map" && echo "Success"
 
 # Run the application
 run:
@@ -104,11 +119,6 @@ coverage:
 		echo "PASS: Test coverage looks reasonable"; \
 	fi
 
-# Nix wrapper: nix-<target> runs <target> in nix develop environment
-nix-%:
-	@echo "Running '$*' in Nix development environment..."
-	nix develop --command make $*
-
 # Check if required system dependencies are installed
 check-deps:
 	@echo "Checking system dependencies..."
@@ -147,16 +157,3 @@ env-logs:
 env-status:
 	@echo "Development environment status:"
 	docker-compose ps
-
-# Nix development shell
-nix-shell:
-	@if command -v nix >/dev/null 2>&1; then \
-		echo "Entering Nix development shell..."; \
-		nix --extra-experimental-features "nix-command flakes" develop; \
-	else \
-		echo "ERROR: Nix is not installed. Installing Nix (Determinate Systems installer):"; \
-		echo "curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix | sh -s -- install"; \
-		echo ""; \
-		echo "After installation, restart your shell and run 'make nix-shell' again."; \
-		exit 1; \
-	fi

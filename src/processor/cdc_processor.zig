@@ -14,6 +14,11 @@ const WalParser = postgres_parser.WalParser;
 const json_serializer = @import("json_serialization");
 const JsonSerializer = json_serializer.JsonSerializer;
 
+// Kafka flush timeout: 30 seconds is a balance between:
+// - Allowing enough time for Kafka brokers to acknowledge messages
+// - Not blocking CDC processing for too long on Kafka issues
+const KAFKA_FLUSH_TIMEOUT_MS: i32 = 30_000;
+
 pub const CdcProcessor = struct {
     allocator: std.mem.Allocator,
     wal_reader: WalReader,
@@ -22,6 +27,8 @@ pub const CdcProcessor = struct {
     stream_config: Stream,
     wal_parser: WalParser,
     serializer: JsonSerializer,
+
+    last_sent_lsn: ?[]const u8,
 
     const Self = @This();
 
@@ -34,10 +41,24 @@ pub const CdcProcessor = struct {
             .stream_config = stream_config,
             .wal_parser = WalParser.init(allocator),
             .serializer = JsonSerializer.init(),
+            .last_sent_lsn = null,
         };
     }
 
+    pub fn shutdown(self: *Self) void {
+        std.log.info("Shutting down stream {s} processor...", .{self.stream_config.name});
+
+        self.flushAndCommit() catch |err| {
+            std.log.err("Failed to flush and commit on shutdown: {}", .{err});
+        };
+
+        std.log.info("...Finished", .{});
+    }
+
     pub fn deinit(self: *Self) void {
+        if (self.last_sent_lsn) |lsn| {
+            self.allocator.free(lsn);
+        }
         if (self.kafka_producer) |*producer| {
             producer.deinit();
         }
@@ -58,7 +79,13 @@ pub const CdcProcessor = struct {
             std.log.err("Failed to initialize Kafka producer: {}", .{err});
             return WalReaderError.ConnectionFailed;
         };
-        self.kafka_producer.?.flush(10_000); // Initial flush to ensure connection
+
+        // Test Kafka connection at startup (fail-fast if unavailable)
+        var producer = &self.kafka_producer.?;
+        producer.testConnection() catch |err| {
+            std.log.err("Kafka connection test failed: {}", .{err});
+            return WalReaderError.ConnectionFailed;
+        };
 
         std.log.info("CDC processor initialized successfully", .{});
     }
@@ -76,9 +103,26 @@ pub const CdcProcessor = struct {
         return self.wal_reader.dropSlot();
     }
 
+    pub fn flushAndCommit(self: *Self) WalReaderError!void {
+        if (self.last_sent_lsn == null) {
+            return;
+        }
+
+        var kafka_producer = &(self.kafka_producer orelse return WalReaderError.ConnectionFailed);
+
+        std.log.debug("Flushing Kafka messages (timeout: {}ms)...", .{KAFKA_FLUSH_TIMEOUT_MS});
+        kafka_producer.flush(KAFKA_FLUSH_TIMEOUT_MS);
+
+        const lsn = self.last_sent_lsn.?;
+        std.log.debug("Committing WAL position to LSN: {s}", .{lsn});
+        try self.wal_reader.advanceSlot(lsn);
+
+        std.log.debug("Successfully committed LSN: {s}", .{lsn});
+    }
+
     pub fn processChangesToKafka(self: *Self, limit: u32) WalReaderError!void {
-        // Read WAL changes
-        var events = try self.wal_reader.readChanges(limit);
+        // Always peek from current slot position
+        var events = try self.wal_reader.peekChanges(limit);
         defer {
             for (events.items) |*event| {
                 event.deinit(self.allocator);
@@ -86,61 +130,64 @@ pub const CdcProcessor = struct {
             events.deinit(self.allocator);
         }
 
-        var kafka_producer = &(self.kafka_producer orelse return WalReaderError.ConnectionFailed);
-
-        if (events.items.len > 0) {
-            std.log.info("Processing {} WAL events", .{events.items.len});
+        // If no events, nothing to do
+        if (events.items.len == 0) {
+            return;
         }
 
+        var kafka_producer = &(self.kafka_producer orelse return WalReaderError.ConnectionFailed);
+
+        // Process entire batch asynchronously
         for (events.items) |wal_event| {
-            // Parse WAL event into domain model using new architecture
+            // Track LSN for ALL events (including BEGIN/COMMIT)
+            // This ensures slot advances even if batch has no parseable events
+            const new_lsn = try self.allocator.dupe(u8, wal_event.lsn);
+            if (self.last_sent_lsn) |old_lsn| {
+                self.allocator.free(old_lsn);
+            }
+            self.last_sent_lsn = new_lsn;
+
+            // Try to parse and send to Kafka
             if (self.wal_parser.parse(wal_event.data, "postgres", self.stream_config.source.resource)) |change_event_opt| {
                 if (change_event_opt) |domain_event| {
                     var event = domain_event;
                     defer event.deinit(self.allocator);
 
-                    // Serialize domain event to JSON
                     const json_bytes = self.serializer.serialize(event, self.allocator) catch |err| {
                         std.log.err("Failed to serialize message to JSON: {}", .{err});
                         continue;
                     };
                     defer self.allocator.free(json_bytes);
 
-                    // Extract partition key value from event data
                     const partition_key_field = self.stream_config.sink.routing_key orelse "id";
                     const partition_key = if (event.getPartitionKeyValue(self.allocator, partition_key_field)) |key_opt| blk: {
                         if (key_opt) |key| {
                             break :blk key;
                         } else {
-                            // Field not found or complex type - fallback to table name
                             break :blk try self.allocator.dupe(u8, event.meta.resource);
                         }
                     } else |_| blk: {
-                        // Error getting key - fallback to table name
                         break :blk try self.allocator.dupe(u8, event.meta.resource);
                     };
                     defer self.allocator.free(partition_key);
 
-                    // Extract topic name from config
                     const topic_name = self.stream_config.sink.destination;
 
-                    // Send to Kafka
                     kafka_producer.sendMessage(topic_name, partition_key, json_bytes) catch |err| {
                         std.log.err("Failed to send message to Kafka: {}", .{err});
                         continue;
                     };
 
-                    std.log.info("Sent {s} message for {s}.{s} (partition key: {s})", .{ event.op, event.meta.schema, event.meta.resource, partition_key });
+                    std.log.debug("Sent {s} message for {s}.{s} (partition key: {s})", .{ event.op, event.meta.schema, event.meta.resource, partition_key });
                 }
             } else |err| {
-                std.log.err("Failed to parse WAL message: {}", .{err});
-                continue;
+                std.log.warn("Skipped WAL event (parse error): {}", .{err});
             }
         }
 
-        // Flush Kafka producer to ensure messages are sent
-        if (events.items.len > 0) {
-            kafka_producer.flush(10_000); // 10 seconds timeout
+        // Flush and commit after processing entire batch
+        if (self.last_sent_lsn != null) {
+            try self.flushAndCommit();
         }
     }
 

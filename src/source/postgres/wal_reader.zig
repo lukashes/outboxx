@@ -3,8 +3,6 @@ const c = @cImport({
     @cInclude("libpq-fe.h");
 });
 
-const print = std.debug.print;
-
 pub const WalReaderError = error{
     ConnectionFailed,
     SlotCreationFailed,
@@ -54,25 +52,25 @@ pub const WalReader = struct {
         const conn_str = self.allocator.dupeZ(u8, connection_string) catch return WalReaderError.OutOfMemory;
         defer self.allocator.free(conn_str);
 
-        print("Connecting to PostgreSQL: {s}\n", .{connection_string});
+        std.log.info("Connecting to PostgreSQL: {s}", .{connection_string});
 
         self.connection = c.PQconnectdb(conn_str.ptr);
 
         if (self.connection == null) {
-            print("Failed to allocate connection\n", .{});
+            std.log.warn("Failed to allocate connection", .{});
             return WalReaderError.ConnectionFailed;
         }
 
         const status = c.PQstatus(self.connection);
         if (status != c.CONNECTION_OK) {
             const error_msg = c.PQerrorMessage(self.connection);
-            print("Connection failed: {s}\n", .{error_msg});
+            std.log.warn("Connection failed: {s}", .{error_msg});
             c.PQfinish(self.connection);
             self.connection = null;
             return WalReaderError.ConnectionFailed;
         }
 
-        print("Connected to PostgreSQL successfully\n", .{});
+        std.log.info("Connected to PostgreSQL successfully", .{});
     }
 
     /// Initialize PostgreSQL connection, publication and replication slot
@@ -86,7 +84,7 @@ pub const WalReader = struct {
         // Create replication slot (will be idempotent in the future)
         try self.createSlot();
 
-        print("PostgreSQL WAL reader initialized successfully\n", .{});
+        std.log.info("PostgreSQL WAL reader initialized successfully", .{});
     }
 
     pub fn createSlot(self: *Self) WalReaderError!void {
@@ -96,7 +94,7 @@ pub const WalReader = struct {
         const sql = std.fmt.allocPrintSentinel(self.allocator, "SELECT pg_create_logical_replication_slot('{s}', 'test_decoding');", .{self.slot_name}, 0) catch return WalReaderError.OutOfMemory;
         defer self.allocator.free(sql);
 
-        print("Creating replication slot: {s}\n", .{self.slot_name});
+        std.log.info("Creating replication slot: {s}", .{self.slot_name});
 
         const result = c.PQexec(self.connection, sql.ptr);
         defer c.PQclear(result);
@@ -108,15 +106,15 @@ pub const WalReader = struct {
 
             // Check if slot already exists (this is expected and OK)
             if (std.mem.indexOf(u8, error_str, "already exists") != null) {
-                print("Replication slot '{s}' already exists, continuing...\n", .{self.slot_name});
+                std.log.info("Replication slot '{s}' already exists, continuing...", .{self.slot_name});
                 return;
             }
 
-            print("Failed to create slot: {s}\n", .{error_msg});
+            std.log.warn("Failed to create slot: {s}", .{error_msg});
             return WalReaderError.SlotCreationFailed;
         }
 
-        print("Replication slot '{s}' created successfully\n", .{self.slot_name});
+        std.log.info("Replication slot '{s}' created successfully", .{self.slot_name});
     }
 
     pub fn createPublication(self: *Self) WalReaderError!void {
@@ -126,7 +124,7 @@ pub const WalReader = struct {
         const sql = std.fmt.allocPrintSentinel(self.allocator, "CREATE PUBLICATION {s} FOR TABLE {s};", .{ self.publication_name, self.table_name }, 0) catch return WalReaderError.OutOfMemory;
         defer self.allocator.free(sql);
 
-        print("Creating publication: {s}\n", .{self.publication_name});
+        std.log.info("Creating publication: {s}", .{self.publication_name});
 
         const result = c.PQexec(self.connection, sql.ptr);
         defer c.PQclear(result);
@@ -138,15 +136,15 @@ pub const WalReader = struct {
 
             // Check if publication already exists (this is expected and OK)
             if (std.mem.indexOf(u8, error_str, "already exists") != null) {
-                print("Publication '{s}' already exists, continuing...\n", .{self.publication_name});
+                std.log.info("Publication '{s}' already exists, continuing...", .{self.publication_name});
                 return;
             }
 
-            print("Failed to create publication: {s}\n", .{error_msg});
+            std.log.warn("Failed to create publication: {s}", .{error_msg});
             return WalReaderError.SlotCreationFailed;
         }
 
-        print("Publication '{s}' created successfully\n", .{self.publication_name});
+        std.log.info("Publication '{s}' created successfully", .{self.publication_name});
     }
 
     pub fn dropSlot(self: *Self) WalReaderError!void {
@@ -155,7 +153,7 @@ pub const WalReader = struct {
         const sql = std.fmt.allocPrintSentinel(self.allocator, "SELECT pg_drop_replication_slot('{s}');", .{self.slot_name}, 0) catch return WalReaderError.OutOfMemory;
         defer self.allocator.free(sql);
 
-        print("Dropping replication slot: {s}\n", .{self.slot_name});
+        std.log.info("Dropping replication slot: {s}", .{self.slot_name});
 
         const result = c.PQexec(self.connection, sql.ptr);
         defer c.PQclear(result);
@@ -163,21 +161,17 @@ pub const WalReader = struct {
         const status = c.PQresultStatus(result);
         if (status != c.PGRES_TUPLES_OK) {
             const error_msg = c.PQresultErrorMessage(result);
-            print("Warning: Failed to drop slot: {s}\n", .{error_msg});
+            std.log.warn("Failed to drop slot: {s}", .{error_msg});
             // Don't return error - slot might not exist
         } else {
-            print("Replication slot '{s}' dropped successfully\n", .{self.slot_name});
+            std.log.info("Replication slot '{s}' dropped successfully", .{self.slot_name});
         }
     }
 
-    // TODO: Add filtering based on stream configuration
-    // - Filter by resource (table): streams[0].source.resource
-    // - Filter by operations: streams[0].source.operations (INSERT, UPDATE, DELETE)
-    // Currently reads all changes from all tables
-    pub fn readChanges(self: *Self, limit: u32) WalReaderError!std.ArrayList(WalEvent) {
+    pub fn peekChanges(self: *Self, limit: u32) WalReaderError!std.ArrayList(WalEvent) {
         if (self.connection == null) return WalReaderError.ConnectionFailed;
 
-        const sql = std.fmt.allocPrintSentinel(self.allocator, "SELECT lsn, xid, data FROM pg_logical_slot_get_changes('{s}', NULL, NULL) LIMIT {d};", .{ self.slot_name, limit }, 0) catch return WalReaderError.OutOfMemory;
+        const sql = std.fmt.allocPrintSentinel(self.allocator, "SELECT lsn, xid, data FROM pg_logical_slot_peek_changes('{s}', NULL, NULL) LIMIT {d};", .{ self.slot_name, limit }, 0) catch return WalReaderError.OutOfMemory;
         defer self.allocator.free(sql);
 
         const result = c.PQexec(self.connection, sql.ptr);
@@ -186,23 +180,18 @@ pub const WalReader = struct {
         const status = c.PQresultStatus(result);
         if (status != c.PGRES_TUPLES_OK) {
             const error_msg = c.PQresultErrorMessage(result);
-            print("Failed to read changes: {s}\n", .{error_msg});
+            std.log.warn("Failed to peek changes: {s}", .{error_msg});
             return WalReaderError.ReplicationFailed;
         }
 
         const num_rows = c.PQntuples(result);
-
-        // Only log when there are actual changes
-        if (num_rows > 0) {
-            print("Found {d} WAL changes from slot: {s}\n", .{ num_rows, self.slot_name });
-        }
 
         var events = std.ArrayList(WalEvent){};
 
         var i: c_int = 0;
         while (i < num_rows) : (i += 1) {
             const lsn_cstr = c.PQgetvalue(result, i, 0);
-            const data_cstr = c.PQgetvalue(result, i, 2); // Skip xid column
+            const data_cstr = c.PQgetvalue(result, i, 2);
 
             if (lsn_cstr == null or data_cstr == null) continue;
 
@@ -225,5 +214,24 @@ pub const WalReader = struct {
         }
 
         return events;
+    }
+
+    pub fn advanceSlot(self: *Self, target_lsn: []const u8) WalReaderError!void {
+        if (self.connection == null) return WalReaderError.ConnectionFailed;
+
+        const sql = std.fmt.allocPrintSentinel(self.allocator, "SELECT pg_replication_slot_advance('{s}', '{s}');", .{ self.slot_name, target_lsn }, 0) catch return WalReaderError.OutOfMemory;
+        defer self.allocator.free(sql);
+
+        const result = c.PQexec(self.connection, sql.ptr);
+        defer c.PQclear(result);
+
+        const status = c.PQresultStatus(result);
+        if (status != c.PGRES_TUPLES_OK) {
+            const error_msg = c.PQresultErrorMessage(result);
+            std.log.warn("Failed to advance slot to LSN {s}: {s}", .{ target_lsn, error_msg });
+            return WalReaderError.ReplicationFailed;
+        }
+
+        std.log.debug("Advanced replication slot '{s}' to LSN: {s}", .{ self.slot_name, target_lsn });
     }
 };
