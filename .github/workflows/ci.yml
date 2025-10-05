@@ -26,11 +26,11 @@ jobs:
 
       # Build First - fail fast if code doesn't compile
       - name: Build project
-        run: make nix-build
+        run: make build
 
       # Code Quality Checks
       - name: Lint code formatting
-        run: make nix-lint
+        run: make lint
 
       - name: Run static analysis with verbose output
         run: |
@@ -38,5 +38,5 @@ jobs:
           echo "PASS: Static analysis completed"
 
       - name: Run unit tests
-        run: make nix-test
+        run: make test
 

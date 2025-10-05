@@ -12,6 +12,13 @@ pub fn build(b: *std.Build) void {
     const toml_dep = b.dependency("toml", .{});
     const toml_module = toml_dep.module("toml");
 
+    // Config module (for type definitions like KafkaSink, Stream, etc.)
+    const config_module = b.createModule(.{
+        .root_source_file = b.path("src/config/config.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // Domain module (new architecture) - must be defined before use
     const domain_module = b.createModule(.{
         .root_source_file = b.path("src/domain/change_event.zig"),
@@ -35,6 +42,33 @@ pub fn build(b: *std.Build) void {
     });
     postgres_wal_parser_module.addImport("domain", domain_module);
 
+    // PostgreSQL WAL reader module
+    const wal_reader_module = b.createModule(.{
+        .root_source_file = b.path("src/source/postgres/wal_reader.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Kafka producer module
+    const kafka_producer_module = b.createModule(.{
+        .root_source_file = b.path("src/kafka/producer.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Processor module with all dependencies
+    const cdc_processor_module = b.createModule(.{
+        .root_source_file = b.path("src/processor/processor.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    cdc_processor_module.addImport("domain", domain_module);
+    cdc_processor_module.addImport("postgres_wal_parser", postgres_wal_parser_module);
+    cdc_processor_module.addImport("json_serialization", json_serialization_module);
+    cdc_processor_module.addImport("wal_reader", wal_reader_module);
+    cdc_processor_module.addImport("kafka_producer", kafka_producer_module);
+    cdc_processor_module.addImport("config", config_module);
+
     // Main executable
     const exe = b.addExecutable(.{
         .name = "outboxx",
@@ -50,6 +84,9 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("domain", domain_module);
     exe.root_module.addImport("json_serialization", json_serialization_module);
     exe.root_module.addImport("postgres_wal_parser", postgres_wal_parser_module);
+    exe.root_module.addImport("wal_reader", wal_reader_module);
+    exe.root_module.addImport("kafka_producer", kafka_producer_module);
+    exe.root_module.addImport("config", config_module);
 
     // Link libc for PostgreSQL and Kafka C libraries
     exe.linkLibC();
@@ -108,7 +145,6 @@ pub fn build(b: *std.Build) void {
     wal_reader_tests.linkLibC();
     wal_reader_tests.linkSystemLibrary("pq");
 
-
     // Domain layer tests (new)
     const domain_tests = b.addTest(.{
         .root_module = domain_module,
@@ -145,12 +181,52 @@ pub fn build(b: *std.Build) void {
     kafka_producer_tests.linkLibC();
     kafka_producer_tests.linkSystemLibrary("rdkafka");
 
+    // PostgresValidator tests
+    const validator_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/source/postgres/validator_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    validator_tests.linkLibC();
+    validator_tests.linkSystemLibrary("pq");
+
+    // Test helpers module (shared utilities for all tests)
+    const test_helpers_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_helpers.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_helpers_module.addImport("config", config_module);
+
+    // Add test_helpers to wal_reader_tests
+    wal_reader_tests.root_module.addImport("test_helpers", test_helpers_module);
+
+    // CdcProcessor tests (integration tests requiring PostgreSQL and Kafka)
+    const cdc_processor_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/processor/cdc_processor_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    cdc_processor_tests.root_module.addImport("test_helpers", test_helpers_module);
+    cdc_processor_tests.root_module.addImport("cdc_processor", cdc_processor_module);
+    cdc_processor_tests.root_module.addImport("config", config_module);
+    cdc_processor_tests.root_module.addImport("wal_reader", wal_reader_module);
+    cdc_processor_tests.linkLibC();
+    cdc_processor_tests.linkSystemLibrary("pq");
+    cdc_processor_tests.linkSystemLibrary("rdkafka");
+
     const run_config_tests = b.addRunArtifact(config_tests);
     const run_wal_reader_tests = b.addRunArtifact(wal_reader_tests);
     const run_domain_tests = b.addRunArtifact(domain_tests);
     const run_json_serialization_tests = b.addRunArtifact(json_serialization_tests);
     const run_postgres_wal_parser_tests = b.addRunArtifact(postgres_wal_parser_tests);
     const run_kafka_producer_tests = b.addRunArtifact(kafka_producer_tests);
+    const run_validator_tests = b.addRunArtifact(validator_tests);
+    const run_cdc_processor_tests = b.addRunArtifact(cdc_processor_tests);
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_config_tests.step);
@@ -159,6 +235,29 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_json_serialization_tests.step);
     test_step.dependOn(&run_postgres_wal_parser_tests.step);
     test_step.dependOn(&run_kafka_producer_tests.step);
+    test_step.dependOn(&run_validator_tests.step);
+    test_step.dependOn(&run_cdc_processor_tests.step);
+
+    // E2E Tests - Full cycle: PostgreSQL → CDC → Kafka
+    // These tests validate the complete data pipeline
+
+    // E2E: Basic CDC operations test (INSERT, UPDATE, DELETE)
+    const e2e_basic_test = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/e2e/basic_cdc_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    e2e_basic_test.root_module.addImport("test_helpers", test_helpers_module);
+    e2e_basic_test.root_module.addImport("cdc_processor", cdc_processor_module);
+    e2e_basic_test.root_module.addImport("config", config_module);
+    e2e_basic_test.root_module.addImport("wal_reader", wal_reader_module);
+    e2e_basic_test.linkLibC();
+    e2e_basic_test.linkSystemLibrary("pq");
+    e2e_basic_test.linkSystemLibrary("rdkafka");
+
+    const run_e2e_basic_test = b.addRunArtifact(e2e_basic_test);
 
     // Integration tests (moved to src/ for simplicity)
     const integration_tests = b.addTest(.{
@@ -192,6 +291,10 @@ pub fn build(b: *std.Build) void {
     const integration_test_step = b.step("test-integration", "Run integration tests");
     integration_test_step.dependOn(&run_integration_tests.step);
     integration_test_step.dependOn(&run_kafka_integration_tests.step);
+
+    // E2E test step - Full pipeline tests (PostgreSQL → CDC → Kafka)
+    const e2e_test_step = b.step("test-e2e", "Run end-to-end tests");
+    e2e_test_step.dependOn(&run_e2e_basic_test.step);
 
     // Single integration test with filter
     const single_integration_test = b.addRunArtifact(integration_tests);

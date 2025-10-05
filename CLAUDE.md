@@ -28,11 +28,20 @@ Outboxx is a lightweight PostgreSQL Change Data Capture (CDC) tool written in Zi
 
 ## Development Workflow
 
+### Environment Setup
+
+This project uses **Nix** for reproducible builds and **direnv** (optional) for automatic environment activation.
+
+**Smart Environment Loading:**
+- Make commands auto-detect and use the appropriate Nix environment
+- `.make-shell` wrapper uses priority: already in Nix > direnv (fast) > `nix develop` (fallback)
+- No manual `nix develop` needed for make commands
+- direnv is optional but recommended for faster iteration
+
 ### Quick Start
 ```bash
-# Enter isolated development environment (recommended)
-make nix-shell
-# OR: cd into project directory if direnv is installed (automatic)
+# Optional: Enable direnv for automatic environment (recommended for contributors)
+direnv allow
 
 # Start PostgreSQL development environment
 make env-up
@@ -46,29 +55,31 @@ make dev
 
 ### Common Commands
 ```bash
-# Development environment setup
-make nix-shell      # Enter Nix development environment
-make help           # Show all available commands
+# Build and test (works everywhere - auto-loads Nix environment)
+make build          # Build the project
+make test           # Run unit tests
+make test-integration # Run integration tests (requires PostgreSQL + Kafka)
+make test-e2e       # Run E2E tests - full pipeline verification
+make test-all       # Run all tests (starts PostgreSQL + Kafka if needed)
+make dev            # Development workflow (format + test + build)
 
-# Build and test (inside Nix shell or with compatible system setup)
+# Direct zig commands (require direnv or manual nix develop)
 zig build                    # Build the project
 zig build test              # Run unit tests
 zig build test-integration  # Run integration tests
-
-# Makefile convenience commands
-make build          # Build the project
-make test           # Run unit tests
-make test-all       # Run all tests (starts PostgreSQL if needed)
-make dev            # Development workflow (format + test + build)
+zig build test-e2e          # Run E2E tests
 
 # Development environment
 make env-up         # Start PostgreSQL and Kafka with Docker Compose
 make env-down       # Stop development environment
+make help           # Show all available commands
 
 # Kafka debugging (use standard tools)
 kafka-console-consumer --bootstrap-server localhost:9092 --topic public.users --from-beginning
 kcat -C -b localhost:9092 -t public.users -f 'Topic: %t, Partition: %p, Offset: %o, Key: %k, Payload: %s\n'
 ```
+
+**Note:** The `make nix-*` commands are primarily for CI/CD or when direnv is not available. Regular `make` commands work everywhere and are preferred.
 
 ## Architecture and Implementation Notes
 
@@ -141,6 +152,14 @@ The project follows a clean separation of concerns with distinct layers:
 - Manages WAL reader, parser, serializer, and Kafka producer
 - Handles routing logic (topic, partition key)
 - Multi-stream support with isolated replication slots
+- **Fast Table Filter**: Optimizes processing by skipping irrelevant tables early
+  - Uses `test_decoding` which sends ALL tables (no PostgreSQL-level filtering)
+  - Extracts table name from WAL message (~5-10 operations, 0 allocations)
+  - Checks against monitored tables HashSet (O(1) lookup)
+  - Skips expensive field parsing for non-monitored tables (~50-100 operations saved)
+  - Non-strict approach: false positives OK (proceed to full parsing), false negatives NOT OK
+  - ~8-10x performance improvement when monitoring <20% of database tables
+  - Two-level filtering: fast filter (early exit) → matchStreams (routing logic)
 
 #### Sink Layer (`src/kafka/`)
 - **KafkaProducer**: Minimal wrapper around librdkafka
@@ -152,18 +171,112 @@ The project follows a clean separation of concerns with distinct layers:
 - **Integration Tests**: Comprehensive testing with real PostgreSQL and Kafka
 
 ### Testing Strategy
-The project emphasizes robust testing:
-- **Unit Tests**: For individual modules (config, WAL reader, WAL parser, JSON serializer, domain model)
-- **Integration Tests**: Real PostgreSQL and Kafka with Docker Compose
-- **Kafka Integration Tests**: Producer/consumer message flow validation
+
+The project emphasizes robust testing at multiple levels:
+
+#### Test Hierarchy
+
+1. **Unit Tests** (`make test`)
+   - Test individual modules in isolation (config, WAL parser, JSON serializer, domain model)
+   - No external dependencies (PostgreSQL/Kafka)
+   - Fast feedback loop for development
+   - Examples: `src/config/config_test.zig`, `src/domain/change_event.zig`
+
+2. **Integration Tests** (`make test-integration`)
+   - Test components with real external services
+   - Require PostgreSQL and Kafka running (Docker Compose)
+   - Test individual adapters: WalReader, KafkaProducer
+   - Examples: `src/source/postgres/wal_reader_test.zig`, `src/kafka/producer_test.zig`
+
+3. **E2E Tests** (`make test-e2e`) - **Full Pipeline Verification**
+   - **Black box testing**: Input (SQL) → Output (Kafka JSON)
+   - **Critical verification**: N database changes = N Kafka messages (no duplicates/loss)
+   - Test complete CDC flow: PostgreSQL → WAL → Parser → Serializer → Kafka
+   - Validate JSON structure and content from Kafka topics
+   - Examples: `tests/e2e/basic_cdc_test.zig`
+   - **Location**: `tests/e2e/` directory (separate from `src/`)
+
+#### Test Organization
+
+**E2E Tests** - Separate directory:
+- **Location**: `tests/e2e/` (top-level, outside `src/`)
+- **Purpose**: Test complete system integration across all components
+- **Helpers**: `tests/test_helpers.zig` provides shared utilities (Kafka consumer, JSON validation, SQL formatting)
+- **Isolation**: E2E tests are isolated from unit/integration tests to avoid coupling
+- **Example**: `tests/e2e/basic_cdc_test.zig` - INSERT/UPDATE/DELETE pipeline verification
+
+**Unit and Integration Tests** - Colocated with modules:
+- **Location**: Inside `src/` alongside the code they test
+- **Convention**: `module_name_test.zig` in the same directory as `module_name.zig`
+- **Purpose**: Test individual modules or components in isolation or with external dependencies
+- **Examples**:
+  - `src/config/config_test.zig` - Configuration parsing and validation (unit)
+  - `src/kafka/producer_test.zig` - Kafka producer integration (integration)
+  - `src/source/postgres/wal_reader_test.zig` - WAL reader integration (integration)
+  - `src/processor/cdc_processor_test.zig` - Processor orchestration (unit/integration)
+
+**Rationale**:
+- **E2E separation**: E2E tests require different setup (full PostgreSQL + Kafka), test entire system, and change less frequently
+- **Module colocation**: Unit/integration tests live with the code for easier maintenance and discoverability
+- **Clear boundaries**: Developers know where to add tests based on what they're testing (module vs. full pipeline)
+
+#### E2E Test Principles
+
+E2E tests follow strict black-box principles:
+- **What we test**: Full data pipeline from database changes to Kafka messages
+- **What we verify**:
+  - Message count matches change count (no duplicates, no message loss)
+  - JSON structure is correct (`op`, `data`, `meta` fields)
+  - Field values match expected data
+  - Metadata is accurate (table name, schema, operation type)
+- **What we DON'T check**: Internal state (LSN, flush status, processor internals)
+
+Example E2E test flow:
+```zig
+// 1. Setup: Create unique table and topic
+createTable("users_1234567890");
+createStream("users_1234567890" -> "topic.users.1234567890");
+
+// 2. Execute: Make database changes
+INSERT INTO users_1234567890 VALUES ('Alice', 'alice@test.com');
+INSERT INTO users_1234567890 VALUES ('Bob', 'bob@test.com');
+
+// 3. Process: Run CDC pipeline
+processor.processChangesToKafka();
+
+// 4. Verify: Read ALL messages from Kafka and validate
+messages = consumeAllMessages("topic.users.1234567890");
+assert(messages.len == 2); // ✅ Exactly 2 messages
+assert(messages[0].op == "INSERT"); // ✅ Correct operation
+assert(messages[0].data.name == "Alice"); // ✅ Correct data
+```
+
+#### Test Execution
+
 - **Memory Safety**: All tests verify proper cleanup with Zig allocators
-- **Strict Testing**: Integration tests REQUIRE services to be running (no graceful skipping)
+- **Test Isolation**: Each integration/e2e test uses unique replication slots and topics
+- **Strict Requirements**: Integration and E2E tests REQUIRE services running (no graceful skipping)
+- **CI/CD Integration**: E2E tests run in GitHub Actions PR workflow with PostgreSQL + Kafka services
 
 ### Key Implementation Details
+
+#### PostgreSQL Integration
 - Uses PostgreSQL logical replication with `test_decoding` plugin
+- **Important**: `test_decoding` does NOT filter by Publication - sends ALL database tables
+  - Fast table filter at processor level compensates for this
+  - Monitored tables configured in `streams` configuration
 - Requires `REPLICA IDENTITY FULL` for complete UPDATE/DELETE visibility
 - WAL flushing (`pg_switch_wal()`) ensures reliable test execution
 - Each test uses isolated replication slots to prevent interference
+
+#### Performance Optimizations
+- **Fast Table Filter**: O(1) lookup skips parsing for non-monitored tables
+  - Critical when monitoring small subset of tables (e.g., 2 out of 100 tables)
+  - Avoids expensive field parsing (~50-100 operations per message)
+  - Permissive approach: if uncertain, proceeds to full parsing
+- LSN tracking for ALL events (including BEGIN/COMMIT) ensures slot advances correctly
+
+#### Message Format
 - Kafka topics follow `schema.table` naming convention (e.g., `public.users`)
 - Messages include operation type, table metadata, and timestamp
 - JSON serialization for message payloads with proper memory management
@@ -180,18 +293,28 @@ The project emphasizes robust testing:
 │   │   └── postgres/      # PostgreSQL-specific components
 │   │       ├── wal_parser.zig      # WAL message parser (to domain model)
 │   │       ├── wal_reader.zig      # WAL reader (logical replication)
-│   │       └── wal_reader_test.zig # WAL reader unit tests
+│   │       ├── wal_reader_test.zig # WAL reader integration tests
+│   │       ├── validator.zig       # PostgreSQL configuration validator
+│   │       └── validator_test.zig  # Validator integration tests
 │   ├── serialization/     # Serialization layer
 │   │   └── json.zig       # JSON serializer
 │   ├── processor/         # Flow orchestration
-│   │   └── cdc_processor.zig # CDC pipeline orchestrator
+│   │   ├── processor.zig  # CDC pipeline orchestrator
+│   │   └── cdc_processor_test.zig # Processor tests (unit/integration)
 │   ├── kafka/             # Kafka sink adapter
 │   │   ├── producer.zig      # Kafka producer
 │   │   └── producer_test.zig # Kafka integration tests
 │   ├── config/            # Configuration management
 │   │   ├── config.zig     # TOML-based configuration
 │   │   └── config_test.zig # Configuration tests
-│   └── integration_test.zig # End-to-end integration tests
+│   └── integration_test.zig # Component integration tests
+├── tests/                 # E2E tests (separate from src/)
+│   ├── test_helpers.zig   # Shared test utilities
+│   │                      # - consumeAllMessages() - Kafka consumer helper
+│   │                      # - assertJsonField() - JSON validation
+│   │                      # - formatSqlZ() - SQL formatting helper
+│   └── e2e/               # End-to-end pipeline tests
+│       └── basic_cdc_test.zig # Full pipeline verification (INSERT/UPDATE/DELETE)
 ├── dev/                   # Development environment
 │   ├── config.toml        # Development configuration
 │   ├── run-dev.sh         # Development startup script
@@ -204,6 +327,11 @@ The project emphasizes robust testing:
 │   └── examples/          # Configuration examples
 │       ├── config.toml    # Complete configuration example
 │       └── README.md      # Examples documentation
+├── .github/               # CI/CD workflows
+│   └── workflows/
+│       ├── ci.yml         # Build and unit tests
+│       ├── pr-checks.yml  # Integration + E2E tests (with services)
+│       └── security.yml   # Security scanning
 ├── docker-compose.yml     # PostgreSQL and Kafka container setup
 ├── build.zig             # Zig build configuration
 ├── Makefile              # Development convenience commands
@@ -211,6 +339,12 @@ The project emphasizes robust testing:
 ├── .envrc                # direnv configuration for auto-activation
 └── CLAUDE.md             # This file - AI assistant guidelines
 ```
+
+**Note on Test Organization:**
+- **E2E tests** live in `tests/e2e/` - separate from source code, test complete pipeline
+- **Unit and Integration tests** live in `src/` - colocated with modules they test (e.g., `config.zig` + `config_test.zig`)
+- **Convention**: Test files named `*_test.zig`, located in the same directory as the code they test
+- **Rationale**: E2E tests require different infrastructure and change less frequently; module tests benefit from proximity to implementation
 
 ## Contributing Guidelines
 
@@ -220,8 +354,90 @@ The project emphasizes robust testing:
 - **Error Handling**: Leverage Zig's error unions for comprehensive error management
 - **Testing**: Write both unit tests and integration tests for new functionality
 
+### Logging Guidelines
+
+Follow these principles to keep logs useful in both development and production:
+
+#### Log Levels
+
+- **`std.log.debug()`** - Development-only diagnostics
+  - Detailed information useful during development and debugging
+  - Should NOT clutter production output
+  - Examples: "Parsing field X", "Connecting to endpoint Y", "Processing batch of N items"
+  - Use liberally during development, these will be filtered out in production
+
+- **`std.log.info()`** - Production-ready informational messages
+  - Should be RARE and MEANINGFUL in production
+  - Only log significant milestones or state changes
+  - Examples: "CDC processor started", "Replication slot created", "Graceful shutdown initiated"
+  - Rule of thumb: If it doesn't provide actionable insight in production, use `debug()` instead
+
+- **`std.log.warn()`** - Error context when propagating errors upward
+  - Use when a function returns an error and needs to log context
+  - Provides diagnostic information while the error bubbles up
+  - Examples: "Failed to connect to PostgreSQL (retrying...)", "Kafka message send failed for topic X"
+  - The caller will decide if this becomes a fatal error
+
+- **`std.log.err()`** - Fatal errors at the handler level ONLY
+  - ONLY use when the error is **handled at this level** and cannot be propagated
+  - Typically used in `main.zig` before `std.process.exit(1)`
+  - Examples: "Failed to initialize CDC processor, exiting", "Configuration validation failed"
+  - Rule: If you can return an error, return it instead of logging with `err()`
+
+#### Examples
+
+```zig
+// ❌ BAD: Too verbose for production
+pub fn processChanges() !void {
+    std.log.info("Starting change processing", .{}); // This will spam production logs
+    std.log.info("Reading from WAL", .{});
+    std.log.info("Parsing message", .{});
+}
+
+// ✅ GOOD: Debug for development, info for milestones
+pub fn processChanges() !void {
+    std.log.debug("Starting change processing", .{}); // Debug: development only
+    std.log.debug("Reading from WAL", .{});
+
+    // Only log significant production events
+    if (slot_created) {
+        std.log.info("Replication slot 'outboxx_slot' created successfully", .{});
+    }
+}
+
+// ❌ BAD: Using err() when error can be propagated
+pub fn connectToKafka() !void {
+    producer.init() catch |err| {
+        std.log.err("Kafka connection failed: {}", .{err}); // Don't use err() here!
+        return err;
+    };
+}
+
+// ✅ GOOD: Using warn() when propagating error with context
+pub fn connectToKafka(brokers: []const u8) !void {
+    producer.init(brokers) catch |err| {
+        std.log.warn("Kafka connection failed (brokers: {s}): {}", .{brokers, err});
+        return err; // Propagate upward
+    };
+}
+
+// ✅ GOOD: Using err() only at the top-level handler
+pub fn main() !void {
+    processor.initialize() catch |err| {
+        std.log.err("Failed to initialize CDC processor: {}", .{err});
+        std.process.exit(1); // Cannot propagate further
+    };
+}
+```
+
+#### Summary
+
+- **Development**: Use `debug()` liberally for diagnostics
+- **Production**: Use `info()` sparingly for significant events only
+- **Error context**: Use `warn()` when propagating errors upward
+- **Fatal errors**: Use `err()` only at top-level handlers (e.g., `main.zig`)
+
 ### Development Process
-1. Enter development environment: `make nix-shell` (or use direnv)
 2. Start development environment: `make env-up` (PostgreSQL + Kafka)
 3. Run tests to ensure baseline: `make test-all`
 4. Implement changes following Zig idioms
@@ -230,11 +446,25 @@ The project emphasizes robust testing:
 7. Format code: `zig build fmt`
 
 ### Important Testing Notes
-- **Unit Tests**: Run with `zig build test` - only test logic, no external services
-- **Integration Tests**: Run with `zig build test-integration` - REQUIRE PostgreSQL and Kafka
-- **Kafka Integration**: Tests will FAIL if Kafka is not running (no graceful skipping)
+
+- **Unit Tests**: Run with `make test` or `zig build test`
+  - Only test logic, no external services required
+  - Fast feedback loop for development
+
+- **Integration Tests**: Run with `make test-integration` or `zig build test-integration`
+  - REQUIRE PostgreSQL and Kafka running (use `make env-up`)
+  - Test individual components with real services
+  - Tests will FAIL if services are not available (no graceful skipping)
+
+- **E2E Tests**: Run with `make test-e2e` or `zig build test-e2e`
+  - REQUIRE PostgreSQL and Kafka running (use `make env-up`)
+  - Test complete CDC pipeline from database to Kafka
+  - Verify actual messages in Kafka topics
+  - Black-box testing: only check input (SQL) and output (Kafka JSON)
+
 - **Memory Safety**: All tests use GPA with leak detection
-- **Test Isolation**: Each integration test uses unique replication slots and topics
+- **Test Isolation**: Each integration/e2e test uses unique replication slots and topics (timestamp-based names)
+- **CI/CD**: All test levels run in GitHub Actions (unit in `ci.yml`, integration + e2e in `pr-checks.yml`)
 
 ### Development and Debugging Commands
 
@@ -264,6 +494,22 @@ zig test src/kafka/producer_test.zig --library c --library rdkafka
 
 # Debug Kafka messages using standard tools
 kafka-console-consumer --bootstrap-server localhost:9092 --topic public.users --from-beginning
+```
+
+#### E2E Testing
+```bash
+# Run all E2E tests (requires PostgreSQL + Kafka)
+make test-e2e
+
+# E2E tests verify complete pipeline
+# - PostgreSQL changes → Kafka messages
+# - Message count matches change count
+# - JSON structure validation
+# - No internal state checking (black box)
+
+# Debug E2E test output
+# Tests create unique topics like: topic.insert.1234567890
+kafka-console-consumer --bootstrap-server localhost:9092 --topic topic.insert.1234567890 --from-beginning
 ```
 
 #### PostgreSQL Development

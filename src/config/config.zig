@@ -146,7 +146,7 @@ pub const Config = struct {
         if (self.source.postgres) |postgres| {
             const password = std.process.getEnvVarOwned(allocator, postgres.password_env) catch |err| switch (err) {
                 error.EnvironmentVariableNotFound => {
-                    std.log.err("Environment variable '{s}' not found", .{postgres.password_env});
+                    std.log.warn("Environment variable '{s}' not found", .{postgres.password_env});
                     return err;
                 },
                 else => return err,
@@ -158,7 +158,7 @@ pub const Config = struct {
         if (self.source.mysql) |mysql| {
             const password = std.process.getEnvVarOwned(allocator, mysql.password_env) catch |err| switch (err) {
                 error.EnvironmentVariableNotFound => {
-                    std.log.err("Environment variable '{s}' not found", .{mysql.password_env});
+                    std.log.warn("Environment variable '{s}' not found", .{mysql.password_env});
                     return err;
                 },
                 else => return err,
@@ -523,7 +523,7 @@ pub const ConfigParser = struct {
         defer file.close();
 
         const file_content = file.readToEndAlloc(self.allocator, 1024 * 1024) catch |err| {
-            std.log.err("Failed to read config file: {}", .{err});
+            std.log.warn("Failed to read config file: {}", .{err});
             return err;
         };
         defer self.allocator.free(file_content);
@@ -541,7 +541,7 @@ pub const ConfigParser = struct {
         var current_subsection: ?[]const u8 = null;
         var streams_list = std.ArrayList(Stream).empty;
         defer streams_list.deinit(self.allocator);
-        var current_stream: ?*Stream = null;
+        var current_stream_index: ?usize = null;
 
         while (lines.next()) |line| {
             const trimmed = std.mem.trim(u8, line, " \t\r");
@@ -550,8 +550,10 @@ pub const ConfigParser = struct {
             if (trimmed.len == 0 or trimmed[0] == '#') continue;
 
             // Parse array of tables [[streams]]
-            if (trimmed.len >= 4 and std.mem.startsWith(u8, trimmed, "[[") and std.mem.endsWith(u8, trimmed, "]]")) {
-                const array_section = trimmed[2 .. trimmed.len - 2];
+            if (trimmed.len >= 4 and std.mem.startsWith(u8, trimmed, "[[")) {
+                // Find closing ]] (may have comments after)
+                const closing_bracket = std.mem.indexOf(u8, trimmed, "]]") orelse continue;
+                const array_section = trimmed[2..closing_bracket];
 
                 if (std.mem.eql(u8, array_section, "streams")) {
                     // Create new stream entry
@@ -569,7 +571,7 @@ pub const ConfigParser = struct {
                             .routing_key = null,
                         },
                     });
-                    current_stream = &streams_list.items[streams_list.items.len - 1];
+                    current_stream_index = streams_list.items.len - 1;
                     current_section = "streams";
                     current_subsection = null;
                 }
@@ -595,6 +597,7 @@ pub const ConfigParser = struct {
                 const key = std.mem.trim(u8, trimmed[0..eq_pos], " \t");
                 const value_str = std.mem.trim(u8, trimmed[eq_pos + 1 ..], " \t");
 
+                const current_stream = if (current_stream_index) |idx| &streams_list.items[idx] else null;
                 try self.setConfigValue(&result, current_section, current_subsection, key, value_str, current_stream);
             }
         }
@@ -766,8 +769,15 @@ pub const ConfigParser = struct {
     }
 
     fn parseStringArray(self: *ConfigParser, value_str: []const u8) ![]const []const u8 {
+        // Remove comments first
+        const comment_pos = std.mem.indexOf(u8, value_str, "#");
+        const value_without_comment = if (comment_pos) |pos|
+            std.mem.trim(u8, value_str[0..pos], " \t")
+        else
+            value_str;
+
         // Simple array parsing for ["item1", "item2"]
-        const clean_str = std.mem.trim(u8, value_str, " \t");
+        const clean_str = std.mem.trim(u8, value_without_comment, " \t");
 
         if (clean_str.len < 2 or clean_str[0] != '[' or clean_str[clean_str.len - 1] != ']') {
             return &[_][]const u8{};

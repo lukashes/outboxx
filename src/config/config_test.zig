@@ -397,6 +397,70 @@ test "Custom TOML parser can parse streams array" {
     try testing.expectEqualStrings("id", stream.sink.routing_key.?);
 }
 
+test "Custom TOML parser can parse multiple streams with inline comments" {
+    const allocator = testing.allocator;
+
+    const toml_content =
+        \\[[streams]] # First stream for users
+        \\name = "users-stream"
+        \\
+        \\[streams.source]
+        \\resource = "users" # Table name
+        \\operations = ["insert", "update"] # Supported operations
+        \\
+        \\[streams.flow]
+        \\format = "json"
+        \\
+        \\[streams.sink]
+        \\destination = "outboxx.users"
+        \\routing_key = "id"
+        \\
+        \\[[streams]] # Second stream for orders
+        \\name = "orders-stream"
+        \\
+        \\[streams.source]
+        \\resource = "orders"
+        \\operations = ["insert", "update", "delete"]
+        \\
+        \\[streams.flow]
+        \\format = "json"
+        \\
+        \\[streams.sink]
+        \\destination = "outboxx.orders"
+        \\routing_key = "order_id"
+    ;
+
+    var parser = config.ConfigParser.init(allocator);
+    var result = try parser.parseToml(toml_content);
+    defer result.deinit(allocator);
+
+    // Verify we parsed both streams
+    try testing.expect(result.streams.len == 2);
+
+    // First stream
+    const stream1 = result.streams[0];
+    try testing.expectEqualStrings("users-stream", stream1.name);
+    try testing.expectEqualStrings("users", stream1.source.resource);
+    try testing.expect(stream1.source.operations.len == 2);
+    try testing.expectEqualStrings("insert", stream1.source.operations[0]);
+    try testing.expectEqualStrings("update", stream1.source.operations[1]);
+    try testing.expectEqualStrings("json", stream1.flow.format);
+    try testing.expectEqualStrings("outboxx.users", stream1.sink.destination);
+    try testing.expectEqualStrings("id", stream1.sink.routing_key.?);
+
+    // Second stream
+    const stream2 = result.streams[1];
+    try testing.expectEqualStrings("orders-stream", stream2.name);
+    try testing.expectEqualStrings("orders", stream2.source.resource);
+    try testing.expect(stream2.source.operations.len == 3);
+    try testing.expectEqualStrings("insert", stream2.source.operations[0]);
+    try testing.expectEqualStrings("update", stream2.source.operations[1]);
+    try testing.expectEqualStrings("delete", stream2.source.operations[2]);
+    try testing.expectEqualStrings("json", stream2.flow.format);
+    try testing.expectEqualStrings("outboxx.orders", stream2.sink.destination);
+    try testing.expectEqualStrings("order_id", stream2.sink.routing_key.?);
+}
+
 test "Config validation - unsupported format should fail" {
     const allocator = testing.allocator;
 
