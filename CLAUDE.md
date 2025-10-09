@@ -437,6 +437,91 @@ pub fn main() !void {
 - **Error context**: Use `warn()` when propagating errors upward
 - **Fatal errors**: Use `err()` only at top-level handlers (e.g., `main.zig`)
 
+### stdout vs stderr in CLI Applications
+
+CLI applications must use stdout and stderr correctly for proper Unix behavior:
+
+#### When to Use Each Stream
+
+- **stdout** - User-facing output and program results
+  - Application startup messages ("Outboxx - PostgreSQL CDC")
+  - Configuration summary ("Configuration loaded: ...")
+  - Status updates ("Starting CDC processor...")
+  - Command results and data output
+  - Progress indicators for user
+
+- **stderr** - Logging, diagnostics, and errors
+  - All `std.log.*` output (debug, info, warn, err)
+  - Error messages and warnings
+  - Diagnostic information
+  - Debug output
+
+#### Why This Matters
+
+```bash
+# User wants to capture program output
+outboxx --config config.toml > output.log
+
+# ❌ WRONG: If using std.debug.print for status messages
+#    output.log is EMPTY (everything went to stderr)
+
+# ✅ CORRECT: If using stdout for status messages
+#    output.log contains status, stderr shows logs
+```
+
+#### Implementation
+
+**For user-facing messages in `main.zig`:**
+
+```zig
+// ❌ WRONG: std.debug.print writes to stderr
+const print = std.debug.print;
+print("Outboxx - PostgreSQL CDC\n", .{});
+
+// ✅ CORRECT: Use stdout for user messages (Zig 0.15.1)
+var buf: [4096]u8 = undefined;
+const formatted = try std.fmt.bufPrint(&buf, "Outboxx - PostgreSQL CDC\n", .{});
+const stdout_file = std.fs.File.stdout();
+try stdout_file.writeAll(formatted);
+```
+
+**For logging (anywhere in codebase):**
+
+```zig
+// ✅ CORRECT: std.log.* writes to stderr (diagnostic info)
+std.log.info("Processor initialized", .{});
+std.log.warn("Connection retry...", .{});
+std.log.err("Fatal error", .{});
+```
+
+**Simple wrapper for error handling (Zig 0.15.1):**
+
+```zig
+fn printStatus(comptime fmt: []const u8, args: anytype) void {
+    var buf: [4096]u8 = undefined;
+    const formatted = std.fmt.bufPrint(&buf, fmt, args) catch |err| {
+        std.log.warn("Failed to format message: {}", .{err});
+        return;
+    };
+    const stdout_file = std.fs.File.stdout();
+    stdout_file.writeAll(formatted) catch |err| {
+        std.log.warn("Failed to write to stdout: {}", .{err});
+    };
+}
+
+// Usage in main.zig:
+printStatus("Configuration loaded: {s}\n", .{config_path});
+```
+
+#### Guidelines
+
+1. **In `main.zig`**: Use `stdout` for all user-facing messages
+2. **Everywhere else**: Use `std.log.*` for diagnostics (goes to stderr)
+3. **Never use** `std.debug.print` for user messages (it writes to stderr)
+4. **Test behavior**: Run `outboxx > out.log 2> err.log` to verify separation
+
+This follows Unix philosophy: stdout for data, stderr for diagnostics.
+
 ### Development Process
 2. Start development environment: `make env-up` (PostgreSQL + Kafka)
 3. Run tests to ensure baseline: `make test-all`

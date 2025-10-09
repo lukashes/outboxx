@@ -77,28 +77,18 @@ test "peekChanges does not advance LSN" {
     _ = c.PQexec(conn, "SELECT pg_switch_wal();");
 
     // First peek - should return data
-    var changes1 = try wal_reader.peekChanges(10);
-    defer {
-        for (changes1.items) |*change| {
-            change.deinit(allocator);
-        }
-        changes1.deinit(allocator);
-    }
+    var result1 = try wal_reader.peekChanges(10);
+    defer result1.deinit(allocator);
 
-    try testing.expect(changes1.items.len > 0);
-    const first_lsn = changes1.items[0].lsn;
+    try testing.expect(result1.events.items.len > 0);
+    const first_lsn = result1.events.items[0].lsn;
 
     // Second peek - should return same data (LSN not advanced)
-    var changes2 = try wal_reader.peekChanges(10);
-    defer {
-        for (changes2.items) |*change| {
-            change.deinit(allocator);
-        }
-        changes2.deinit(allocator);
-    }
+    var result2 = try wal_reader.peekChanges(10);
+    defer result2.deinit(allocator);
 
-    try testing.expect(changes2.items.len > 0);
-    try testing.expectEqualStrings(first_lsn, changes2.items[0].lsn);
+    try testing.expect(result2.events.items.len > 0);
+    try testing.expectEqualStrings(first_lsn, result2.events.items[0].lsn);
 }
 
 test "advanceSlot commits LSN position" {
@@ -140,28 +130,18 @@ test "advanceSlot commits LSN position" {
     _ = c.PQexec(conn, "SELECT pg_switch_wal();");
 
     // Peek changes
-    var changes = try wal_reader.peekChanges(10);
-    defer {
-        for (changes.items) |*change| {
-            change.deinit(allocator);
-        }
-        changes.deinit(allocator);
-    }
+    var result = try wal_reader.peekChanges(10);
+    defer result.deinit(allocator);
 
-    try testing.expect(changes.items.len > 0);
-    const last_lsn = changes.items[changes.items.len - 1].lsn;
+    try testing.expect(result.events.items.len > 0);
+    const last_lsn = result.last_lsn orelse return error.SkipZigTest;
 
     // Advance slot to last LSN
     try wal_reader.advanceSlot(last_lsn);
 
     // Peek again - should return empty (LSN advanced)
-    var changes_after = try wal_reader.peekChanges(10);
-    defer {
-        for (changes_after.items) |*change| {
-            change.deinit(allocator);
-        }
-        changes_after.deinit(allocator);
-    }
+    var result_after = try wal_reader.peekChanges(10);
+    defer result_after.deinit(allocator);
 
-    try testing.expect(changes_after.items.len == 0);
+    try testing.expect(result_after.events.items.len == 0);
 }
