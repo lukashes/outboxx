@@ -173,18 +173,13 @@ test "Processor: flushAndCommit advances LSN after processing" {
     };
 
     // Peek again - should be empty (LSN was advanced)
-    var events = try wal_reader.peekChanges(10);
-    defer {
-        for (events.items) |*event| {
-            event.deinit(allocator);
-        }
-        events.deinit(allocator);
-    }
+    var result = try wal_reader.peekChanges(10);
+    defer result.deinit(allocator);
 
     // Note: In some cases, PostgreSQL might still have unconsumed events due to timing
     // This is acceptable for an integration test - main goal is to verify flushAndCommit works
-    if (events.items.len > 0) {
-        std.debug.print("Note: {} events still in WAL (timing/isolation issue, test passes)\n", .{events.items.len});
+    if (result.events.items.len > 0) {
+        std.debug.print("Note: {} events still in WAL (timing/isolation issue, test passes)\n", .{result.events.items.len});
     }
 }
 
@@ -243,17 +238,12 @@ test "Processor: immediate flush after batch processing" {
     };
 
     // Verify flush happened by checking LSN was advanced
-    var events = try wal_reader.peekChanges(10);
-    defer {
-        for (events.items) |*event| {
-            event.deinit(allocator);
-        }
-        events.deinit(allocator);
-    }
+    var result = try wal_reader.peekChanges(10);
+    defer result.deinit(allocator);
 
     // Note: Integration test - timing issues may leave events in WAL, which is acceptable
-    if (events.items.len > 0) {
-        std.debug.print("Note: {} events still in WAL (timing/isolation issue, test passes)\n", .{events.items.len});
+    if (result.events.items.len > 0) {
+        std.debug.print("Note: {} events still in WAL (timing/isolation issue, test passes)\n", .{result.events.items.len});
     }
 }
 
@@ -330,17 +320,12 @@ test "Processor: shutdown calls flushAndCommit" {
     defer deinitTestProcessor(&processor2, allocator);
 
     // Peek - should be empty because shutdown flushed
-    var events = try wal_reader2.peekChanges(10);
-    defer {
-        for (events.items) |*event| {
-            event.deinit(allocator);
-        }
-        events.deinit(allocator);
-    }
+    var result = try wal_reader2.peekChanges(10);
+    defer result.deinit(allocator);
 
     // Note: Integration test - timing/isolation issues may leave events, which is acceptable
-    if (events.items.len > 0) {
-        std.debug.print("Note: {} events still in WAL (timing/isolation issue, test passes)\n", .{events.items.len});
+    if (result.events.items.len > 0) {
+        std.debug.print("Note: {} events still in WAL (timing/isolation issue, test passes)\n", .{result.events.items.len});
     }
 }
 
@@ -407,15 +392,10 @@ test "Processor: batch processing with immediate LSN commit prevents duplicates"
 
     // CRITICAL TEST: After processChangesToKafka, slot should be advanced
     // peekChanges should return 0 events (no duplicates)
-    var events_after_batch1 = try wal_reader.peekChanges(10);
-    defer {
-        for (events_after_batch1.items) |*event| {
-            event.deinit(allocator);
-        }
-        events_after_batch1.deinit(allocator);
-    }
+    var result_after_batch1 = try wal_reader.peekChanges(10);
+    defer result_after_batch1.deinit(allocator);
 
-    try testing.expect(events_after_batch1.items.len == 0);
+    try testing.expect(result_after_batch1.events.items.len == 0);
 
     // BATCH 2: Insert new events
     _ = c.PQexec(conn, "INSERT INTO test_batch_commit (name, value) VALUES ('event3', 300);");
@@ -433,15 +413,10 @@ test "Processor: batch processing with immediate LSN commit prevents duplicates"
     try testing.expect(!std.mem.eql(u8, processor.last_sent_lsn.?, batch1_lsn));
 
     // After batch 2, slot should be advanced again
-    var events_after_batch2 = try wal_reader.peekChanges(10);
-    defer {
-        for (events_after_batch2.items) |*event| {
-            event.deinit(allocator);
-        }
-        events_after_batch2.deinit(allocator);
-    }
+    var result_after_batch2 = try wal_reader.peekChanges(10);
+    defer result_after_batch2.deinit(allocator);
 
-    try testing.expect(events_after_batch2.items.len == 0);
+    try testing.expect(result_after_batch2.events.items.len == 0);
 }
 
 test "Processor: initialization" {

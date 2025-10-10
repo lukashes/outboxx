@@ -21,6 +21,21 @@ pub const WalEvent = struct {
     }
 };
 
+pub const PeekResult = struct {
+    events: std.ArrayList(WalEvent),
+    last_lsn: ?[]const u8,
+
+    pub fn deinit(self: *PeekResult, allocator: std.mem.Allocator) void {
+        for (self.events.items) |*event| {
+            event.deinit(allocator);
+        }
+        self.events.deinit(allocator);
+        if (self.last_lsn) |lsn| {
+            allocator.free(lsn);
+        }
+    }
+};
+
 pub const WalReader = struct {
     allocator: std.mem.Allocator,
     connection: ?*c.PGconn,
@@ -209,7 +224,7 @@ pub const WalReader = struct {
         return full_table_name[dot_pos + 1 ..];
     }
 
-    pub fn peekChanges(self: *Self, limit: u32) WalReaderError!std.ArrayList(WalEvent) {
+    pub fn peekChanges(self: *Self, limit: u32) WalReaderError!PeekResult {
         if (self.connection == null) return WalReaderError.ConnectionFailed;
 
         const sql = std.fmt.allocPrintSentinel(self.allocator, "SELECT lsn, xid, data FROM pg_logical_slot_peek_changes('{s}', NULL, NULL) LIMIT {d};", .{ self.slot_name, limit }, 0) catch return WalReaderError.OutOfMemory;
@@ -228,6 +243,7 @@ pub const WalReader = struct {
         const num_rows = c.PQntuples(result);
 
         var events = std.ArrayList(WalEvent){};
+        var last_lsn: ?[]const u8 = null;
 
         var i: c_int = 0;
         while (i < num_rows) : (i += 1) {
@@ -236,38 +252,55 @@ pub const WalReader = struct {
 
             if (lsn_cstr == null or data_cstr == null) continue;
 
-            const lsn = self.allocator.dupe(u8, std.mem.span(lsn_cstr)) catch continue;
-            const data = self.allocator.dupe(u8, std.mem.span(data_cstr)) catch {
-                self.allocator.free(lsn);
+            const lsn_span = std.mem.span(lsn_cstr);
+            const data_span = std.mem.span(data_cstr);
+
+            // Track last_lsn from ALL events (before filtering)
+            if (last_lsn) |old_lsn| {
+                self.allocator.free(old_lsn);
+            }
+            last_lsn = self.allocator.dupe(u8, lsn_span) catch continue;
+
+            // Duplicate data for filtering check
+            const data = self.allocator.dupe(u8, data_span) catch {
+                if (last_lsn) |lsn_to_free| {
+                    self.allocator.free(lsn_to_free);
+                    last_lsn = null;
+                }
                 continue;
             };
 
-            // Fast filter: skip events for tables we don't monitor
-            // test_decoding sends ALL tables, so we filter here
+            // Fast filter: skip events from non-monitored tables (but keep last_lsn)
             if (extractTableNameFromWal(data)) |table_name| {
                 if (!self.monitored_tables.contains(table_name)) {
-                    // Not in monitored set - skip this event
-                    std.log.debug("Fast filter: skipping table '{s}'", .{table_name});
-                    self.allocator.free(lsn);
+                    std.log.debug("Fast filter: skipping event for non-monitored table '{s}'", .{table_name});
                     self.allocator.free(data);
                     continue;
                 }
             }
-            // If extraction failed (null), include event (permissive approach)
+
+            // Create event LSN (separate from last_lsn tracking)
+            const event_lsn = self.allocator.dupe(u8, lsn_span) catch {
+                self.allocator.free(data);
+                continue;
+            };
 
             const event = WalEvent{
-                .lsn = lsn,
+                .lsn = event_lsn,
                 .data = data,
             };
 
             events.append(self.allocator, event) catch {
-                self.allocator.free(lsn);
+                self.allocator.free(event_lsn);
                 self.allocator.free(data);
                 continue;
             };
         }
 
-        return events;
+        return PeekResult{
+            .events = events,
+            .last_lsn = last_lsn,
+        };
     }
 
     pub fn advanceSlot(self: *Self, target_lsn: []const u8) WalReaderError!void {
@@ -275,6 +308,8 @@ pub const WalReader = struct {
 
         const sql = std.fmt.allocPrintSentinel(self.allocator, "SELECT pg_replication_slot_advance('{s}', '{s}');", .{ self.slot_name, target_lsn }, 0) catch return WalReaderError.OutOfMemory;
         defer self.allocator.free(sql);
+
+        std.log.debug("Executing: {s}", .{sql});
 
         const result = c.PQexec(self.connection, sql.ptr);
         defer c.PQclear(result);
@@ -284,6 +319,15 @@ pub const WalReader = struct {
             const error_msg = c.PQresultErrorMessage(result);
             std.log.warn("Failed to advance slot to LSN {s}: {s}", .{ target_lsn, error_msg });
             return WalReaderError.ReplicationFailed;
+        }
+
+        // Log the result from pg_replication_slot_advance
+        const num_rows = c.PQntuples(result);
+        if (num_rows > 0) {
+            const result_lsn = c.PQgetvalue(result, 0, 0);
+            if (result_lsn != null) {
+                std.log.debug("pg_replication_slot_advance() returned: {s}", .{std.mem.span(result_lsn)});
+            }
         }
 
         std.log.debug("Advanced replication slot '{s}' to LSN: {s}", .{ self.slot_name, target_lsn });

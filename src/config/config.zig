@@ -495,6 +495,10 @@ pub const Config = struct {
         }
 
         // 5. STREAMS VALIDATION
+        if (self.streams.len == 0) {
+            std.log.warn("No streams configured in config file", .{});
+            return error.NoStreamsConfigured;
+        }
         try validateStreams(allocator, self.streams);
     }
 

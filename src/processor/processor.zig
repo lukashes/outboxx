@@ -31,6 +31,7 @@ pub const Processor = struct {
     serializer: JsonSerializer,
 
     last_sent_lsn: ?[]const u8,
+    events_processed: usize,
 
     const Self = @This();
 
@@ -44,6 +45,7 @@ pub const Processor = struct {
             .wal_parser = WalParser.init(allocator),
             .serializer = JsonSerializer.init(),
             .last_sent_lsn = null,
+            .events_processed = 0,
         };
     }
 
@@ -100,16 +102,17 @@ pub const Processor = struct {
 
     pub fn flushAndCommit(self: *Self) WalReaderError!void {
         if (self.last_sent_lsn == null) {
+            std.log.debug("flushAndCommit: no LSN to commit", .{});
             return;
         }
 
         var kafka_producer = &(self.kafka_producer orelse return WalReaderError.ConnectionFailed);
 
-        std.log.debug("Flushing Kafka messages (timeout: {}ms)...", .{KAFKA_FLUSH_TIMEOUT_MS});
+        const lsn = self.last_sent_lsn.?;
+        std.log.debug("Flushing Kafka and committing LSN: {s}", .{lsn});
+
         kafka_producer.flush(KAFKA_FLUSH_TIMEOUT_MS);
 
-        const lsn = self.last_sent_lsn.?;
-        std.log.debug("Committing WAL position to LSN: {s}", .{lsn});
         try self.wal_reader.advanceSlot(lsn);
 
         std.log.debug("Successfully committed LSN: {s}", .{lsn});
@@ -144,25 +147,21 @@ pub const Processor = struct {
 
     pub fn processChangesToKafka(self: *Self, limit: u32) WalReaderError!void {
         // Always peek from current slot position
-        var events = try self.wal_reader.peekChanges(limit);
-        defer {
-            for (events.items) |*event| {
-                event.deinit(self.allocator);
-            }
-            events.deinit(self.allocator);
-        }
+        var result = try self.wal_reader.peekChanges(limit);
+        defer result.deinit(self.allocator);
 
         // If no events, nothing to do
-        if (events.items.len == 0) {
+        if (result.events.items.len == 0) {
             return;
         }
 
         var kafka_producer = &(self.kafka_producer orelse return WalReaderError.ConnectionFailed);
 
         // Process entire batch asynchronously
-        for (events.items) |wal_event| {
-            // Track LSN for ALL events (including BEGIN/COMMIT)
-            // This ensures slot advances even if batch has no parseable events
+        for (result.events.items) |wal_event| {
+            // Track LSN for each processed event
+            std.log.debug("Processing WAL event with LSN: {s}", .{wal_event.lsn});
+
             const new_lsn = try self.allocator.dupe(u8, wal_event.lsn);
             if (self.last_sent_lsn) |old_lsn| {
                 self.allocator.free(old_lsn);
@@ -213,6 +212,14 @@ pub const Processor = struct {
                             continue;
                         };
 
+                        // Increment events counter
+                        self.events_processed += 1;
+
+                        // Log progress every 10000 events
+                        if (self.events_processed % 10000 == 0) {
+                            std.log.info("Processed {} CDC events", .{self.events_processed});
+                        }
+
                         std.log.debug("Sent {s} message for {s}.{s} to topic '{s}' (partition key: {s})", .{ event.op, event.meta.schema, event.meta.resource, topic_name, partition_key });
                     }
                 }
@@ -221,17 +228,25 @@ pub const Processor = struct {
             }
         }
 
+        // Use last_lsn from ALL events (including filtered ones) for slot advancement
+        // This ensures slot advances even when all events are filtered out
+        if (result.last_lsn) |last_lsn| {
+            const new_lsn = try self.allocator.dupe(u8, last_lsn);
+            if (self.last_sent_lsn) |old_lsn| {
+                self.allocator.free(old_lsn);
+            }
+            self.last_sent_lsn = new_lsn;
+        }
+
         // Flush and commit after processing entire batch
         if (self.last_sent_lsn != null) {
             try self.flushAndCommit();
         }
     }
 
-    pub fn startStreaming(self: *Self) !void {
-        std.log.info("Starting CDC streaming from PostgreSQL to Kafka", .{});
-
-        while (true) {
-            self.processChangesToKafka(100) catch |err| {
+    pub fn startStreaming(self: *Self, stop_signal: *std.atomic.Value(bool)) !void {
+        while (!stop_signal.load(.monotonic)) {
+            self.processChangesToKafka(100000) catch |err| {
                 std.log.warn("Error in streaming (will retry): {}", .{err});
                 // Continue streaming even if there's an error
             };
@@ -239,6 +254,8 @@ pub const Processor = struct {
             // Sleep between polls
             std.Thread.sleep(1 * std.time.ns_per_s); // 10 seconds
         }
+
+        try self.flushAndCommit();
     }
 };
 

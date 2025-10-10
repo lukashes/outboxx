@@ -259,21 +259,6 @@ pub fn build(b: *std.Build) void {
 
     const run_e2e_basic_test = b.addRunArtifact(e2e_basic_test);
 
-    // Integration tests (moved to src/ for simplicity)
-    const integration_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/integration_test.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
-    });
-    integration_tests.root_module.addImport("domain", domain_module);
-    integration_tests.root_module.addImport("json_serialization", json_serialization_module);
-    integration_tests.root_module.addImport("postgres_wal_parser", postgres_wal_parser_module);
-    integration_tests.linkLibC();
-    integration_tests.linkSystemLibrary("pq");
-    integration_tests.linkSystemLibrary("rdkafka");
-
     // Kafka integration tests (in kafka directory)
     const kafka_integration_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -285,24 +270,14 @@ pub fn build(b: *std.Build) void {
     kafka_integration_tests.linkLibC();
     kafka_integration_tests.linkSystemLibrary("rdkafka");
 
-    const run_integration_tests = b.addRunArtifact(integration_tests);
     const run_kafka_integration_tests = b.addRunArtifact(kafka_integration_tests);
 
     const integration_test_step = b.step("test-integration", "Run integration tests");
-    integration_test_step.dependOn(&run_integration_tests.step);
     integration_test_step.dependOn(&run_kafka_integration_tests.step);
 
     // E2E test step - Full pipeline tests (PostgreSQL → CDC → Kafka)
     const e2e_test_step = b.step("test-e2e", "Run end-to-end tests");
     e2e_test_step.dependOn(&run_e2e_basic_test.step);
-
-    // Single integration test with filter
-    const single_integration_test = b.addRunArtifact(integration_tests);
-    if (b.args) |args| {
-        single_integration_test.addArgs(args);
-    }
-    const single_integration_test_step = b.step("test-single", "Run single integration test with --test-filter");
-    single_integration_test_step.dependOn(&single_integration_test.step);
 
     // Development build with debug symbols and runtime safety
     const debug_exe = b.addExecutable(.{

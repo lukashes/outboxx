@@ -548,7 +548,7 @@ test "Config validation - empty streams array should fail" {
     allocator.free(test_config.streams);
     test_config.streams = &[_]config.Stream{};
 
-    try testing.expectError(error.EmptyArray, test_config.validate(allocator));
+    try testing.expectError(error.NoStreamsConfigured, test_config.validate(allocator));
 }
 
 test "parseIntValue with invalid input fails correctly" {
