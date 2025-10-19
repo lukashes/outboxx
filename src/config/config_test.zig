@@ -563,3 +563,108 @@ test "parseIntValue with invalid input fails correctly" {
     const result = parser.parseToml(toml_content);
     try testing.expectError(error.InvalidCharacter, result);
 }
+
+// PostgreSQL source engine tests
+test "parse postgres engine - streaming" {
+    const allocator = testing.allocator;
+
+    const toml_content =
+        \\[source.postgres]
+        \\engine = "streaming"
+        \\host = "localhost"
+    ;
+
+    var parser = config.ConfigParser.init(allocator);
+    var result = try parser.parseToml(toml_content);
+    defer result.deinit(allocator);
+
+    try testing.expect(result.source.postgres != null);
+    const postgres = result.source.postgres.?;
+    try testing.expect(postgres.engine == .streaming);
+}
+
+test "parse postgres engine - polling" {
+    const allocator = testing.allocator;
+
+    const toml_content =
+        \\[source.postgres]
+        \\engine = "polling"
+        \\host = "localhost"
+    ;
+
+    var parser = config.ConfigParser.init(allocator);
+    var result = try parser.parseToml(toml_content);
+    defer result.deinit(allocator);
+
+    try testing.expect(result.source.postgres != null);
+    const postgres = result.source.postgres.?;
+    try testing.expect(postgres.engine == .polling);
+}
+
+test "parse postgres engine - default to streaming" {
+    const allocator = testing.allocator;
+
+    const toml_content =
+        \\[source.postgres]
+        \\host = "localhost"
+    ;
+
+    var parser = config.ConfigParser.init(allocator);
+    var result = try parser.parseToml(toml_content);
+    defer result.deinit(allocator);
+
+    try testing.expect(result.source.postgres != null);
+    const postgres = result.source.postgres.?;
+    // Should default to streaming when not specified
+    try testing.expect(postgres.engine == .streaming);
+}
+
+test "parse postgres engine - invalid value defaults to streaming" {
+    const allocator = testing.allocator;
+
+    const toml_content =
+        \\[source.postgres]
+        \\engine = "invalid_engine"
+        \\host = "localhost"
+    ;
+
+    var parser = config.ConfigParser.init(allocator);
+    var result = try parser.parseToml(toml_content);
+    defer result.deinit(allocator);
+
+    try testing.expect(result.source.postgres != null);
+    const postgres = result.source.postgres.?;
+    // Should default to streaming on invalid value
+    try testing.expect(postgres.engine == .streaming);
+}
+
+test "SourceEngine toString conversion" {
+    try testing.expectEqualStrings("streaming", config.SourceEngine.streaming.toString());
+    try testing.expectEqualStrings("polling", config.SourceEngine.polling.toString());
+}
+
+test "SourceEngine fromString conversion" {
+    try testing.expect(try config.SourceEngine.fromString("streaming") == .streaming);
+    try testing.expect(try config.SourceEngine.fromString("polling") == .polling);
+    try testing.expectError(error.InvalidSourceEngine, config.SourceEngine.fromString("invalid"));
+}
+
+test "Config validation - valid engine field (streaming)" {
+    const allocator = testing.allocator;
+
+    var test_config = createTestDefault(allocator);
+    defer test_config.deinit(allocator);
+    test_config.source.postgres.?.engine = .streaming;
+
+    try test_config.validate(allocator);
+}
+
+test "Config validation - valid engine field (polling)" {
+    const allocator = testing.allocator;
+
+    var test_config = createTestDefault(allocator);
+    defer test_config.deinit(allocator);
+    test_config.source.postgres.?.engine = .polling;
+
+    try test_config.validate(allocator);
+}

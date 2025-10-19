@@ -120,7 +120,7 @@ test "Streaming source: receive and convert INSERT messages to ChangeEvents" {
     std.log.info("Streaming source connected, receiving batch...", .{});
 
     // Receive batch with timeout
-    const batch = source.receiveBatch(10, 5000) catch |err| {
+    const batch = source.receiveBatch(10) catch |err| {
         std.log.warn("Failed to receive batch: {}", .{err});
         return error.SkipZigTest;
     };

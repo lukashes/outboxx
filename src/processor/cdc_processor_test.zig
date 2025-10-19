@@ -2,9 +2,10 @@ const std = @import("std");
 const testing = std.testing;
 const test_helpers = @import("test_helpers");
 
-const Processor = @import("cdc_processor").Processor;
+const ProcessorModule = @import("cdc_processor");
 const WalReader = @import("wal_reader").WalReader;
 const PostgresPollingSource = @import("postgres_polling_source").PostgresPollingSource;
+const Processor = ProcessorModule.Processor(PostgresPollingSource);
 const config_module = @import("config");
 const KafkaSink = config_module.KafkaSink;
 const Stream = config_module.Stream;

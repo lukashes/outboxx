@@ -26,19 +26,22 @@ const WalReaderError = wal_reader_module.WalReaderError;
 // - Not blocking CDC processing for too long on Kafka issues
 const KAFKA_FLUSH_TIMEOUT_MS: i32 = 30_000;
 
-pub const Processor = struct {
-    allocator: std.mem.Allocator,
-    source: PostgresPollingSource,
-    kafka_producer: ?KafkaProducer,
-    kafka_config: KafkaConfig,
-    streams: []const Stream,
-    serializer: JsonSerializer,
+/// Generic processor that works with any source type
+/// SourceType must implement: receiveBatch(limit: usize) and sendFeedback(lsn: u64)
+pub fn Processor(comptime SourceType: type) type {
+    return struct {
+        allocator: std.mem.Allocator,
+        source: SourceType,
+        kafka_producer: ?KafkaProducer,
+        kafka_config: KafkaConfig,
+        streams: []const Stream,
+        serializer: JsonSerializer,
 
-    events_processed: usize,
+        events_processed: usize,
 
-    const Self = @This();
+        const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, source: PostgresPollingSource, streams: []const Stream, kafka_config: KafkaConfig) Self {
+        pub fn init(allocator: std.mem.Allocator, source: SourceType, streams: []const Stream, kafka_config: KafkaConfig) Self {
         return Self{
             .allocator = allocator,
             .source = source,
@@ -104,7 +107,7 @@ pub const Processor = struct {
         return matched;
     }
 
-    pub fn processChangesToKafka(self: *Self, limit: u32) WalReaderError!void {
+    pub fn processChangesToKafka(self: *Self, limit: u32) anyerror!void {
         // Receive batch of changes from source
         var batch = try self.source.receiveBatch(limit);
         defer batch.deinit();
@@ -191,7 +194,8 @@ pub const Processor = struct {
 
         std.log.info("Streaming stopped gracefully", .{});
     }
-};
+    };
+}
 
 // Unit tests for matchStreams routing logic
 const testing = std.testing;
@@ -231,7 +235,8 @@ test "matchStreams: exact table and operation match" {
     defer source.deinit();
 
     const kafka_config = KafkaSink{ .brokers = &[_][]const u8{"localhost:9092"} };
-    var processor = Processor.init(allocator, source, streams, kafka_config);
+    const ProcessorType = Processor(PostgresPollingSource);
+    var processor = ProcessorType.init(allocator, source, streams, kafka_config);
     defer processor.deinit();
 
     var matched = processor.matchStreams("users", "insert");
@@ -257,7 +262,8 @@ test "matchStreams: case-insensitive operation matching" {
     defer source.deinit();
 
     const kafka_config = KafkaSink{ .brokers = &[_][]const u8{"localhost:9092"} };
-    var processor = Processor.init(allocator, source, streams, kafka_config);
+    const ProcessorType = Processor(PostgresPollingSource);
+    var processor = ProcessorType.init(allocator, source, streams, kafka_config);
     defer processor.deinit();
 
     // Test different cases: INSERT, Insert, insert
@@ -290,7 +296,8 @@ test "matchStreams: no match when table differs" {
     defer source.deinit();
 
     const kafka_config = KafkaSink{ .brokers = &[_][]const u8{"localhost:9092"} };
-    var processor = Processor.init(allocator, source, streams, kafka_config);
+    const ProcessorType = Processor(PostgresPollingSource);
+    var processor = ProcessorType.init(allocator, source, streams, kafka_config);
     defer processor.deinit();
 
     var matched = processor.matchStreams("orders", "insert");
@@ -315,7 +322,8 @@ test "matchStreams: no match when operation not in list" {
     defer source.deinit();
 
     const kafka_config = KafkaSink{ .brokers = &[_][]const u8{"localhost:9092"} };
-    var processor = Processor.init(allocator, source, streams, kafka_config);
+    const ProcessorType = Processor(PostgresPollingSource);
+    var processor = ProcessorType.init(allocator, source, streams, kafka_config);
     defer processor.deinit();
 
     var matched = processor.matchStreams("users", "delete");
@@ -344,7 +352,8 @@ test "matchStreams: multiple streams match same event" {
     defer source.deinit();
 
     const kafka_config = KafkaSink{ .brokers = &[_][]const u8{"localhost:9092"} };
-    var processor = Processor.init(allocator, source, streams, kafka_config);
+    const ProcessorType = Processor(PostgresPollingSource);
+    var processor = ProcessorType.init(allocator, source, streams, kafka_config);
     defer processor.deinit();
 
     var matched = processor.matchStreams("users", "insert");
@@ -371,7 +380,8 @@ test "matchStreams: multiple operations for same table" {
     defer source.deinit();
 
     const kafka_config = KafkaSink{ .brokers = &[_][]const u8{"localhost:9092"} };
-    var processor = Processor.init(allocator, source, streams, kafka_config);
+    const ProcessorType = Processor(PostgresPollingSource);
+    var processor = ProcessorType.init(allocator, source, streams, kafka_config);
     defer processor.deinit();
 
     // All operations should match
@@ -401,7 +411,8 @@ test "matchStreams: empty streams list returns no matches" {
     defer source.deinit();
 
     const kafka_config = KafkaSink{ .brokers = &[_][]const u8{"localhost:9092"} };
-    var processor = Processor.init(allocator, source, streams, kafka_config);
+    const ProcessorType = Processor(PostgresPollingSource);
+    var processor = ProcessorType.init(allocator, source, streams, kafka_config);
     defer processor.deinit();
 
     var matched = processor.matchStreams("users", "insert");

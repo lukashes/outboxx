@@ -2,9 +2,10 @@ const std = @import("std");
 const config_mod = @import("config");
 const Config = config_mod.Config;
 const Stream = config_mod.Stream;
-const Processor = @import("processor/processor.zig").Processor;
+const ProcessorModule = @import("processor/processor.zig");
 const PostgresValidator = @import("source/postgres_polling/validator.zig").PostgresValidator;
 const PostgresPollingSource = @import("postgres_polling_source").PostgresPollingSource;
+const PostgresStreamingSource = @import("source/postgres_streaming/source.zig").PostgresStreamingSource;
 const builtin = @import("builtin");
 const posix = std.posix;
 const constants = @import("constants.zig");
@@ -70,41 +71,74 @@ fn run() !void {
     const conn_str = try config.postgresConnectionString(allocator);
     defer allocator.free(conn_str);
 
-    const WalReader = @import("wal_reader").WalReader;
-    var wal_reader = WalReader.init(
-        allocator,
-        postgres.slot_name,
-        postgres.publication_name,
-        tables,
-    );
-    defer wal_reader.deinit();
+    // Create source and processor based on engine configuration
+    switch (postgres.engine) {
+        .polling => {
+            printStatus("Using PostgreSQL polling source (test_decoding)\n", .{});
 
-    printStatus("Initializing WAL reader with {} table(s)...\n", .{tables.len});
-    for (tables) |table| {
-        printStatus("  - {s}\n", .{table});
+            const WalReader = @import("wal_reader").WalReader;
+            var wal_reader = WalReader.init(
+                allocator,
+                postgres.slot_name,
+                postgres.publication_name,
+                tables,
+            );
+            defer wal_reader.deinit();
+
+            printStatus("Initializing WAL reader with {} table(s)...\n", .{tables.len});
+            for (tables) |table| {
+                printStatus("  - {s}\n", .{table});
+            }
+
+            try wal_reader.initialize(conn_str, tables);
+
+            var source = PostgresPollingSource.init(allocator, &wal_reader);
+            defer source.deinit();
+
+            const ProcessorType = ProcessorModule.Processor(PostgresPollingSource);
+            var processor = ProcessorType.init(allocator, source, config.streams, config.sink.kafka.?);
+            defer processor.deinit();
+
+            try processor.initialize();
+
+            printStatus("\nProcessor initialized successfully with slot: {s}\n", .{postgres.slot_name});
+            printStatus("\nCDC processor started successfully!\n", .{});
+            printStatus("Monitoring WAL changes from {} stream(s)\n", .{config.streams.len});
+            for (config.streams) |stream| {
+                printStatus("  - {s} -> {s}\n", .{ stream.source.resource, stream.sink.destination });
+            }
+            printStatus("Using publication: {s}\n", .{postgres.publication_name});
+            printStatus("Press Ctrl+C to stop gracefully.\n\n", .{});
+
+            try processor.startStreaming(&shutdown_requested);
+        },
+        .streaming => {
+            printStatus("Using PostgreSQL streaming source (pgoutput)\n", .{});
+
+            var source = PostgresStreamingSource.init(allocator, postgres.slot_name, postgres.publication_name);
+            defer source.deinit();
+
+            printStatus("Connecting to PostgreSQL streaming replication...\n", .{});
+            try source.connect(conn_str, "0/0");
+
+            const ProcessorType = ProcessorModule.Processor(PostgresStreamingSource);
+            var processor = ProcessorType.init(allocator, source, config.streams, config.sink.kafka.?);
+            defer processor.deinit();
+
+            try processor.initialize();
+
+            printStatus("\nProcessor initialized successfully with slot: {s}\n", .{postgres.slot_name});
+            printStatus("\nCDC processor started successfully!\n", .{});
+            printStatus("Monitoring WAL changes from {} stream(s)\n", .{config.streams.len});
+            for (config.streams) |stream| {
+                printStatus("  - {s} -> {s}\n", .{ stream.source.resource, stream.sink.destination });
+            }
+            printStatus("Using publication: {s}\n", .{postgres.publication_name});
+            printStatus("Press Ctrl+C to stop gracefully.\n\n", .{});
+
+            try processor.startStreaming(&shutdown_requested);
+        },
     }
-
-    try wal_reader.initialize(conn_str, tables);
-
-    var source = PostgresPollingSource.init(allocator, &wal_reader);
-    defer source.deinit();
-
-    var processor = Processor.init(allocator, source, config.streams, config.sink.kafka.?);
-    defer processor.deinit();
-
-    try processor.initialize();
-
-    printStatus("\nProcessor initialized successfully with slot: {s}\n", .{postgres.slot_name});
-
-    printStatus("\nCDC processor started successfully!\n", .{});
-    printStatus("Monitoring WAL changes from {} stream(s)\n", .{config.streams.len});
-    for (config.streams) |stream| {
-        printStatus("  - {s} -> {s}\n", .{ stream.source.resource, stream.sink.destination });
-    }
-    printStatus("Using publication: {s}\n", .{postgres.publication_name});
-    printStatus("Press Ctrl+C to stop gracefully.\n\n", .{});
-
-    try processor.startStreaming(&shutdown_requested);
 }
 
 /// Print user-facing messages to stdout
