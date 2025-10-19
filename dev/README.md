@@ -37,25 +37,27 @@ psql -h localhost -U outboxx_user -d outboxx_test
 After connecting to the database, execute:
 
 ```sql
--- 1. Create replication slot for testing
+-- 1. Create replication slot with pgoutput plugin
 SELECT pg_create_logical_replication_slot('test_slot', 'pgoutput');
 
--- 2. Verify slot was created
+-- 2. Create publication for test tables
+CREATE PUBLICATION test_pub FOR TABLE users, products;
+
+-- 3. Verify slot was created
 SELECT slot_name, plugin, slot_type, database, active
 FROM pg_replication_slots;
 
--- 3. Make data changes
+-- 4. Make data changes
 UPDATE users SET status = 'premium' WHERE id = 1;
 INSERT INTO products (name, price, inventory_count, category)
 VALUES ('Test Product', 99.99, 10, 'Test');
 
--- 4. Read CDC events
-SELECT lsn, xid, data
-FROM pg_logical_slot_get_changes('test_slot', NULL, NULL);
-
--- 5. Drop test slot (when finished)
+-- 5. Clean up when finished
+DROP PUBLICATION test_pub;
 SELECT pg_drop_replication_slot('test_slot');
 ```
+
+**Note**: To read CDC events with pgoutput, use Outboxx or `pg_recvlogical` tool (binary protocol, not SQL queries).
 
 ## Data Structure
 
@@ -186,11 +188,11 @@ docker volume rm outboxx_postgres_data
 
 ## Next Steps
 
-After successful logical replication testing, you can:
+The streaming replication is already implemented in Outboxx! You can:
 
-1. Start developing the WAL reader in Outboxx
-2. Implement connection to replication slot
-3. Parse received CDC events
-4. Integrate with Kafka producer
+1. Run Outboxx with development config: `./zig-out/bin/outboxx --config dev/config.toml`
+2. Make database changes and watch Kafka topics
+3. Develop new features or optimizations
+4. Run tests: `make test-all`
 
 Logical replication is ready for use!
