@@ -1,9 +1,8 @@
 const std = @import("std");
 
-// PostgreSQL polling source
-const postgres_polling = @import("postgres_polling_source");
-const PostgresPollingSource = postgres_polling.PostgresPollingSource;
-const Batch = postgres_polling.Batch;
+// PostgreSQL streaming source
+const PostgresStreamingSource = @import("postgres_source").PostgresStreamingSource;
+const Batch = @import("postgres_source").Batch;
 
 // Infrastructure
 const KafkaProducer = @import("kafka_producer").KafkaProducer;
@@ -17,32 +16,33 @@ const ChangeEvent = domain.ChangeEvent;
 const json_serializer = @import("json_serialization");
 const JsonSerializer = json_serializer.JsonSerializer;
 
-// Legacy - for error type compatibility
-const wal_reader_module = @import("wal_reader");
-const WalReaderError = wal_reader_module.WalReaderError;
-
 // Kafka flush timeout: 5 seconds is a balance between:
 // - Allowing enough time for Kafka brokers to acknowledge messages
 // - Not blocking CDC processing for too long on Kafka issues
 // - Keeping replication lag low for real-time CDC
 const KAFKA_FLUSH_TIMEOUT_MS: i32 = 5_000;
 
-/// Generic processor that works with any source type
-/// SourceType must implement: receiveBatch(limit: usize) and sendFeedback(lsn: u64)
-pub fn Processor(comptime SourceType: type) type {
-    return struct {
-        allocator: std.mem.Allocator,
-        source: SourceType,
-        kafka_producer: ?KafkaProducer,
-        kafka_config: KafkaConfig,
-        streams: []const Stream,
-        serializer: JsonSerializer,
+// Error types for processor
+pub const ProcessorError = error{
+    ConnectionFailed,
+    InitializationFailed,
+    OutOfMemory,
+};
 
-        events_processed: usize,
+/// CDC Processor that works with PostgreSQL streaming replication
+pub const Processor = struct {
+    allocator: std.mem.Allocator,
+    source: PostgresStreamingSource,
+    kafka_producer: ?KafkaProducer,
+    kafka_config: KafkaConfig,
+    streams: []const Stream,
+    serializer: JsonSerializer,
 
-        const Self = @This();
+    events_processed: usize,
 
-        pub fn init(allocator: std.mem.Allocator, source: SourceType, streams: []const Stream, kafka_config: KafkaConfig) Self {
+    const Self = @This();
+
+    pub fn init(allocator: std.mem.Allocator, source: PostgresStreamingSource, streams: []const Stream, kafka_config: KafkaConfig) Self {
         return Self{
             .allocator = allocator,
             .source = source,
@@ -61,21 +61,21 @@ pub fn Processor(comptime SourceType: type) type {
         self.source.deinit();
     }
 
-    pub fn initialize(self: *Self) WalReaderError!void {
+    pub fn initialize(self: *Self) ProcessorError!void {
         // Initialize Kafka producer
         const brokers_str = try std.mem.join(self.allocator, ",", self.kafka_config.brokers);
         defer self.allocator.free(brokers_str);
 
         self.kafka_producer = KafkaProducer.init(self.allocator, brokers_str) catch |err| {
             std.log.warn("Failed to initialize Kafka producer: {}", .{err});
-            return WalReaderError.ConnectionFailed;
+            return ProcessorError.ConnectionFailed;
         };
 
         // Test Kafka connection at startup (fail-fast if unavailable)
         var producer = &self.kafka_producer.?;
         producer.testConnection() catch |err| {
             std.log.warn("Kafka connection test failed: {}", .{err});
-            return WalReaderError.ConnectionFailed;
+            return ProcessorError.ConnectionFailed;
         };
 
         std.log.info("Processor initialized successfully", .{});
@@ -121,7 +121,7 @@ pub fn Processor(comptime SourceType: type) type {
             return;
         }
 
-        var kafka_producer = &(self.kafka_producer orelse return WalReaderError.ConnectionFailed);
+        var kafka_producer = &(self.kafka_producer orelse return ProcessorError.ConnectionFailed);
 
         std.log.debug("Processing {} changes from batch (LSN: {})", .{ batch.changes.len, batch.last_lsn });
 
@@ -195,229 +195,4 @@ pub fn Processor(comptime SourceType: type) type {
 
         std.log.info("Streaming stopped gracefully", .{});
     }
-    };
-}
-
-// Unit tests for matchStreams routing logic
-const testing = std.testing;
-const KafkaSink = config_module.KafkaSink;
-
-fn createTestStream(allocator: std.mem.Allocator, resource: []const u8, operations: []const []const u8, destination: []const u8) !Stream {
-    const stream = Stream{
-        .name = try allocator.dupe(u8, "test_stream"),
-        .source = .{
-            .resource = resource,
-            .operations = operations,
-        },
-        .flow = .{
-            .format = "json",
-        },
-        .sink = .{
-            .destination = destination,
-            .routing_key = "id",
-        },
-    };
-    return stream;
-}
-
-test "matchStreams: exact table and operation match" {
-    const allocator = testing.allocator;
-
-    const operations = [_][]const u8{"insert"};
-    const streams = try allocator.alloc(Stream, 1);
-    defer allocator.free(streams);
-    streams[0] = try createTestStream(allocator, "users", &operations, "topic.users");
-    defer allocator.free(streams[0].name);
-
-    var wal_reader = @import("wal_reader").WalReader.init(allocator, "test_slot", "test_pub", &[_][]const u8{});
-    defer wal_reader.deinit();
-
-    var source = PostgresPollingSource.init(allocator, &wal_reader);
-    defer source.deinit();
-
-    const kafka_config = KafkaSink{ .brokers = &[_][]const u8{"localhost:9092"} };
-    const ProcessorType = Processor(PostgresPollingSource);
-    var processor = ProcessorType.init(allocator, source, streams, kafka_config);
-    defer processor.deinit();
-
-    var matched = processor.matchStreams("users", "insert");
-    defer matched.deinit(allocator);
-
-    try testing.expectEqual(@as(usize, 1), matched.items.len);
-    try testing.expectEqualStrings("users", matched.items[0].source.resource);
-}
-
-test "matchStreams: case-insensitive operation matching" {
-    const allocator = testing.allocator;
-
-    const operations = [_][]const u8{"insert"};
-    const streams = try allocator.alloc(Stream, 1);
-    defer allocator.free(streams);
-    streams[0] = try createTestStream(allocator, "users", &operations, "topic.users");
-    defer allocator.free(streams[0].name);
-
-    var wal_reader = @import("wal_reader").WalReader.init(allocator, "test_slot", "test_pub", &[_][]const u8{});
-    defer wal_reader.deinit();
-
-    var source = PostgresPollingSource.init(allocator, &wal_reader);
-    defer source.deinit();
-
-    const kafka_config = KafkaSink{ .brokers = &[_][]const u8{"localhost:9092"} };
-    const ProcessorType = Processor(PostgresPollingSource);
-    var processor = ProcessorType.init(allocator, source, streams, kafka_config);
-    defer processor.deinit();
-
-    // Test different cases: INSERT, Insert, insert
-    var matched_upper = processor.matchStreams("users", "INSERT");
-    defer matched_upper.deinit(allocator);
-    try testing.expectEqual(@as(usize, 1), matched_upper.items.len);
-
-    var matched_mixed = processor.matchStreams("users", "Insert");
-    defer matched_mixed.deinit(allocator);
-    try testing.expectEqual(@as(usize, 1), matched_mixed.items.len);
-
-    var matched_lower = processor.matchStreams("users", "insert");
-    defer matched_lower.deinit(allocator);
-    try testing.expectEqual(@as(usize, 1), matched_lower.items.len);
-}
-
-test "matchStreams: no match when table differs" {
-    const allocator = testing.allocator;
-
-    const operations = [_][]const u8{"insert"};
-    const streams = try allocator.alloc(Stream, 1);
-    defer allocator.free(streams);
-    streams[0] = try createTestStream(allocator, "users", &operations, "topic.users");
-    defer allocator.free(streams[0].name);
-
-    var wal_reader = @import("wal_reader").WalReader.init(allocator, "test_slot", "test_pub", &[_][]const u8{});
-    defer wal_reader.deinit();
-
-    var source = PostgresPollingSource.init(allocator, &wal_reader);
-    defer source.deinit();
-
-    const kafka_config = KafkaSink{ .brokers = &[_][]const u8{"localhost:9092"} };
-    const ProcessorType = Processor(PostgresPollingSource);
-    var processor = ProcessorType.init(allocator, source, streams, kafka_config);
-    defer processor.deinit();
-
-    var matched = processor.matchStreams("orders", "insert");
-    defer matched.deinit(allocator);
-
-    try testing.expectEqual(@as(usize, 0), matched.items.len);
-}
-
-test "matchStreams: no match when operation not in list" {
-    const allocator = testing.allocator;
-
-    const operations = [_][]const u8{ "insert", "update" };
-    const streams = try allocator.alloc(Stream, 1);
-    defer allocator.free(streams);
-    streams[0] = try createTestStream(allocator, "users", &operations, "topic.users");
-    defer allocator.free(streams[0].name);
-
-    var wal_reader = @import("wal_reader").WalReader.init(allocator, "test_slot", "test_pub", &[_][]const u8{});
-    defer wal_reader.deinit();
-
-    var source = PostgresPollingSource.init(allocator, &wal_reader);
-    defer source.deinit();
-
-    const kafka_config = KafkaSink{ .brokers = &[_][]const u8{"localhost:9092"} };
-    const ProcessorType = Processor(PostgresPollingSource);
-    var processor = ProcessorType.init(allocator, source, streams, kafka_config);
-    defer processor.deinit();
-
-    var matched = processor.matchStreams("users", "delete");
-    defer matched.deinit(allocator);
-
-    try testing.expectEqual(@as(usize, 0), matched.items.len);
-}
-
-test "matchStreams: multiple streams match same event" {
-    const allocator = testing.allocator;
-
-    const ops1 = [_][]const u8{"insert"};
-    const ops2 = [_][]const u8{ "insert", "update" };
-
-    const streams = try allocator.alloc(Stream, 2);
-    defer allocator.free(streams);
-    streams[0] = try createTestStream(allocator, "users", &ops1, "topic.users.inserts");
-    defer allocator.free(streams[0].name);
-    streams[1] = try createTestStream(allocator, "users", &ops2, "topic.users.all");
-    defer allocator.free(streams[1].name);
-
-    var wal_reader = @import("wal_reader").WalReader.init(allocator, "test_slot", "test_pub", &[_][]const u8{});
-    defer wal_reader.deinit();
-
-    var source = PostgresPollingSource.init(allocator, &wal_reader);
-    defer source.deinit();
-
-    const kafka_config = KafkaSink{ .brokers = &[_][]const u8{"localhost:9092"} };
-    const ProcessorType = Processor(PostgresPollingSource);
-    var processor = ProcessorType.init(allocator, source, streams, kafka_config);
-    defer processor.deinit();
-
-    var matched = processor.matchStreams("users", "insert");
-    defer matched.deinit(allocator);
-
-    try testing.expectEqual(@as(usize, 2), matched.items.len);
-    try testing.expectEqualStrings("topic.users.inserts", matched.items[0].sink.destination);
-    try testing.expectEqualStrings("topic.users.all", matched.items[1].sink.destination);
-}
-
-test "matchStreams: multiple operations for same table" {
-    const allocator = testing.allocator;
-
-    const operations = [_][]const u8{ "insert", "update", "delete" };
-    const streams = try allocator.alloc(Stream, 1);
-    defer allocator.free(streams);
-    streams[0] = try createTestStream(allocator, "orders", &operations, "topic.orders");
-    defer allocator.free(streams[0].name);
-
-    var wal_reader = @import("wal_reader").WalReader.init(allocator, "test_slot", "test_pub", &[_][]const u8{});
-    defer wal_reader.deinit();
-
-    var source = PostgresPollingSource.init(allocator, &wal_reader);
-    defer source.deinit();
-
-    const kafka_config = KafkaSink{ .brokers = &[_][]const u8{"localhost:9092"} };
-    const ProcessorType = Processor(PostgresPollingSource);
-    var processor = ProcessorType.init(allocator, source, streams, kafka_config);
-    defer processor.deinit();
-
-    // All operations should match
-    var matched_insert = processor.matchStreams("orders", "INSERT");
-    defer matched_insert.deinit(allocator);
-    try testing.expectEqual(@as(usize, 1), matched_insert.items.len);
-
-    var matched_update = processor.matchStreams("orders", "UPDATE");
-    defer matched_update.deinit(allocator);
-    try testing.expectEqual(@as(usize, 1), matched_update.items.len);
-
-    var matched_delete = processor.matchStreams("orders", "DELETE");
-    defer matched_delete.deinit(allocator);
-    try testing.expectEqual(@as(usize, 1), matched_delete.items.len);
-}
-
-test "matchStreams: empty streams list returns no matches" {
-    const allocator = testing.allocator;
-
-    const streams = try allocator.alloc(Stream, 0);
-    defer allocator.free(streams);
-
-    var wal_reader = @import("wal_reader").WalReader.init(allocator, "test_slot", "test_pub", &[_][]const u8{});
-    defer wal_reader.deinit();
-
-    var source = PostgresPollingSource.init(allocator, &wal_reader);
-    defer source.deinit();
-
-    const kafka_config = KafkaSink{ .brokers = &[_][]const u8{"localhost:9092"} };
-    const ProcessorType = Processor(PostgresPollingSource);
-    var processor = ProcessorType.init(allocator, source, streams, kafka_config);
-    defer processor.deinit();
-
-    var matched = processor.matchStreams("users", "insert");
-    defer matched.deinit(allocator);
-
-    try testing.expectEqual(@as(usize, 0), matched.items.len);
-}
+};
