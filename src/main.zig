@@ -2,10 +2,9 @@ const std = @import("std");
 const config_mod = @import("config");
 const Config = config_mod.Config;
 const Stream = config_mod.Stream;
-const ProcessorModule = @import("processor/processor.zig");
-const PostgresValidator = @import("source/postgres_polling/validator.zig").PostgresValidator;
-const PostgresPollingSource = @import("postgres_polling_source").PostgresPollingSource;
-const PostgresStreamingSource = @import("source/postgres_streaming/source.zig").PostgresStreamingSource;
+const Processor = @import("processor/processor.zig").Processor;
+const PostgresStreamingSource = @import("postgres_source").PostgresStreamingSource;
+const PostgresValidator = @import("source/postgres/validator.zig").PostgresValidator;
 const builtin = @import("builtin");
 const posix = std.posix;
 const constants = @import("constants.zig");
@@ -63,82 +62,33 @@ fn run() !void {
     setupSignalHandlers();
 
     printStatus("\nStarting CDC processor...\n", .{});
-    printStatus("\nStarting processor for {} stream(s)...\n", .{config.streams.len});
-
-    const tables = try collectUniqueTables(allocator, config.streams);
-    defer allocator.free(tables);
+    printStatus("Starting processor for {} stream(s)...\n", .{config.streams.len});
+    printStatus("Using PostgreSQL streaming replication (pgoutput protocol)\n", .{});
 
     const conn_str = try config.postgresConnectionString(allocator);
     defer allocator.free(conn_str);
 
-    // Create source and processor based on engine configuration
-    switch (postgres.engine) {
-        .polling => {
-            printStatus("Using PostgreSQL polling source (test_decoding)\n", .{});
+    var source = PostgresStreamingSource.init(allocator, postgres.slot_name, postgres.publication_name);
+    // NOTE: source will be deinit'd by processor.deinit()
 
-            const WalReader = @import("wal_reader").WalReader;
-            var wal_reader = WalReader.init(
-                allocator,
-                postgres.slot_name,
-                postgres.publication_name,
-                tables,
-            );
-            defer wal_reader.deinit();
+    printStatus("Connecting to PostgreSQL streaming replication...\n", .{});
+    try source.connect(conn_str, "0/0");
 
-            printStatus("Initializing WAL reader with {} table(s)...\n", .{tables.len});
-            for (tables) |table| {
-                printStatus("  - {s}\n", .{table});
-            }
+    var processor = Processor.init(allocator, source, config.streams, config.sink.kafka.?);
+    defer processor.deinit();
 
-            try wal_reader.initialize(conn_str, tables);
+    try processor.initialize();
 
-            var source = PostgresPollingSource.init(allocator, &wal_reader);
-            defer source.deinit();
-
-            const ProcessorType = ProcessorModule.Processor(PostgresPollingSource);
-            var processor = ProcessorType.init(allocator, source, config.streams, config.sink.kafka.?);
-            defer processor.deinit();
-
-            try processor.initialize();
-
-            printStatus("\nProcessor initialized successfully with slot: {s}\n", .{postgres.slot_name});
-            printStatus("\nCDC processor started successfully!\n", .{});
-            printStatus("Monitoring WAL changes from {} stream(s)\n", .{config.streams.len});
-            for (config.streams) |stream| {
-                printStatus("  - {s} -> {s}\n", .{ stream.source.resource, stream.sink.destination });
-            }
-            printStatus("Using publication: {s}\n", .{postgres.publication_name});
-            printStatus("Press Ctrl+C to stop gracefully.\n\n", .{});
-
-            try processor.startStreaming(&shutdown_requested);
-        },
-        .streaming => {
-            printStatus("Using PostgreSQL streaming source (pgoutput)\n", .{});
-
-            var source = PostgresStreamingSource.init(allocator, postgres.slot_name, postgres.publication_name);
-            // NOTE: source will be deinit'd by processor.deinit()
-
-            printStatus("Connecting to PostgreSQL streaming replication...\n", .{});
-            try source.connect(conn_str, "0/0");
-
-            const ProcessorType = ProcessorModule.Processor(PostgresStreamingSource);
-            var processor = ProcessorType.init(allocator, source, config.streams, config.sink.kafka.?);
-            defer processor.deinit();
-
-            try processor.initialize();
-
-            printStatus("\nProcessor initialized successfully with slot: {s}\n", .{postgres.slot_name});
-            printStatus("\nCDC processor started successfully!\n", .{});
-            printStatus("Monitoring WAL changes from {} stream(s)\n", .{config.streams.len});
-            for (config.streams) |stream| {
-                printStatus("  - {s} -> {s}\n", .{ stream.source.resource, stream.sink.destination });
-            }
-            printStatus("Using publication: {s}\n", .{postgres.publication_name});
-            printStatus("Press Ctrl+C to stop gracefully.\n\n", .{});
-
-            try processor.startStreaming(&shutdown_requested);
-        },
+    printStatus("\nProcessor initialized successfully with slot: {s}\n", .{postgres.slot_name});
+    printStatus("\nCDC processor started successfully!\n", .{});
+    printStatus("Monitoring WAL changes from {} stream(s)\n", .{config.streams.len});
+    for (config.streams) |stream| {
+        printStatus("  - {s} -> {s}\n", .{ stream.source.resource, stream.sink.destination });
     }
+    printStatus("Using publication: {s}\n", .{postgres.publication_name});
+    printStatus("Press Ctrl+C to stop gracefully.\n\n", .{});
+
+    try processor.startStreaming(&shutdown_requested);
 }
 
 /// Print user-facing messages to stdout
@@ -172,25 +122,6 @@ fn setupSignalHandlers() void {
     posix.sigaction(posix.SIG.TERM, &act, null);
 
     std.log.info("Signal handlers installed (SIGINT, SIGTERM)", .{});
-}
-
-/// Collect unique table names from stream configurations
-/// Uses StringHashMap for O(1) lookup instead of O(n²) linear search
-fn collectUniqueTables(allocator: std.mem.Allocator, streams: []const Stream) ![]const []const u8 {
-    var seen = std.StringHashMap(void).init(allocator);
-    defer seen.deinit();
-
-    var list: std.ArrayList([]const u8) = .empty;
-    errdefer list.deinit(allocator);
-
-    for (streams) |stream| {
-        const result = try seen.getOrPut(stream.source.resource);
-        if (!result.found_existing) {
-            try list.append(allocator, stream.source.resource);
-        }
-    }
-
-    return list.toOwnedSlice(allocator);
 }
 
 fn printBanner() void {

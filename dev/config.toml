@@ -14,7 +14,6 @@ version = "v0"
 type = "postgres" # Reference to the "source.postgres"
 
 [source.postgres]
-engine = "streaming"  # Options: "polling" | "streaming"
 host = "localhost"
 port = 5432
 database = "outboxx_test"

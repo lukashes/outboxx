@@ -33,7 +33,6 @@ database = "outboxx_test"
 user = "postgres"
 password_env = "POSTGRES_PASSWORD"  # Security: Always use environment variables for passwords
 slot_name = "outboxx_slot"           # PostgreSQL logical replication slot name
-plugin_type = "test_decoding"        # DESIGN: Currently "test_decoding", "pgoutput" planned
 publication_name = "outboxx_publication"  # PostgreSQL publication for logical replication
 
 # DESIGN: MySQL source configuration (not yet implemented)

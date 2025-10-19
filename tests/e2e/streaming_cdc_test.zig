@@ -2,9 +2,8 @@ const std = @import("std");
 const testing = std.testing;
 const test_helpers = @import("test_helpers");
 
-const ProcessorModule = @import("cdc_processor");
-const PostgresStreamingSource = @import("postgres_streaming_source").PostgresStreamingSource;
-const Processor = ProcessorModule.Processor(PostgresStreamingSource);
+const Processor = @import("cdc_processor").Processor;
+const PostgresStreamingSource = @import("postgres_source").PostgresStreamingSource;
 const KafkaSink = @import("config").KafkaSink;
 const Stream = @import("config").Stream;
 const c = test_helpers.c;
