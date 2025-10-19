@@ -187,10 +187,8 @@ pub fn Processor(comptime SourceType: type) type {
 
     pub fn startStreaming(self: *Self, stop_signal: *std.atomic.Value(bool)) !void {
         while (!stop_signal.load(.monotonic)) {
-            self.processChangesToKafka(1000) catch |err| {
-                std.log.warn("Error in streaming (will retry): {}", .{err});
-                // Continue streaming even if there's an error
-            };
+            // Fail-fast: any error propagates up → app exits → supervisor restarts
+            try self.processChangesToKafka(5000);
 
             // No sleep needed - receiveBatchWithTimeout() blocks on poll() when no data
         }
