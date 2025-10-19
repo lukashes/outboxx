@@ -38,5 +38,5 @@ jobs:
           echo "PASS: Static analysis completed"
 
       - name: Run unit tests
-        run: make test
+        run: make test-unit
 

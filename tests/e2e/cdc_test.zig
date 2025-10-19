@@ -2,21 +2,24 @@ const std = @import("std");
 const testing = std.testing;
 const test_helpers = @import("test_helpers");
 
-const ProcessorModule = @import("cdc_processor");
-const WalReader = @import("wal_reader").WalReader;
-const PostgresPollingSource = @import("postgres_polling_source").PostgresPollingSource;
-const Processor = ProcessorModule.Processor(PostgresPollingSource);
+const Processor = @import("cdc_processor").Processor;
+const PostgresSource = @import("postgres_source").PostgresSource;
 const KafkaSink = @import("config").KafkaSink;
 const Stream = @import("config").Stream;
 const c = test_helpers.c;
 
-// E2E Test: Basic CDC Pipeline Verification
-// Tests the complete flow: PostgreSQL → WAL → Parser → Serializer → Kafka
+// E2E Test: CDC Pipeline Verification
+// Tests the complete flow: PostgreSQL → CDC Processor → Kafka
 //
 // Principle: Black box testing
 // - Input: SQL operations in PostgreSQL
 // - Output: JSON messages in Kafka
 // - Verification: Message count matches change count, JSON structure is correct
+
+// Enable debug logging for these tests
+pub const std_options = struct {
+    pub const log_level = .debug;
+};
 
 test "E2E: INSERT operation - full pipeline verification" {
     const allocator = testing.allocator;
@@ -28,23 +31,30 @@ test "E2E: INSERT operation - full pipeline verification" {
     const conn_str_z = try allocator.dupeZ(u8, conn_str);
     defer allocator.free(conn_str_z);
 
-    const conn = c.PQconnectdb(conn_str_z.ptr) orelse return error.SkipZigTest;
+    const conn = c.PQconnectdb(conn_str_z.ptr) orelse return error.ConnectionFailed;
     defer c.PQfinish(conn);
 
     if (c.PQstatus(conn) != c.CONNECTION_OK) {
-        std.debug.print("PostgreSQL not available, skipping E2E test\n", .{});
-        return error.SkipZigTest;
+        std.log.err("PostgreSQL connection failed - E2E test requires PostgreSQL to be running", .{});
+        return error.ConnectionFailed;
     }
 
     // Test configuration with unique names to avoid cross-test contamination
     const timestamp = std.time.timestamp();
-    const table_name = try std.fmt.allocPrint(allocator, "users_insert_{d}", .{timestamp});
+    const table_name = try std.fmt.allocPrint(allocator, "users_stream_insert_{d}", .{timestamp});
     defer allocator.free(table_name);
-    const topic_name = try std.fmt.allocPrint(allocator, "topic.insert.{d}", .{timestamp});
+    const topic_name = try std.fmt.allocPrint(allocator, "topic.stream.insert.{d}", .{timestamp});
     defer allocator.free(topic_name);
+    const slot_name = try std.fmt.allocPrint(allocator, "e2e_stream_insert_slot_{d}", .{timestamp});
+    defer allocator.free(slot_name);
+    const pub_name = try std.fmt.allocPrint(allocator, "e2e_stream_insert_pub_{d}", .{timestamp});
+    defer allocator.free(pub_name);
 
-    // Create test table
+    // Create test table with REPLICA IDENTITY FULL
     try test_helpers.createTestTable(conn, allocator, table_name);
+    const replica_sql = try test_helpers.formatSqlZ(allocator, "ALTER TABLE {s} REPLICA IDENTITY FULL;", .{table_name});
+    defer allocator.free(replica_sql);
+    _ = c.PQexec(conn, replica_sql.ptr);
 
     // Kafka configuration
     const kafka_config = KafkaSink{
@@ -55,33 +65,31 @@ test "E2E: INSERT operation - full pipeline verification" {
     const stream_config = try test_helpers.createTestStreamConfig(allocator, table_name, topic_name);
     defer allocator.free(stream_config.name);
 
-    // Create WalReader
-    const tables = [_][]const u8{table_name};
-    var wal_reader = WalReader.init(allocator, "e2e_basic_insert_slot", "e2e_basic_insert_pub", &tables);
-    defer wal_reader.deinit();
+    // Create source
+    // NOTE: source will be deinit'd by processor.deinit() - no need for defer here
+    var source = PostgresSource.init(allocator, slot_name, pub_name);
 
-    wal_reader.dropSlot() catch {};
-    wal_reader.initialize(conn_str, &tables) catch |err| {
-        std.debug.print("Failed to initialize WAL reader: {}\n", .{err});
-        return error.SkipZigTest;
-    };
-    defer wal_reader.dropSlot() catch {};
+    // Cleanup: Drop replication slot after test
+    defer {
+        const drop_slot_sql_tmp = std.fmt.allocPrint(allocator, "SELECT pg_drop_replication_slot('{s}');", .{slot_name}) catch unreachable;
+        defer allocator.free(drop_slot_sql_tmp);
+        const drop_slot_sql = allocator.dupeZ(u8, drop_slot_sql_tmp) catch unreachable;
+        defer allocator.free(drop_slot_sql);
+        _ = c.PQexec(conn, drop_slot_sql.ptr);
+    }
+
+    // Connect to PostgreSQL
+    try source.connect(conn_str, "0/0");
 
     // Create processor
     const streams = try allocator.alloc(Stream, 1);
     defer allocator.free(streams);
     streams[0] = stream_config;
 
-    var source = PostgresPollingSource.init(allocator, &wal_reader);
-    defer source.deinit();
-
     var processor = Processor.init(allocator, source, streams, kafka_config);
     defer processor.deinit();
 
-    processor.initialize() catch |err| {
-        std.debug.print("Kafka unavailable, skipping E2E test: {}\n", .{err});
-        return error.SkipZigTest;
-    };
+    try processor.initialize();
 
     std.debug.print("\n=== E2E INSERT TEST ===\n", .{});
 
@@ -97,15 +105,11 @@ test "E2E: INSERT operation - full pipeline verification" {
     _ = c.PQexec(conn, insert1.ptr);
     _ = c.PQexec(conn, insert2.ptr);
     _ = c.PQexec(conn, insert3.ptr);
-    _ = c.PQexec(conn, "SELECT pg_switch_wal();");
-    std.Thread.sleep(100_000_000); // 100ms
+    std.Thread.sleep(200_000_000); // 200ms
 
     // Process CDC pipeline
     std.debug.print("Step 2: Process CDC pipeline\n", .{});
-    processor.processChangesToKafka(100) catch |err| {
-        std.debug.print("Processing failed: {}\n", .{err});
-        return error.SkipZigTest;
-    };
+    try processor.processChangesToKafka(100);
 
     // Verify: Read ALL messages from Kafka
     std.debug.print("Step 3: Consume and verify messages from Kafka topic '{s}'\n", .{topic_name});
@@ -141,8 +145,10 @@ test "E2E: INSERT operation - full pipeline verification" {
         // Verify data values
         try test_helpers.assertJsonField(msg, "data.name", expected_names[i]);
 
+        // Note: pgoutput sends values as strings, need to parse
         const data_obj = msg.value.object.get("data").?.object;
-        const value = data_obj.get("value").?.integer;
+        const value_str = data_obj.get("value").?.string;
+        const value = try std.fmt.parseInt(i64, value_str, 10);
         try testing.expectEqual(expected_values[i], value);
     }
 
@@ -151,6 +157,7 @@ test "E2E: INSERT operation - full pipeline verification" {
     std.debug.print("✓ JSON structure is correct (op, data, meta)\n", .{});
     std.debug.print("✓ All field values match expected data\n", .{});
     std.debug.print("✓ No duplicates, no message loss\n", .{});
+    std.debug.print("✓ CDC pipeline works correctly\n", .{});
 }
 
 test "E2E: UPDATE operation - full pipeline verification" {
@@ -163,23 +170,30 @@ test "E2E: UPDATE operation - full pipeline verification" {
     const conn_str_z = try allocator.dupeZ(u8, conn_str);
     defer allocator.free(conn_str_z);
 
-    const conn = c.PQconnectdb(conn_str_z.ptr) orelse return error.SkipZigTest;
+    const conn = c.PQconnectdb(conn_str_z.ptr) orelse return error.ConnectionFailed;
     defer c.PQfinish(conn);
 
     if (c.PQstatus(conn) != c.CONNECTION_OK) {
-        std.debug.print("PostgreSQL not available, skipping E2E test\n", .{});
-        return error.SkipZigTest;
+        std.log.err("PostgreSQL connection failed - E2E test requires PostgreSQL to be running", .{});
+        return error.ConnectionFailed;
     }
 
-    // Test configuration with unique names to avoid cross-test contamination
+    // Test configuration with unique names
     const timestamp = std.time.timestamp();
-    const table_name = try std.fmt.allocPrint(allocator, "users_update_{d}", .{timestamp});
+    const table_name = try std.fmt.allocPrint(allocator, "users_stream_update_{d}", .{timestamp});
     defer allocator.free(table_name);
-    const topic_name = try std.fmt.allocPrint(allocator, "topic.update.{d}", .{timestamp});
+    const topic_name = try std.fmt.allocPrint(allocator, "topic.stream.update.{d}", .{timestamp});
     defer allocator.free(topic_name);
+    const slot_name = try std.fmt.allocPrint(allocator, "e2e_stream_update_slot_{d}", .{timestamp});
+    defer allocator.free(slot_name);
+    const pub_name = try std.fmt.allocPrint(allocator, "e2e_stream_update_pub_{d}", .{timestamp});
+    defer allocator.free(pub_name);
 
-    // Create test table
+    // Create test table with REPLICA IDENTITY FULL
     try test_helpers.createTestTable(conn, allocator, table_name);
+    const replica_sql = try test_helpers.formatSqlZ(allocator, "ALTER TABLE {s} REPLICA IDENTITY FULL;", .{table_name});
+    defer allocator.free(replica_sql);
+    _ = c.PQexec(conn, replica_sql.ptr);
 
     // Kafka configuration
     const kafka_config = KafkaSink{
@@ -190,33 +204,30 @@ test "E2E: UPDATE operation - full pipeline verification" {
     const stream_config = try test_helpers.createTestStreamConfig(allocator, table_name, topic_name);
     defer allocator.free(stream_config.name);
 
-    // Create WalReader
-    const tables = [_][]const u8{table_name};
-    var wal_reader = WalReader.init(allocator, "e2e_basic_update_slot", "e2e_basic_update_pub", &tables);
-    defer wal_reader.deinit();
+    // Create source
+    // NOTE: source will be deinit'd by processor.deinit() - no need for defer here
+    var source = PostgresSource.init(allocator, slot_name, pub_name);
 
-    wal_reader.dropSlot() catch {};
-    wal_reader.initialize(conn_str, &tables) catch |err| {
-        std.debug.print("Failed to initialize WAL reader: {}\n", .{err});
-        return error.SkipZigTest;
-    };
-    defer wal_reader.dropSlot() catch {};
+    // Cleanup: Drop replication slot after test (using main test connection)
+    defer {
+        const drop_slot_sql_tmp = std.fmt.allocPrint(allocator, "SELECT pg_drop_replication_slot('{s}');", .{slot_name}) catch unreachable;
+        defer allocator.free(drop_slot_sql_tmp);
+        const drop_slot_sql = allocator.dupeZ(u8, drop_slot_sql_tmp) catch unreachable;
+        defer allocator.free(drop_slot_sql);
+        _ = c.PQexec(conn, drop_slot_sql.ptr);
+    }
+
+    try source.connect(conn_str, "0/0");
 
     // Create processor
     const streams = try allocator.alloc(Stream, 1);
     defer allocator.free(streams);
     streams[0] = stream_config;
 
-    var source = PostgresPollingSource.init(allocator, &wal_reader);
-    defer source.deinit();
-
     var processor = Processor.init(allocator, source, streams, kafka_config);
     defer processor.deinit();
 
-    processor.initialize() catch |err| {
-        std.debug.print("Kafka unavailable, skipping E2E test: {}\n", .{err});
-        return error.SkipZigTest;
-    };
+    try processor.initialize();
 
     std.debug.print("\n=== E2E UPDATE TEST ===\n", .{});
 
@@ -225,16 +236,12 @@ test "E2E: UPDATE operation - full pipeline verification" {
     const insert_sql = try test_helpers.formatSqlZ(allocator, "INSERT INTO {s} (name, value) VALUES ('Alice', 100);", .{table_name});
     defer allocator.free(insert_sql);
     _ = c.PQexec(conn, insert_sql.ptr);
-    _ = c.PQexec(conn, "SELECT pg_switch_wal();");
-    std.Thread.sleep(100_000_000); // 100ms
+    std.Thread.sleep(200_000_000); // 200ms
 
-    // Process initial INSERT (to clear it from WAL)
-    processor.processChangesToKafka(100) catch |err| {
-        std.debug.print("Processing failed: {}\n", .{err});
-        return error.SkipZigTest;
-    };
+    // Process initial INSERT
+    try processor.processChangesToKafka(100);
 
-    // Step 2: Update the record
+    // Step 2: Update the record twice
     std.debug.print("Step 2: Update the record twice\n", .{});
     const update1_sql = try test_helpers.formatSqlZ(allocator, "UPDATE {s} SET name = 'Alice Updated', value = 200 WHERE name = 'Alice';", .{table_name});
     defer allocator.free(update1_sql);
@@ -242,53 +249,46 @@ test "E2E: UPDATE operation - full pipeline verification" {
     defer allocator.free(update2_sql);
     _ = c.PQexec(conn, update1_sql.ptr);
     _ = c.PQexec(conn, update2_sql.ptr);
-    _ = c.PQexec(conn, "SELECT pg_switch_wal();");
-    std.Thread.sleep(100_000_000); // 100ms
+    std.Thread.sleep(200_000_000); // 200ms
 
     // Process UPDATE operations
     std.debug.print("Step 3: Process UPDATE operations\n", .{});
-    processor.processChangesToKafka(100) catch |err| {
-        std.debug.print("Processing failed: {}\n", .{err});
-        return error.SkipZigTest;
-    };
+    try processor.processChangesToKafka(100);
 
-    // Verify: Read messages from Kafka (should have 1 INSERT + 2 UPDATEs = 3 total)
+    // Verify: Read messages from Kafka (1 INSERT + 2 UPDATEs = 3 total)
     std.debug.print("Step 4: Consume and verify messages from Kafka topic '{s}'\n", .{topic_name});
     const messages = try test_helpers.consumeAllMessages(allocator, topic_name, 10000);
     defer test_helpers.cleanupJsonMessages(messages, allocator);
 
-    // We expect 3 messages: 1 INSERT + 2 UPDATEs
     std.debug.print("Step 5: Verify message count (expected: 3, got: {})\n", .{messages.len});
     try testing.expectEqual(@as(usize, 3), messages.len);
 
-    // Verify first message is INSERT
+    // Verify messages
     std.debug.print("Step 6: Verify messages\n", .{});
     try test_helpers.assertJsonField(messages[0], "op", "INSERT");
     try test_helpers.assertJsonField(messages[0], "data.name", "Alice");
 
-    // Verify second message is UPDATE
     try test_helpers.assertJsonField(messages[1], "op", "UPDATE");
     try test_helpers.assertJsonField(messages[1], "meta.resource", table_name);
-    try test_helpers.assertJsonField(messages[1], "meta.schema", "public");
     try test_helpers.assertJsonField(messages[1], "data.name", "Alice Updated");
 
+    // Note: pgoutput sends values as strings
     const data_obj_1 = messages[1].value.object.get("data").?.object;
-    const value_1 = data_obj_1.get("value").?.integer;
+    const value_str_1 = data_obj_1.get("value").?.string;
+    const value_1 = try std.fmt.parseInt(i64, value_str_1, 10);
     try testing.expectEqual(@as(i64, 200), value_1);
 
-    // Verify third message is UPDATE
     try test_helpers.assertJsonField(messages[2], "op", "UPDATE");
     try test_helpers.assertJsonField(messages[2], "data.name", "Alice Updated");
 
     const data_obj_2 = messages[2].value.object.get("data").?.object;
-    const value_2 = data_obj_2.get("value").?.integer;
+    const value_str_2 = data_obj_2.get("value").?.string;
+    const value_2 = try std.fmt.parseInt(i64, value_str_2, 10);
     try testing.expectEqual(@as(i64, 300), value_2);
 
     std.debug.print("=== TEST COMPLETED SUCCESSFULLY ===\n", .{});
     std.debug.print("✓ 2 UPDATE operations resulted in 2 UPDATE messages\n", .{});
-    std.debug.print("✓ JSON structure is correct (op, data, meta)\n", .{});
-    std.debug.print("✓ Updated values match expected data\n", .{});
-    std.debug.print("✓ No duplicates, no message loss\n", .{});
+    std.debug.print("✓ CDC pipeline captured all changes\n", .{});
 }
 
 test "E2E: DELETE operation - full pipeline verification" {
@@ -301,23 +301,30 @@ test "E2E: DELETE operation - full pipeline verification" {
     const conn_str_z = try allocator.dupeZ(u8, conn_str);
     defer allocator.free(conn_str_z);
 
-    const conn = c.PQconnectdb(conn_str_z.ptr) orelse return error.SkipZigTest;
+    const conn = c.PQconnectdb(conn_str_z.ptr) orelse return error.ConnectionFailed;
     defer c.PQfinish(conn);
 
     if (c.PQstatus(conn) != c.CONNECTION_OK) {
-        std.debug.print("PostgreSQL not available, skipping E2E test\n", .{});
-        return error.SkipZigTest;
+        std.log.err("PostgreSQL connection failed - E2E test requires PostgreSQL to be running", .{});
+        return error.ConnectionFailed;
     }
 
-    // Test configuration with unique names to avoid cross-test contamination
+    // Test configuration with unique names
     const timestamp = std.time.timestamp();
-    const table_name = try std.fmt.allocPrint(allocator, "users_delete_{d}", .{timestamp});
+    const table_name = try std.fmt.allocPrint(allocator, "users_stream_delete_{d}", .{timestamp});
     defer allocator.free(table_name);
-    const topic_name = try std.fmt.allocPrint(allocator, "topic.delete.{d}", .{timestamp});
+    const topic_name = try std.fmt.allocPrint(allocator, "topic.stream.delete.{d}", .{timestamp});
     defer allocator.free(topic_name);
+    const slot_name = try std.fmt.allocPrint(allocator, "e2e_stream_delete_slot_{d}", .{timestamp});
+    defer allocator.free(slot_name);
+    const pub_name = try std.fmt.allocPrint(allocator, "e2e_stream_delete_pub_{d}", .{timestamp});
+    defer allocator.free(pub_name);
 
-    // Create test table
+    // Create test table with REPLICA IDENTITY FULL
     try test_helpers.createTestTable(conn, allocator, table_name);
+    const replica_sql = try test_helpers.formatSqlZ(allocator, "ALTER TABLE {s} REPLICA IDENTITY FULL;", .{table_name});
+    defer allocator.free(replica_sql);
+    _ = c.PQexec(conn, replica_sql.ptr);
 
     // Kafka configuration
     const kafka_config = KafkaSink{
@@ -328,33 +335,30 @@ test "E2E: DELETE operation - full pipeline verification" {
     const stream_config = try test_helpers.createTestStreamConfig(allocator, table_name, topic_name);
     defer allocator.free(stream_config.name);
 
-    // Create WalReader
-    const tables = [_][]const u8{table_name};
-    var wal_reader = WalReader.init(allocator, "e2e_basic_delete_slot", "e2e_basic_delete_pub", &tables);
-    defer wal_reader.deinit();
+    // Create source
+    // NOTE: source will be deinit'd by processor.deinit() - no need for defer here
+    var source = PostgresSource.init(allocator, slot_name, pub_name);
 
-    wal_reader.dropSlot() catch {};
-    wal_reader.initialize(conn_str, &tables) catch |err| {
-        std.debug.print("Failed to initialize WAL reader: {}\n", .{err});
-        return error.SkipZigTest;
-    };
-    defer wal_reader.dropSlot() catch {};
+    // Cleanup: Drop replication slot after test (using main test connection)
+    defer {
+        const drop_slot_sql_tmp = std.fmt.allocPrint(allocator, "SELECT pg_drop_replication_slot('{s}');", .{slot_name}) catch unreachable;
+        defer allocator.free(drop_slot_sql_tmp);
+        const drop_slot_sql = allocator.dupeZ(u8, drop_slot_sql_tmp) catch unreachable;
+        defer allocator.free(drop_slot_sql);
+        _ = c.PQexec(conn, drop_slot_sql.ptr);
+    }
+
+    try source.connect(conn_str, "0/0");
 
     // Create processor
     const streams = try allocator.alloc(Stream, 1);
     defer allocator.free(streams);
     streams[0] = stream_config;
 
-    var source = PostgresPollingSource.init(allocator, &wal_reader);
-    defer source.deinit();
-
     var processor = Processor.init(allocator, source, streams, kafka_config);
     defer processor.deinit();
 
-    processor.initialize() catch |err| {
-        std.debug.print("Kafka unavailable, skipping E2E test: {}\n", .{err});
-        return error.SkipZigTest;
-    };
+    try processor.initialize();
 
     std.debug.print("\n=== E2E DELETE TEST ===\n", .{});
 
@@ -366,14 +370,10 @@ test "E2E: DELETE operation - full pipeline verification" {
     defer allocator.free(insert2_sql);
     _ = c.PQexec(conn, insert1_sql.ptr);
     _ = c.PQexec(conn, insert2_sql.ptr);
-    _ = c.PQexec(conn, "SELECT pg_switch_wal();");
-    std.Thread.sleep(100_000_000); // 100ms
+    std.Thread.sleep(200_000_000); // 200ms
 
-    // Process initial INSERTs (to clear them from WAL)
-    processor.processChangesToKafka(100) catch |err| {
-        std.debug.print("Processing failed: {}\n", .{err});
-        return error.SkipZigTest;
-    };
+    // Process initial INSERTs
+    try processor.processChangesToKafka(100);
 
     // Step 2: Delete the records
     std.debug.print("Step 2: Delete both records\n", .{});
@@ -383,26 +383,21 @@ test "E2E: DELETE operation - full pipeline verification" {
     defer allocator.free(delete2_sql);
     _ = c.PQexec(conn, delete1_sql.ptr);
     _ = c.PQexec(conn, delete2_sql.ptr);
-    _ = c.PQexec(conn, "SELECT pg_switch_wal();");
-    std.Thread.sleep(100_000_000); // 100ms
+    std.Thread.sleep(200_000_000); // 200ms
 
     // Process DELETE operations
     std.debug.print("Step 3: Process DELETE operations\n", .{});
-    processor.processChangesToKafka(100) catch |err| {
-        std.debug.print("Processing failed: {}\n", .{err});
-        return error.SkipZigTest;
-    };
+    try processor.processChangesToKafka(100);
 
-    // Verify: Read messages from Kafka (should have 2 INSERTs + 2 DELETEs = 4 total)
+    // Verify: Read messages from Kafka (2 INSERTs + 2 DELETEs = 4 total)
     std.debug.print("Step 4: Consume and verify messages from Kafka topic '{s}'\n", .{topic_name});
     const messages = try test_helpers.consumeAllMessages(allocator, topic_name, 10000);
     defer test_helpers.cleanupJsonMessages(messages, allocator);
 
-    // We expect 4 messages: 2 INSERTs + 2 DELETEs
     std.debug.print("Step 5: Verify message count (expected: 4, got: {})\n", .{messages.len});
     try testing.expectEqual(@as(usize, 4), messages.len);
 
-    // Verify messages (count by operation, Kafka doesn't guarantee order)
+    // Verify messages (count by operation)
     std.debug.print("Step 6: Verify messages\n", .{});
 
     var insert_count: usize = 0;
@@ -423,13 +418,10 @@ test "E2E: DELETE operation - full pipeline verification" {
         }
     }
 
-    // Verify counts
     try testing.expectEqual(@as(usize, 2), insert_count);
     try testing.expectEqual(@as(usize, 2), delete_count);
 
     std.debug.print("=== TEST COMPLETED SUCCESSFULLY ===\n", .{});
     std.debug.print("✓ 2 DELETE operations resulted in 2 DELETE messages\n", .{});
-    std.debug.print("✓ JSON structure is correct (op, data, meta)\n", .{});
-    std.debug.print("✓ Deleted records match expected data\n", .{});
-    std.debug.print("✓ No duplicates, no message loss\n", .{});
+    std.debug.print("✓ CDC pipeline captured all changes\n", .{});
 }

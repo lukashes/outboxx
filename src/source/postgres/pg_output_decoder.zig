@@ -16,12 +16,11 @@ pub const MessageType = enum(u8) {
     update = 'U',
     delete = 'D',
     origin = 'O',
-    type = 'Y',
+    data_type = 'Y',
     truncate = 'T',
     _,
 };
 
-// Tuple column data type
 pub const TupleDataType = enum(u8) {
     null = 'n',
     unchanged_toast = 'u',
@@ -169,7 +168,7 @@ pub const PgOutputDecoder = struct {
             .update => return PgOutputMessage{ .update = try self.decodeUpdate(data[1..]) },
             .delete => return PgOutputMessage{ .delete = try self.decodeDelete(data[1..]) },
             else => {
-                std.log.debug("Unknown pgoutput message type: {c} (0x{x})", .{ @as(u8, @intFromEnum(msg_type)), @as(u8, @intFromEnum(msg_type)) });
+                std.log.warn("Unknown pgoutput message type: {c} (0x{x})", .{ @as(u8, @intFromEnum(msg_type)), @as(u8, @intFromEnum(msg_type)) });
                 return DecoderError.UnknownMessageType;
             },
         }

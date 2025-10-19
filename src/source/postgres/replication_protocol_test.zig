@@ -11,8 +11,6 @@ const writeI64BigEndian = replication.writeI64BigEndian;
 const test_helpers = @import("test_helpers");
 const getTestConnectionString = test_helpers.getTestConnectionString;
 
-// Unit tests for helper functions
-
 test "readU64BigEndian: basic value" {
     const bytes = [_]u8{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x23 };
     const result = readU64BigEndian(&bytes);
@@ -105,8 +103,6 @@ test "round-trip i64 encoding" {
     }
 }
 
-// Integration tests (require PostgreSQL)
-
 test "ReplicationProtocol.init" {
     const allocator = testing.allocator;
     const slot_name = "test_repl_slot";
@@ -129,10 +125,6 @@ test "ReplicationProtocol: connect with replication mode" {
     var protocol = ReplicationProtocol.init(allocator, "test_slot", "test_pub");
     defer protocol.deinit();
 
-    protocol.connect(conn_str) catch |err| {
-        std.debug.print("Failed to connect with replication mode: {}\n", .{err});
-        return error.SkipZigTest;
-    };
-
+    try protocol.connect(conn_str);
     try testing.expect(protocol.connection != null);
 }

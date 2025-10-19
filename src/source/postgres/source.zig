@@ -39,7 +39,7 @@ pub const Batch = struct {
     }
 };
 
-pub const StreamingSourceError = error{
+pub const PostgresSourceError = error{
     ConnectionFailed,
     ReplicationFailed,
     DecodeFailed,
@@ -54,7 +54,7 @@ pub const StreamingSourceError = error{
 /// - extractChangeFromMessage() returns LSN explicitly (or 0 on error)
 /// - receiveBatchWithTimeout() tracks LSN locally and updates instance field
 /// - last_lsn is used as starting point for next batch
-pub const PostgresStreamingSource = struct {
+pub const PostgresSource = struct {
     allocator: std.mem.Allocator,
     protocol: ReplicationProtocol,
     decoder: PgOutputDecoder,
@@ -84,43 +84,43 @@ pub const PostgresStreamingSource = struct {
     }
 
     /// Connect to PostgreSQL and start replication
-    pub fn connect(self: *Self, connection_string: []const u8, start_lsn: []const u8) StreamingSourceError!void {
+    pub fn connect(self: *Self, connection_string: []const u8, start_lsn: []const u8) PostgresSourceError!void {
         self.protocol.connect(connection_string) catch |err| {
             std.log.warn("Failed to connect with replication protocol: {}", .{err});
-            return StreamingSourceError.ConnectionFailed;
+            return PostgresSourceError.ConnectionFailed;
         };
 
         // Create publication if it doesn't exist
         self.protocol.createPublicationIfNotExists() catch |err| {
             std.log.warn("Failed to create publication: {}", .{err});
-            return StreamingSourceError.ConnectionFailed;
+            return PostgresSourceError.ConnectionFailed;
         };
 
         // Create replication slot if it doesn't exist
         self.protocol.createSlotIfNotExists() catch |err| {
             std.log.warn("Failed to create replication slot: {}", .{err});
-            return StreamingSourceError.ConnectionFailed;
+            return PostgresSourceError.ConnectionFailed;
         };
 
         self.protocol.startReplication(start_lsn) catch |err| {
             std.log.warn("Failed to start replication: {}", .{err});
-            return StreamingSourceError.ReplicationFailed;
+            return PostgresSourceError.ReplicationFailed;
         };
 
-        std.log.debug("Streaming replication started from LSN: {s}", .{start_lsn});
+        std.log.info("Streaming replication started from LSN: {s}", .{start_lsn});
     }
 
-    /// Receive batch of changes from PostgreSQL (default timeout: 1 second)
+    /// Receive batch of changes from PostgreSQL (default wait time: 1 second)
     /// Wrapper for compatibility with polling source API
-    pub fn receiveBatch(self: *Self, limit: usize) StreamingSourceError!Batch {
-        const DEFAULT_TIMEOUT_MS = 1000; // 1 second timeout
-        return self.receiveBatchWithTimeout(limit, DEFAULT_TIMEOUT_MS);
+    pub fn receiveBatch(self: *Self, limit: usize) PostgresSourceError!Batch {
+        const DEFAULT_WAIT_TIME_MS = 1000; // 1 second wait time
+        return self.receiveBatchWithWaitTime(limit, DEFAULT_WAIT_TIME_MS);
     }
 
-    /// Receive batch of changes from PostgreSQL (with timeout)
+    /// Receive batch of changes from PostgreSQL (with wait time)
     /// limit: desired batch size (soft limit)
-    /// timeout_ms: max time to wait for batch (1000ms = 1 second)
-    pub fn receiveBatchWithTimeout(self: *Self, limit: usize, timeout_ms: i32) StreamingSourceError!Batch {
+    /// wait_time_ms: max time to wait for batch (1000ms = 1 second)
+    pub fn receiveBatchWithWaitTime(self: *Self, limit: usize, wait_time_ms: i32) PostgresSourceError!Batch {
         var changes = std.ArrayList(ChangeEvent).empty;
         errdefer {
             for (changes.items) |*change| {
@@ -132,20 +132,20 @@ pub const PostgresStreamingSource = struct {
         var last_confirmed_lsn: u64 = self.last_lsn; // Track LSN locally
 
         const start_time = std.time.milliTimestamp();
-        const deadline = start_time + timeout_ms;
+        const deadline = start_time + wait_time_ms;
 
         while (changes.items.len < limit and std.time.milliTimestamp() < deadline) {
             const remaining_time = @max(deadline - std.time.milliTimestamp(), 0);
-            const timeout: i32 = @intCast(remaining_time);
+            const wait_time: i32 = @intCast(remaining_time);
 
             // Step 1: Blocking receive (poll() inside)
-            const repl_msg = self.protocol.receiveMessage(timeout) catch |err| {
+            const repl_msg = self.protocol.receiveMessage(wait_time) catch |err| {
                 std.log.warn("Failed to receive replication message: {}", .{err});
-                return StreamingSourceError.ReplicationFailed;
+                return PostgresSourceError.ReplicationFailed;
             };
 
             if (repl_msg == null) {
-                // Timeout - no message available
+                // Wait time elapsed - no message available
                 if (changes.items.len > 0) {
                     // Return what we have
                     break;
@@ -162,7 +162,7 @@ pub const PostgresStreamingSource = struct {
 
             // Step 2: DRAIN all buffered messages (non-blocking)
             while (changes.items.len < limit) {
-                const next_msg = self.protocol.receiveMessage(0) catch break; // 0ms timeout = non-blocking
+                const next_msg = self.protocol.receiveMessage(0) catch break; // 0ms wait time = non-blocking
                 if (next_msg == null) break; // No more buffered data
 
                 var buffered_msg = next_msg.?;
@@ -202,14 +202,14 @@ pub const PostgresStreamingSource = struct {
                 // Decode pgoutput message
                 var pg_msg = self.decoder.decode(xlog.wal_data) catch |err| {
                     std.log.warn("Failed to decode pgoutput message at LSN {}: {}", .{ xlog.server_wal_end, err });
-                    return StreamingSourceError.DecodeFailed; // Propagate error up
+                    return PostgresSourceError.DecodeFailed; // Propagate error up
                 };
                 defer pg_msg.deinit(self.allocator);
 
                 // Convert to ChangeEvent
                 const change_opt = self.convertToChangeEvent(pg_msg) catch |err| {
                     std.log.warn("Failed to convert message to ChangeEvent at LSN {}: {}", .{ xlog.server_wal_end, err });
-                    return StreamingSourceError.ConversionFailed; // Propagate error up
+                    return PostgresSourceError.ConversionFailed; // Propagate error up
                 };
 
                 // Add ChangeEvent to batch if present
@@ -229,7 +229,7 @@ pub const PostgresStreamingSource = struct {
                 // - If Kafka flush fails, data would be lost
                 // - Processor will send feedback after successful Kafka flush
                 //
-                // Note: PostgreSQL may wait for reply, but our batch timeout (~6 sec)
+                // Note: PostgreSQL may wait for reply, but our batch wait time (~6 sec)
                 // is much shorter than wal_sender_timeout (default 60 sec)
                 return keepalive.server_wal_end;
             },
@@ -237,7 +237,7 @@ pub const PostgresStreamingSource = struct {
     }
 
     /// Send LSN feedback to PostgreSQL (confirm processing)
-    pub fn sendFeedback(self: *Self, lsn: u64) StreamingSourceError!void {
+    pub fn sendFeedback(self: *Self, lsn: u64) PostgresSourceError!void {
         const status = StandbyStatusUpdate{
             .wal_write_position = lsn,
             .wal_flush_position = lsn,
@@ -248,13 +248,13 @@ pub const PostgresStreamingSource = struct {
 
         self.protocol.sendStatusUpdate(status) catch |err| {
             std.log.warn("Failed to send feedback: {}", .{err});
-            return StreamingSourceError.ReplicationFailed;
+            return PostgresSourceError.ReplicationFailed;
         };
     }
 
     /// Convert PgOutputMessage to ChangeEvent
     /// Returns null for messages that don't produce ChangeEvents (BEGIN, COMMIT, RELATION)
-    fn convertToChangeEvent(self: *Self, pg_msg: PgOutputMessage) StreamingSourceError!?ChangeEvent {
+    fn convertToChangeEvent(self: *Self, pg_msg: PgOutputMessage) PostgresSourceError!?ChangeEvent {
         switch (pg_msg) {
             .begin, .commit => {
                 // Transaction markers - don't produce ChangeEvents yet
@@ -264,26 +264,26 @@ pub const PostgresStreamingSource = struct {
                 // Register relation metadata
                 self.registry.register(rel) catch |err| {
                     std.log.warn("Failed to register relation: {}", .{err});
-                    return StreamingSourceError.ConversionFailed;
+                    return PostgresSourceError.ConversionFailed;
                 };
                 return null;
             },
             .insert => |ins| {
                 return self.convertInsert(ins) catch |err| {
                     std.log.warn("Failed to convert INSERT: {}", .{err});
-                    return StreamingSourceError.ConversionFailed;
+                    return PostgresSourceError.ConversionFailed;
                 };
             },
             .update => |upd| {
                 return self.convertUpdate(upd) catch |err| {
                     std.log.warn("Failed to convert UPDATE: {}", .{err});
-                    return StreamingSourceError.ConversionFailed;
+                    return PostgresSourceError.ConversionFailed;
                 };
             },
             .delete => |del| {
                 return self.convertDelete(del) catch |err| {
                     std.log.warn("Failed to convert DELETE: {}", .{err});
-                    return StreamingSourceError.ConversionFailed;
+                    return PostgresSourceError.ConversionFailed;
                 };
             },
         }
@@ -393,7 +393,7 @@ test "convertInsert: basic INSERT message to ChangeEvent" {
     const allocator = testing.allocator;
 
     // Setup: Create source with registry
-    var source = PostgresStreamingSource.init(allocator, "test_slot", "test_pub");
+    var source = PostgresSource.init(allocator, "test_slot", "test_pub");
     defer source.deinit();
 
     // Register test relation (id=100, public.users, columns: id, name)
@@ -470,7 +470,7 @@ test "convertUpdate: UPDATE message with old and new tuples" {
     const allocator = testing.allocator;
 
     // Setup: Create source with registry
-    var source = PostgresStreamingSource.init(allocator, "test_slot", "test_pub");
+    var source = PostgresSource.init(allocator, "test_slot", "test_pub");
     defer source.deinit();
 
     // Register test relation (id=100, public.users, columns: id, name)
@@ -567,7 +567,7 @@ test "convertDelete: DELETE message to ChangeEvent" {
     const allocator = testing.allocator;
 
     // Setup: Create source with registry
-    var source = PostgresStreamingSource.init(allocator, "test_slot", "test_pub");
+    var source = PostgresSource.init(allocator, "test_slot", "test_pub");
     defer source.deinit();
 
     // Register test relation
@@ -639,7 +639,7 @@ test "tupleToRowData: convert tuple with text values to RowData" {
     const allocator = testing.allocator;
 
     // Setup: Create source with registry
-    var source = PostgresStreamingSource.init(allocator, "test_slot", "test_pub");
+    var source = PostgresSource.init(allocator, "test_slot", "test_pub");
     defer source.deinit();
 
     // Register relation with 3 columns: id, name, email
@@ -730,7 +730,7 @@ test "tupleToRowData: handle NULL values in tuple" {
     const allocator = testing.allocator;
 
     // Setup: Create source with registry
-    var source = PostgresStreamingSource.init(allocator, "test_slot", "test_pub");
+    var source = PostgresSource.init(allocator, "test_slot", "test_pub");
     defer source.deinit();
 
     // Register relation with 3 columns
@@ -820,7 +820,7 @@ test "convertInsert: error when relation not found in registry" {
     const allocator = testing.allocator;
 
     // Setup: Create source with empty registry (no relations registered)
-    var source = PostgresStreamingSource.init(allocator, "test_slot", "test_pub");
+    var source = PostgresSource.init(allocator, "test_slot", "test_pub");
     defer source.deinit();
 
     // Create INSERT message for non-existent relation (id=999)

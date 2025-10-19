@@ -1,16 +1,13 @@
 const std = @import("std");
 
-// PostgreSQL streaming source
-const PostgresStreamingSource = @import("postgres_source").PostgresStreamingSource;
+const PostgresSource = @import("postgres_source").PostgresSource;
 const Batch = @import("postgres_source").Batch;
 
-// Infrastructure
 const KafkaProducer = @import("kafka_producer").KafkaProducer;
 const config_module = @import("config");
 const KafkaConfig = config_module.KafkaSink;
 const Stream = config_module.Stream;
 
-// Domain and serialization
 const domain = @import("domain");
 const ChangeEvent = domain.ChangeEvent;
 const json_serializer = @import("json_serialization");
@@ -22,7 +19,6 @@ const JsonSerializer = json_serializer.JsonSerializer;
 // - Keeping replication lag low for real-time CDC
 const KAFKA_FLUSH_TIMEOUT_MS: i32 = 5_000;
 
-// Error types for processor
 pub const ProcessorError = error{
     ConnectionFailed,
     InitializationFailed,
@@ -32,7 +28,7 @@ pub const ProcessorError = error{
 /// CDC Processor that works with PostgreSQL streaming replication
 pub const Processor = struct {
     allocator: std.mem.Allocator,
-    source: PostgresStreamingSource,
+    source: PostgresSource,
     kafka_producer: ?KafkaProducer,
     kafka_config: KafkaConfig,
     streams: []const Stream,
@@ -42,7 +38,7 @@ pub const Processor = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, source: PostgresStreamingSource, streams: []const Stream, kafka_config: KafkaConfig) Self {
+    pub fn init(allocator: std.mem.Allocator, source: PostgresSource, streams: []const Stream, kafka_config: KafkaConfig) Self {
         return Self{
             .allocator = allocator,
             .source = source,
@@ -62,7 +58,6 @@ pub const Processor = struct {
     }
 
     pub fn initialize(self: *Self) ProcessorError!void {
-        // Initialize Kafka producer
         const brokers_str = try std.mem.join(self.allocator, ",", self.kafka_config.brokers);
         defer self.allocator.free(brokers_str);
 
@@ -86,12 +81,10 @@ pub const Processor = struct {
         var matched = std.ArrayList(Stream).empty;
 
         for (self.streams) |stream| {
-            // Check if table matches
             if (!std.mem.eql(u8, stream.source.resource, table_name)) {
                 continue;
             }
 
-            // Check if operation matches (case-insensitive)
             var operation_matched = false;
             for (stream.source.operations) |op| {
                 if (std.ascii.eqlIgnoreCase(op, operation)) {
@@ -109,7 +102,6 @@ pub const Processor = struct {
     }
 
     pub fn processChangesToKafka(self: *Self, limit: u32) anyerror!void {
-        // Receive batch of changes from source
         var batch = try self.source.receiveBatch(limit);
         defer batch.deinit();
 
@@ -125,9 +117,7 @@ pub const Processor = struct {
 
         std.log.debug("Processing {} changes from batch (LSN: {})", .{ batch.changes.len, batch.last_lsn });
 
-        // Process each change event
         for (batch.changes) |change_event| {
-            // Find matching streams for this event
             var matched_streams = self.matchStreams(change_event.meta.resource, change_event.op);
             defer matched_streams.deinit(self.allocator);
 
@@ -143,7 +133,6 @@ pub const Processor = struct {
             };
             defer self.allocator.free(json_bytes);
 
-            // Send to all matching streams
             for (matched_streams.items) |stream| {
                 const partition_key_field = stream.sink.routing_key orelse "id";
                 const partition_key = if (change_event.getPartitionKeyValue(self.allocator, partition_key_field)) |key_opt| blk: {
@@ -164,10 +153,8 @@ pub const Processor = struct {
                     continue;
                 };
 
-                // Increment events counter
                 self.events_processed += 1;
 
-                // Log progress every 10000 events
                 if (self.events_processed % 10000 == 0) {
                     std.log.info("Processed {} CDC events", .{self.events_processed});
                 }

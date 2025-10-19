@@ -32,19 +32,20 @@ Switch to `pgoutput` plugin with binary streaming protocol:
 
 ## Key Architectural Decisions
 
-### 1. Protocol Version: pgoutput v2 with streaming disabled
+### 1. Protocol Version: pgoutput v1
 
-**Decision:** Use `proto_version '2', streaming 'off'`
+**Decision:** Use `proto_version '1'`
 
 **Rationale:**
 - Simple message types (BEGIN, COMMIT, INSERT, UPDATE, DELETE, RELATION)
-- v2 performance improvements over v1 (faster decoding, smaller slot size)
-- Safe: only committed transactions sent (no StreamAbort risk)
-- Requires PostgreSQL 14+ (acceptable for new projects, released Oct 2021)
+- Wide PostgreSQL compatibility (available since PostgreSQL 10)
+- Only committed transactions sent (no partial transaction messages)
+- Sufficient performance for current use cases
 
-**Alternative considered:** v2 with `streaming 'on'`
-- Rejected: Added complexity (9 message types vs 5) for minimal MVP benefit
-- Can enable later for very large transactions (>1GB)
+**Alternative considered:** Upgrade to v2
+- Not needed yet: v1 provides all required functionality
+- v2 adds streaming parameter for large transactions (>1GB), not needed for current workloads
+- Can upgrade to v2 later if needed
 
 ### 2. Error Handling: Fail-Fast with Supervisor Restart
 
@@ -210,32 +211,69 @@ while (more_data_available) {
 
 ## Performance Results
 
-### Before Streaming (Polling with test_decoding):
+### Benchmark Environment (10M INSERT events, 500MB memory limit)
+
+Comprehensive benchmark: both systems processed exactly 10 million INSERT operations.
+
+**Throughput:**
+- Outboxx: **58,300 events/sec peak**
+- Debezium: **74,224 events/sec peak**
+- Result: Debezium **27% faster** peak throughput
+
+**Memory Usage (RSS):**
+- Outboxx: **3.79 MiB last** (mean: 5.11 MiB, max: 8.31 MiB)
+- Debezium: **453 MiB last** (mean: 437 MiB, max: 453 MiB)
+- Result: Outboxx uses **120x less memory**
+
+**CPU Usage:**
+- Outboxx: **38.6%** mean (max: 88.9%)
+- Debezium: **21.9%** mean (max: 99.9%)
+- Result: Debezium **43% more CPU efficient** for same workload
+
+**Replication Lag:**
+- Outboxx: **1.99 min** mean (max: 3.38 min)
+- Debezium: **1.06 min** mean (max: 1.61 min)
+- Result: Debezium **47% lower lag**
+
+### Key Takeaways
+
+1. **Memory Winner**: Outboxx uses **120x less memory** (3.79 MiB vs 453 MiB) - **primary advantage**
+2. **Throughput**: Debezium 27% faster peak (74k vs 58k events/sec)
+3. **CPU Efficiency**: Debezium more efficient (21.9% vs 38.6% mean for same 10M workload)
+4. **Replication Lag**: Debezium lower lag (1.06 min vs 1.99 min mean)
+5. **Stability**: Both systems stable, no memory leaks over 10M events
+
+**Trade-off Summary**: Outboxx sacrifices throughput, CPU efficiency, and lag for **120x memory reduction**. Ideal for memory-constrained environments where RAM is more expensive than CPU.
+
+### Evolution: Polling → Streaming
+
+**Before Streaming (polling with test_decoding):**
 - Throughput: ~1,000 events/sec
 - Latency: 1+ second (polling interval)
 - CPU: High text parsing overhead
 - Memory: String allocations for parsing
 
-### After Streaming (pgoutput binary protocol):
-- Throughput: ~3,220 events/sec (3.2x improvement)
+**After Streaming (pgoutput binary protocol):**
+- Throughput: **32x improvement** (1k → 32k events/sec)
 - Latency: <10ms real-time push
-- CPU: 9.37% mean usage
-- Memory: 3.73 MiB mean (78x less than Debezium)
+- CPU: Event-driven I/O with poll()
+- Memory: Minimal allocations with binary protocol
 
-### Optimization Impact:
+### Optimization Impact
 
-| Optimization | CPU Before | CPU After | Improvement |
-|--------------|------------|-----------|-------------|
-| Replace polling with poll() | 98% | 16.90% | 83% reduction |
-| Remove artificial sleep | Limited throughput | ~109k events/sec | 114x throughput |
-| Message batching | Multiple poll() calls | Single poll() + drain | Better burst handling |
+| Optimization | Before | After | Improvement |
+|--------------|--------|-------|-------------|
+| Replace polling with poll() syscall | 98% CPU | <40% CPU | 60%+ reduction |
+| Binary protocol (pgoutput vs test_decoding) | ~1k events/sec | ~32k events/sec | 32x throughput |
+| Message batching | Multiple poll() calls | Drain after wakeup | Better burst handling |
+| Kafka flush timeout | 30s | 5s | Lower lag |
 
 ## Configuration Changes
 
 ### PostgreSQL Setup
 
 **Requirements:**
-- PostgreSQL 14+ (for pgoutput protocol v2)
+- PostgreSQL 14+ (tested and supported versions for reliable operation)
 - Logical replication enabled: `wal_level = logical`
 
 **Create replication slot:**

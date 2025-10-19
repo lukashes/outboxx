@@ -2,13 +2,13 @@ const std = @import("std");
 const testing = std.testing;
 
 const source_mod = @import("source.zig");
-const PostgresStreamingSource = source_mod.PostgresStreamingSource;
+const PostgresSource = source_mod.PostgresSource;
 const Batch = source_mod.Batch;
 
-test "PostgresStreamingSource: init and deinit" {
+test "PostgresSource: init and deinit" {
     const allocator = testing.allocator;
 
-    var source = PostgresStreamingSource.init(allocator, "test_slot", "test_pub");
+    var source = PostgresSource.init(allocator, "test_slot", "test_pub");
     defer source.deinit();
 
     try testing.expectEqual(@as(u64, 0), source.last_lsn);
