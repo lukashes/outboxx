@@ -10,15 +10,16 @@ Outboxx follows a pragmatic development approach:
 
 This ensures we build the right thing before we build it right.
 
-## Current Status: Foundation Complete ✅
+## Current Status: Streaming Replication Complete ✅
 
 **Major Achievements:**
-- ✅ **PostgreSQL Logical Replication**: SQL-based approach with test_decoding plugin
+- ✅ **PostgreSQL Streaming Replication**: Binary pgoutput protocol with real-time push
 - ✅ **End-to-End Pipeline**: Complete PostgreSQL → Kafka message flow
 - ✅ **Memory Safety**: Proper Zig allocator usage and error handling
-- ✅ **Integration Testing**: Real PostgreSQL and Kafka with comprehensive test coverage
+- ✅ **Comprehensive Testing**: Unit, integration, and E2E tests with real services
 - ✅ **Multi-Stream Configuration**: TOML-based configuration with validation
 - ✅ **Development Environment**: Nix-based isolated setup with Docker Compose
+- ✅ **Production-Ready Performance**: ~3.2k events/sec, 3.73 MiB memory usage
 
 ### Phase 1: Foundation ✅ (COMPLETED)
 - ✅ Project structure and build.zig with Nix environment
@@ -28,12 +29,12 @@ This ensures we build the right thing before we build it right.
 - ✅ Comprehensive integration tests with real PostgreSQL
 - ✅ Memory-safe implementation with proper error handling
 
-### Phase 2: Data Processing 🔄 (IN PROGRESS)
+### Phase 2: Data Processing ✅ (COMPLETED)
 - ✅ Message formatting with JSON serialization
 - ✅ TOML configuration support with validation
 - ✅ Multi-stream support for different tables
-- 📋 Schema registry for table metadata caching
-- 📋 Table/column filtering implementation
+- ✅ Relation registry for table metadata (pgoutput)
+- 📋 Schema registry for complex type handling
 - 📋 Advanced data transformations
 
 ### Phase 3: Kafka Integration ✅ (COMPLETED)
@@ -44,34 +45,27 @@ This ensures we build the right thing before we build it right.
 - 📋 Error handling with retry/dead letter queue
 - 📋 Performance metrics and monitoring
 
-### Phase 4: Operations 📋 (PLANNED)
-- 📋 LSN tracking and crash recovery state management
-- 📋 Structured logging system
-- 📋 Graceful shutdown with replication slots cleanup
-- 📋 Production-ready configuration validation
+### Phase 4: Operations ✅ (COMPLETED)
+- ✅ LSN tracking with at-least-once delivery guarantee
+- ✅ Structured logging with std.log
+- ✅ Graceful shutdown with signal handlers
+- ✅ Configuration validation on startup
+- ✅ Fail-fast error handling with supervisor restart
 
 ## Future Development Phases
 
-### Phase 5: Load Testing & Validation 📋
-Before optimization, thorough testing of functional system:
-- Performance baseline measurement (throughput and latency)
-- High-volume message scenarios testing
-- Resource limits and failure modes testing
-- Comparison with existing solutions (Debezium, pglogrepl)
+### Phase 5: Advanced Features 📋 (PLANNED)
+- Schema registry integration for complex types
+- Table/column filtering at processor level
+- Advanced data transformations and enrichment
+- Snapshot support for initial data load
 
-### Phase 6: Performance Optimization 🚀
-Data-driven optimization based on load testing results:
-- Protocol optimization (migrate from SQL polling to streaming replication)
-- Memory optimization (reduce allocations, improve usage patterns)
-- I/O optimization (batch processing and async operations)
-- CPU optimization (optimize hot paths and reduce overhead)
-
-### Phase 7: Production Features 🏢
+### Phase 6: Production Features 🏢 (PLANNED)
 Enterprise-ready capabilities:
-- Transactional Outbox pattern support
-- High availability and failover scenarios
 - Monitoring, metrics, and operational visibility
-- Advanced configuration options and deployment flexibility
+- High availability and failover scenarios
+- Advanced configuration options
+- Performance tuning and optimization
 
 ## Learning Goals for Zig
 - Memory management with allocators
@@ -82,8 +76,8 @@ Enterprise-ready capabilities:
 
 ## Implementation Notes
 
-### Key Dependencies (Current Status)
-- **libpq** ✅ - PostgreSQL client library for logical replication (integrated)
+### Key Dependencies
+- **libpq** ✅ - PostgreSQL streaming replication protocol (integrated)
 - **librdkafka** ✅ - High-performance Kafka client (integrated)
 - **zig-toml** ✅ - TOML configuration parsing (integrated)
 - **zig std.json** ✅ - JSON serialization (using standard library)
@@ -91,69 +85,46 @@ Enterprise-ready capabilities:
 ### Architecture Decisions
 - Use Zig's built-in allocators for memory management
 - Leverage C interop for mature libraries (libpq, librdkafka)
-- Implement async I/O for concurrent WAL processing and Kafka producing
+- Event-driven I/O with poll() for efficient network handling
+- Fail-fast error handling with supervisor-based restart
 - Use error unions for robust error handling throughout the pipeline
 
-### Performance Considerations
-- Minimize memory allocations in hot paths
-- Batch Kafka messages for better throughput
-- Use ring buffers for WAL record queuing
-- Implement backpressure handling for slow consumers
+### Performance Achievements
+- Binary protocol (pgoutput) eliminates text parsing overhead
+- Event-driven I/O reduces CPU usage from 98% to <10%
+- Message batching optimizes burst traffic handling
+- ~3.2k events/sec throughput with 3.73 MiB memory usage
+- At-least-once delivery with LSN feedback after Kafka flush
 
-## Critical Production Improvements
+## Production Enhancements (Post-MVP)
 
-### Phase 1 Enhancements (High Priority)
-- **LSN State Persistence**: Implement file-based LSN tracking to prevent data loss on restart
-  - Store last processed LSN in local state file
-  - Use specific LSN in `pg_logical_slot_get_changes()` instead of NULL
-  - Add LSN validation and recovery logic
+### Already Implemented ✅
+- ✅ LSN tracking with at-least-once delivery guarantee
+- ✅ Replication slot auto-creation and management
+- ✅ Transaction boundary handling (BEGIN/COMMIT internally)
+- ✅ Graceful shutdown with signal handlers (SIGINT, SIGTERM)
+- ✅ Configuration validation on startup
+- ✅ Fail-fast error handling with supervisor restart
+- ✅ Relation registry for table metadata (auto-rebuilds on restart)
 
-- **Robust Replication Slot Management**:
-  - Check slot existence before creation (`pg_replication_slots` query)
-  - Implement graceful slot cleanup on shutdown
-  - Monitor replication lag with `pg_stat_replication` queries
-  - Handle slot conflicts and auto-recovery
+### Planned Improvements 📋
 
-- **Transaction Boundary Handling**:
-  - Parse BEGIN/COMMIT records from test_decoding output
-  - Group changes by transaction ID (XID)
-  - Maintain transaction ordering and atomicity guarantees
+**Snapshot Support:**
+- Initial snapshot before streaming replication starts
+- Consistent point-in-time data capture
+- Handle large tables with pagination
 
-### Phase 2 Enhancements (Medium Priority)
-- **Consistent Snapshots**: Implement initial consistent snapshot before streaming
-  - Create snapshot of existing data when slot is created
-  - Ensure no data loss between snapshot and streaming start
-  - Handle large table snapshots with pagination
+**Advanced Data Types:**
+- PostgreSQL-specific types (JSON, arrays, JSONB)
+- TOAST value handling for large objects
+- Custom type support
 
-- **Schema Change Detection**:
-  - Monitor DDL changes through event triggers or pg_stat_activity
-  - Invalidate cached table metadata on schema changes
-  - Handle column additions/removals gracefully
+**Monitoring and Observability:**
+- Metrics for replication lag and throughput
+- Health checks for slot status and connection
+- Structured metrics export (Prometheus format)
 
-- **Advanced Error Handling**:
-  - Exponential backoff for PostgreSQL reconnections
-  - Circuit breaker pattern for database unavailability
-  - Retry logic with configurable limits and timeouts
-
-### Phase 3 Enhancements (Medium Priority)
-- **Message Format Improvements**:
-  - Generate tombstone events for DELETE operations (Kafka log compaction)
-  - Handle primary key updates as DELETE + INSERT pairs
-  - Add transaction metadata events for consumer coordination
-
-- **Data Type Handling**:
-  - Handle PostgreSQL-specific types (JSON, arrays, custom types)
-  - Deal with generated columns (not captured by pgoutput)
-  - Process TOAST values and large objects
-
-### Phase 4 Enhancements (Low Priority)
-- **Monitoring and Observability**:
-  - Metrics for replication lag, throughput, error rates
-  - Health checks for slot status and connection state
-  - Alerting for critical failures and data loss scenarios
-
-- **Production Readiness**:
-  - Configuration validation and defaults
-  - Signal handling for graceful shutdown
-  - Memory usage monitoring and limits
-  - Log rotation and structured logging
+**Schema Change Handling:**
+- Detect DDL changes via RELATION messages
+- Invalidate cached metadata automatically
+- Handle column additions/removals gracefully

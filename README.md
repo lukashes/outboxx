@@ -9,7 +9,7 @@ Lightweight PostgreSQL CDC tool that streams WAL changes to Kafka. Built in Zig 
 Outboxx captures PostgreSQL database changes in real-time and streams them to Kafka topics. Inspired by Debezium but designed for simplicity and low resource usage.
 
 **Key Features:**
-- PostgreSQL logical replication support ✅
+- PostgreSQL streaming replication (pgoutput) ✅
 - Multi-table CDC streams ✅
 - Kafka producer integration ✅
 - TOML-based configuration ✅
@@ -19,7 +19,7 @@ Outboxx captures PostgreSQL database changes in real-time and streams them to Ka
 
 | Component | Status |
 |-----------|--------|
-| PostgreSQL WAL Reader | ✅ Working |
+| PostgreSQL Streaming Replication | ✅ Working |
 | Message Processing | ✅ Working |
 | Kafka Producer | ✅ Working |
 | TOML Configuration | ✅ Working |
@@ -113,7 +113,7 @@ For complete configuration examples and architectural documentation, see [`docs/
 
 ### 1. Prerequisites
 
-**PostgreSQL Requirements**: Version 12 or later
+**PostgreSQL Requirements**: Version 14 or later (for pgoutput protocol v2)
 
 **Configure PostgreSQL** (`postgresql.conf`):
 ```ini
@@ -141,7 +141,7 @@ GRANT SELECT ON TABLE my_table TO outboxx_user;
 ALTER TABLE my_table REPLICA IDENTITY FULL;
 ```
 
-**Note**: Currently supports `public` schema only.
+**Note**: Outboxx automatically creates replication slot and publication on startup. Currently supports `public` schema only.
 
 **Kafka Setup**:
 - Topics are auto-created by default (`auto.create.topics.enable=true`)

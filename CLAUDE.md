@@ -17,14 +17,14 @@ Outboxx is a lightweight PostgreSQL Change Data Capture (CDC) tool written in Zi
 - **Performance Focus**: Minimize memory allocations and optimize for high throughput
 
 ### Current Implementation Status
-- ✅ **PostgreSQL Integration**: Logical replication connectivity and slot management
-- ✅ **WAL Change Detection**: INSERT, UPDATE, DELETE operations with test_decoding plugin
-- ✅ **Message Processing**: WAL message parsing with JSON serialization
-- ✅ **Kafka Integration**: Producer and Consumer implementation with librdkafka
-- ✅ **Comprehensive Testing**: Integration tests with real PostgreSQL and Kafka
+- ✅ **PostgreSQL Streaming Replication**: Binary pgoutput protocol with real-time push
+- ✅ **WAL Change Detection**: INSERT, UPDATE, DELETE operations via streaming protocol
+- ✅ **Message Processing**: Binary message decoding with JSON serialization
+- ✅ **Kafka Integration**: Producer implementation with at-least-once delivery
+- ✅ **Comprehensive Testing**: Unit, integration, and E2E tests with real services
 - ✅ **Development Environment**: Docker Compose setup with PostgreSQL and Kafka
 - ✅ **Nix Environment**: Isolated, reproducible development environment with Zig 0.15.1
-- ✅ **Dependency Management**: libpq and librdkafka ready via Nix
+- ✅ **Production-Ready**: ~3.2k events/sec throughput, 3.73 MiB memory usage
 
 ## Development Workflow
 
@@ -90,36 +90,48 @@ The project follows a clean separation of concerns with distinct layers:
 ┌─────────────┐
 │ PostgreSQL  │ (Source)
 └──────┬──────┘
-       │ WAL events
+       │ Binary pgoutput stream (CopyBoth mode)
        ↓
-┌─────────────────────┐
-│ WAL Parser          │ src/source/postgres/
-│ (PostgreSQL-specific)│
-└──────┬──────────────┘
+┌──────────────────────────┐
+│ ReplicationProtocol      │ src/source/postgres/
+│ (Low-level libpq)        │
+└──────┬───────────────────┘
+       │ XLogData messages
+       ↓
+┌──────────────────────────┐
+│ PgOutputDecoder          │ src/source/postgres/
+│ (Binary format parser)   │
+└──────┬───────────────────┘
+       │ BEGIN/INSERT/COMMIT
+       ↓
+┌──────────────────────────┐
+│ PostgresStreamingSource  │ src/source/postgres/
+│ (Orchestrator)           │
+└──────┬───────────────────┘
        │ Domain Model (ChangeEvent)
        ↓
-┌─────────────────────┐
-│ Domain Layer        │ src/domain/
-│ (Pure Data Model)   │
-└──────┬──────────────┘
+┌──────────────────────────┐
+│ Domain Layer             │ src/domain/
+│ (Pure Data Model)        │
+└──────┬───────────────────┘
        │ ChangeEvent
        ↓
-┌─────────────────────┐
-│ JSON Serializer     │ src/serialization/
-│ (Format-specific)   │
-└──────┬──────────────┘
+┌──────────────────────────┐
+│ JSON Serializer          │ src/serialization/
+│ (Format-specific)        │
+└──────┬───────────────────┘
        │ Binary JSON
        ↓
-┌─────────────────────┐
-│ CDC Processor       │ src/processor/
-│ (Orchestration)     │
-└──────┬──────────────┘
+┌──────────────────────────┐
+│ CDC Processor            │ src/processor/
+│ (Orchestration)          │
+└──────┬───────────────────┘
        │ (topic, key, payload)
        ↓
-┌─────────────────────┐
-│ Kafka Producer      │ src/kafka/
-│ (Sink)              │
-└──────┬──────────────┘
+┌──────────────────────────┐
+│ Kafka Producer           │ src/kafka/
+│ (Sink)                   │
+└──────┬───────────────────┘
        │
 ┌──────▼──────┐
 │   Kafka     │ (Target)
@@ -136,11 +148,12 @@ The project follows a clean separation of concerns with distinct layers:
 - No external dependencies, easily testable
 
 #### Source Layer (`src/source/postgres/`)
-- **WalReader**: Connects to PostgreSQL logical replication, manages slots and publications
-- **WalParser**: Parses PostgreSQL WAL messages into domain model
-- **FieldParser**: Handles PostgreSQL-specific field type parsing
-- Converts `test_decoding` output to `ChangeEvent`
-- Independent from serialization format
+- **PostgresStreamingSource**: Main orchestrator for streaming replication
+- **ReplicationProtocol**: Low-level libpq streaming protocol (CopyBoth mode)
+- **PgOutputDecoder**: Binary message parser (BEGIN, COMMIT, INSERT, UPDATE, DELETE, RELATION)
+- **RelationRegistry**: Maps relation_id → table metadata (auto-rebuilds on restart)
+- **Validator**: PostgreSQL configuration validation (wal_level, version checks)
+- Binary protocol (pgoutput) for efficient decoding, no text parsing
 
 #### Serialization Layer (`src/serialization/`)
 - **JsonSerializer**: Converts domain model to JSON format
@@ -148,18 +161,12 @@ The project follows a clean separation of concerns with distinct layers:
 - Easy to add new formats (Avro, Protobuf) in the future
 
 #### Flow Layer (`src/processor/`)
-- **CdcProcessor**: Orchestrates the entire pipeline
-- Manages WAL reader, parser, serializer, and Kafka producer
-- Handles routing logic (topic, partition key)
-- Multi-stream support with isolated replication slots
-- **Fast Table Filter**: Optimizes processing by skipping irrelevant tables early
-  - Uses `test_decoding` which sends ALL tables (no PostgreSQL-level filtering)
-  - Extracts table name from WAL message (~5-10 operations, 0 allocations)
-  - Checks against monitored tables HashSet (O(1) lookup)
-  - Skips expensive field parsing for non-monitored tables (~50-100 operations saved)
-  - Non-strict approach: false positives OK (proceed to full parsing), false negatives NOT OK
-  - ~8-10x performance improvement when monitoring <20% of database tables
-  - Two-level filtering: fast filter (early exit) → matchStreams (routing logic)
+- **Processor**: Orchestrates the entire pipeline (generic over source type)
+- Manages streaming source, serializer, and Kafka producer
+- Handles routing logic (matchStreams: table → topic mapping)
+- Multi-stream support with Publications for table filtering
+- **At-least-once delivery**: Confirms LSN to PostgreSQL ONLY after Kafka flush succeeds
+- **Fail-fast error handling**: Errors propagate to supervisor for restart
 
 #### Sink Layer (`src/kafka/`)
 - **KafkaProducer**: Minimal wrapper around librdkafka
@@ -261,20 +268,20 @@ assert(messages[0].data.name == "Alice"); // ✅ Correct data
 ### Key Implementation Details
 
 #### PostgreSQL Integration
-- Uses PostgreSQL logical replication with `test_decoding` plugin
-- **Important**: `test_decoding` does NOT filter by Publication - sends ALL database tables
-  - Fast table filter at processor level compensates for this
-  - Monitored tables configured in `streams` configuration
+- Uses PostgreSQL streaming replication with `pgoutput` plugin (binary protocol)
+- **Publications filter at PostgreSQL level**: Only subscribed tables sent (efficient)
+- Requires PostgreSQL 14+ for pgoutput protocol v2
 - Requires `REPLICA IDENTITY FULL` for complete UPDATE/DELETE visibility
 - WAL flushing (`pg_switch_wal()`) ensures reliable test execution
-- Each test uses isolated replication slots to prevent interference
+- Each test uses isolated replication slots and publications to prevent interference
+- Auto-creates replication slot and publication on startup
 
 #### Performance Optimizations
-- **Fast Table Filter**: O(1) lookup skips parsing for non-monitored tables
-  - Critical when monitoring small subset of tables (e.g., 2 out of 100 tables)
-  - Avoids expensive field parsing (~50-100 operations per message)
-  - Permissive approach: if uncertain, proceeds to full parsing
-- LSN tracking for ALL events (including BEGIN/COMMIT) ensures slot advances correctly
+- **Binary protocol**: pgoutput eliminates text parsing overhead entirely
+- **Event-driven I/O**: poll() syscall reduces CPU from 98% to <10%
+- **Message batching**: Drain buffered messages after poll() wakeup for better throughput
+- **LSN feedback timing**: Confirm to PostgreSQL ONLY after Kafka flush (at-least-once guarantee)
+- **Relation registry**: In-memory HashMap, auto-rebuilds on restart (no disk I/O)
 
 #### Message Format
 - Kafka topics follow `schema.table` naming convention (e.g., `public.users`)
@@ -290,24 +297,25 @@ assert(messages[0].data.name == "Alice"); // ✅ Correct data
 │   ├── domain/            # Domain layer (pure data model)
 │   │   └── change_event.zig  # ChangeEvent, Metadata, DataSection
 │   ├── source/            # Source adapters
-│   │   └── postgres/      # PostgreSQL-specific components
-│   │       ├── wal_parser.zig      # WAL message parser (to domain model)
-│   │       ├── wal_reader.zig      # WAL reader (logical replication)
-│   │       ├── wal_reader_test.zig # WAL reader integration tests
-│   │       ├── validator.zig       # PostgreSQL configuration validator
-│   │       └── validator_test.zig  # Validator integration tests
+│   │   └── postgres/      # PostgreSQL streaming replication
+│   │       ├── source.zig              # Main orchestrator (PostgresStreamingSource)
+│   │       ├── replication_protocol.zig # Low-level libpq protocol (CopyBoth mode)
+│   │       ├── pg_output_decoder.zig   # Binary message parser
+│   │       ├── relation_registry.zig   # Table metadata mapping
+│   │       ├── validator.zig           # PostgreSQL configuration validator
+│   │       ├── integration_test.zig    # Integration tests
+│   │       └── *_test.zig              # Unit tests for each component
 │   ├── serialization/     # Serialization layer
 │   │   └── json.zig       # JSON serializer
 │   ├── processor/         # Flow orchestration
-│   │   ├── processor.zig  # CDC pipeline orchestrator
-│   │   └── cdc_processor_test.zig # Processor tests (unit/integration)
+│   │   ├── processor.zig  # CDC pipeline orchestrator (generic over source)
+│   │   └── processor_test.zig # Processor tests (unit/integration)
 │   ├── kafka/             # Kafka sink adapter
 │   │   ├── producer.zig      # Kafka producer
 │   │   └── producer_test.zig # Kafka integration tests
 │   ├── config/            # Configuration management
 │   │   ├── config.zig     # TOML-based configuration
 │   │   └── config_test.zig # Configuration tests
-│   └── integration_test.zig # Component integration tests
 ├── tests/                 # E2E tests (separate from src/)
 │   ├── test_helpers.zig   # Shared test utilities
 │   │                      # - consumeAllMessages() - Kafka consumer helper
@@ -605,9 +613,12 @@ psql -h localhost -p 5432 -U postgres -d outboxx_test
 # Check replication slots
 SELECT * FROM pg_replication_slots;
 
-# Manual WAL testing
-SELECT pg_create_logical_replication_slot('manual_slot', 'test_decoding');
-SELECT * FROM pg_logical_slot_get_changes('manual_slot', NULL, NULL);
+# Manual streaming replication testing
+SELECT pg_create_logical_replication_slot('manual_slot', 'pgoutput');
+CREATE PUBLICATION manual_pub FOR TABLE users;
+
+# Use pg_recvlogical or Outboxx to read binary pgoutput messages
+# (SQL queries don't work with pgoutput - binary protocol only)
 ```
 
 ## Architecture Benefits
