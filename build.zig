@@ -36,7 +36,7 @@ pub fn build(b: *std.Build) void {
 
     // PostgreSQL WAL parser module (new architecture)
     const postgres_wal_parser_module = b.createModule(.{
-        .root_source_file = b.path("src/source/postgres/wal_parser.zig"),
+        .root_source_file = b.path("src/source/postgres_polling/wal_parser.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -44,10 +44,20 @@ pub fn build(b: *std.Build) void {
 
     // PostgreSQL WAL reader module
     const wal_reader_module = b.createModule(.{
-        .root_source_file = b.path("src/source/postgres/wal_reader.zig"),
+        .root_source_file = b.path("src/source/postgres_polling/wal_reader.zig"),
         .target = target,
         .optimize = optimize,
     });
+
+    // PostgreSQL polling source module (adapter)
+    const postgres_polling_source_module = b.createModule(.{
+        .root_source_file = b.path("src/source/postgres_polling/source.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    postgres_polling_source_module.addImport("domain", domain_module);
+    postgres_polling_source_module.addImport("wal_reader", wal_reader_module);
+    postgres_polling_source_module.addImport("wal_parser", postgres_wal_parser_module);
 
     // Kafka producer module
     const kafka_producer_module = b.createModule(.{
@@ -63,9 +73,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     cdc_processor_module.addImport("domain", domain_module);
-    cdc_processor_module.addImport("postgres_wal_parser", postgres_wal_parser_module);
+    cdc_processor_module.addImport("postgres_polling_source", postgres_polling_source_module);
     cdc_processor_module.addImport("json_serialization", json_serialization_module);
-    cdc_processor_module.addImport("wal_reader", wal_reader_module);
+    cdc_processor_module.addImport("wal_reader", wal_reader_module); // Still needed for error types
     cdc_processor_module.addImport("kafka_producer", kafka_producer_module);
     cdc_processor_module.addImport("config", config_module);
 
@@ -85,6 +95,7 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("json_serialization", json_serialization_module);
     exe.root_module.addImport("postgres_wal_parser", postgres_wal_parser_module);
     exe.root_module.addImport("wal_reader", wal_reader_module);
+    exe.root_module.addImport("postgres_polling_source", postgres_polling_source_module);
     exe.root_module.addImport("kafka_producer", kafka_producer_module);
     exe.root_module.addImport("config", config_module);
 
@@ -137,7 +148,7 @@ pub fn build(b: *std.Build) void {
 
     const wal_reader_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/source/postgres/wal_reader_test.zig"),
+            .root_source_file = b.path("src/source/postgres_polling/wal_reader_test.zig"),
             .target = target,
             .optimize = optimize,
         }),
@@ -163,7 +174,7 @@ pub fn build(b: *std.Build) void {
     // PostgreSQL WAL parser tests (new)
     const postgres_wal_parser_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/source/postgres/wal_parser.zig"),
+            .root_source_file = b.path("src/source/postgres_polling/wal_parser.zig"),
             .target = target,
             .optimize = optimize,
         }),
@@ -184,13 +195,66 @@ pub fn build(b: *std.Build) void {
     // PostgresValidator tests
     const validator_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/source/postgres/validator_test.zig"),
+            .root_source_file = b.path("src/source/postgres_polling/validator_test.zig"),
             .target = target,
             .optimize = optimize,
         }),
     });
     validator_tests.linkLibC();
     validator_tests.linkSystemLibrary("pq");
+
+    // ReplicationProtocol tests
+    const replication_protocol_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/source/postgres_streaming/replication_protocol_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    replication_protocol_tests.linkLibC();
+    replication_protocol_tests.linkSystemLibrary("pq");
+
+    // PgOutputDecoder tests
+    const pg_output_decoder_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/source/postgres_streaming/pg_output_decoder_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
+    // RelationRegistry tests
+    const relation_registry_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/source/postgres_streaming/relation_registry_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
+    // PostgresStreamingSource tests
+    const streaming_source_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/source/postgres_streaming/source_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    streaming_source_tests.root_module.addImport("domain", domain_module);
+    streaming_source_tests.linkLibC();
+    streaming_source_tests.linkSystemLibrary("pq");
+
+    // Streaming replication integration tests
+    const streaming_integration_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/source/postgres_streaming/integration_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    streaming_integration_tests.root_module.addImport("domain", domain_module);
+    streaming_integration_tests.linkLibC();
+    streaming_integration_tests.linkSystemLibrary("pq");
 
     // Test helpers module (shared utilities for all tests)
     const test_helpers_module = b.createModule(.{
@@ -202,6 +266,12 @@ pub fn build(b: *std.Build) void {
 
     // Add test_helpers to wal_reader_tests
     wal_reader_tests.root_module.addImport("test_helpers", test_helpers_module);
+
+    // Add test_helpers to replication_protocol_tests
+    replication_protocol_tests.root_module.addImport("test_helpers", test_helpers_module);
+
+    // Add test_helpers to streaming_integration_tests
+    streaming_integration_tests.root_module.addImport("test_helpers", test_helpers_module);
 
     // CdcProcessor tests (integration tests requiring PostgreSQL and Kafka)
     const cdc_processor_tests = b.addTest(.{
@@ -215,6 +285,7 @@ pub fn build(b: *std.Build) void {
     cdc_processor_tests.root_module.addImport("cdc_processor", cdc_processor_module);
     cdc_processor_tests.root_module.addImport("config", config_module);
     cdc_processor_tests.root_module.addImport("wal_reader", wal_reader_module);
+    cdc_processor_tests.root_module.addImport("postgres_polling_source", postgres_polling_source_module);
     cdc_processor_tests.linkLibC();
     cdc_processor_tests.linkSystemLibrary("pq");
     cdc_processor_tests.linkSystemLibrary("rdkafka");
@@ -226,6 +297,10 @@ pub fn build(b: *std.Build) void {
     const run_postgres_wal_parser_tests = b.addRunArtifact(postgres_wal_parser_tests);
     const run_kafka_producer_tests = b.addRunArtifact(kafka_producer_tests);
     const run_validator_tests = b.addRunArtifact(validator_tests);
+    const run_replication_protocol_tests = b.addRunArtifact(replication_protocol_tests);
+    const run_pg_output_decoder_tests = b.addRunArtifact(pg_output_decoder_tests);
+    const run_relation_registry_tests = b.addRunArtifact(relation_registry_tests);
+    const run_streaming_source_tests = b.addRunArtifact(streaming_source_tests);
     const run_cdc_processor_tests = b.addRunArtifact(cdc_processor_tests);
 
     const test_step = b.step("test", "Run unit tests");
@@ -236,6 +311,10 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_postgres_wal_parser_tests.step);
     test_step.dependOn(&run_kafka_producer_tests.step);
     test_step.dependOn(&run_validator_tests.step);
+    test_step.dependOn(&run_replication_protocol_tests.step);
+    test_step.dependOn(&run_pg_output_decoder_tests.step);
+    test_step.dependOn(&run_relation_registry_tests.step);
+    test_step.dependOn(&run_streaming_source_tests.step);
     test_step.dependOn(&run_cdc_processor_tests.step);
 
     // E2E Tests - Full cycle: PostgreSQL → CDC → Kafka
@@ -253,6 +332,7 @@ pub fn build(b: *std.Build) void {
     e2e_basic_test.root_module.addImport("cdc_processor", cdc_processor_module);
     e2e_basic_test.root_module.addImport("config", config_module);
     e2e_basic_test.root_module.addImport("wal_reader", wal_reader_module);
+    e2e_basic_test.root_module.addImport("postgres_polling_source", postgres_polling_source_module);
     e2e_basic_test.linkLibC();
     e2e_basic_test.linkSystemLibrary("pq");
     e2e_basic_test.linkSystemLibrary("rdkafka");
@@ -271,9 +351,11 @@ pub fn build(b: *std.Build) void {
     kafka_integration_tests.linkSystemLibrary("rdkafka");
 
     const run_kafka_integration_tests = b.addRunArtifact(kafka_integration_tests);
+    const run_streaming_integration_tests = b.addRunArtifact(streaming_integration_tests);
 
     const integration_test_step = b.step("test-integration", "Run integration tests");
     integration_test_step.dependOn(&run_kafka_integration_tests.step);
+    integration_test_step.dependOn(&run_streaming_integration_tests.step);
 
     // E2E test step - Full pipeline tests (PostgreSQL → CDC → Kafka)
     const e2e_test_step = b.step("test-e2e", "Run end-to-end tests");

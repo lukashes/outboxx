@@ -153,9 +153,9 @@ test "JsonSerializer serialize INSERT event" {
     const allocator = gpa.allocator();
 
     const metadata = Metadata{
-        .source = "postgres",
-        .resource = "users",
-        .schema = "public",
+        .source = try allocator.dupe(u8, "postgres"),
+        .resource = try allocator.dupe(u8, "users"),
+        .schema = try allocator.dupe(u8, "public"),
         .timestamp = 1234567890,
         .lsn = null,
     };
@@ -198,9 +198,9 @@ test "JsonSerializer serialize UPDATE event" {
     const allocator = gpa.allocator();
 
     const metadata = Metadata{
-        .source = "postgres",
-        .resource = "users",
-        .schema = "public",
+        .source = try allocator.dupe(u8, "postgres"),
+        .resource = try allocator.dupe(u8, "users"),
+        .schema = try allocator.dupe(u8, "public"),
         .timestamp = 1234567890,
         .lsn = null,
     };
@@ -244,9 +244,9 @@ test "JsonSerializer validate JSON output is parseable" {
     const allocator = gpa.allocator();
 
     const metadata = Metadata{
-        .source = "postgres",
-        .resource = "users",
-        .schema = "public",
+        .source = try allocator.dupe(u8, "postgres"),
+        .resource = try allocator.dupe(u8, "users"),
+        .schema = try allocator.dupe(u8, "public"),
         .timestamp = 1234567890,
         .lsn = null,
     };
@@ -289,9 +289,9 @@ test "JsonSerializer string escaping" {
     const allocator = gpa.allocator();
 
     const metadata = Metadata{
-        .source = "postgres",
-        .resource = "users",
-        .schema = "public",
+        .source = try allocator.dupe(u8, "postgres"),
+        .resource = try allocator.dupe(u8, "users"),
+        .schema = try allocator.dupe(u8, "public"),
         .timestamp = 1234567890,
         .lsn = null,
     };

@@ -3,7 +3,8 @@ const config_mod = @import("config");
 const Config = config_mod.Config;
 const Stream = config_mod.Stream;
 const Processor = @import("processor/processor.zig").Processor;
-const PostgresValidator = @import("source/postgres/validator.zig").PostgresValidator;
+const PostgresValidator = @import("source/postgres_polling/validator.zig").PostgresValidator;
+const PostgresPollingSource = @import("postgres_polling_source").PostgresPollingSource;
 const builtin = @import("builtin");
 const posix = std.posix;
 const constants = @import("constants.zig");
@@ -85,7 +86,10 @@ fn run() !void {
 
     try wal_reader.initialize(conn_str, tables);
 
-    var processor = Processor.init(allocator, &wal_reader, config.streams, config.sink.kafka.?);
+    var source = PostgresPollingSource.init(allocator, &wal_reader);
+    defer source.deinit();
+
+    var processor = Processor.init(allocator, source, config.streams, config.sink.kafka.?);
     defer processor.deinit();
 
     try processor.initialize();

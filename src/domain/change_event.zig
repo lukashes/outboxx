@@ -136,6 +136,12 @@ pub const ChangeEvent = struct {
     }
 
     pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+        // Free metadata strings (owned by ChangeEvent)
+        allocator.free(self.meta.source);
+        allocator.free(self.meta.resource);
+        allocator.free(self.meta.schema);
+
+        // Free data rows
         switch (self.data) {
             .insert => |*data| {
                 var mut_data = data.*;
@@ -192,9 +198,9 @@ test "ChangeEvent creation and memory management" {
     const allocator = gpa.allocator();
 
     const metadata = Metadata{
-        .source = "postgres",
-        .resource = "users",
-        .schema = "public",
+        .source = try allocator.dupe(u8, "postgres"),
+        .resource = try allocator.dupe(u8, "users"),
+        .schema = try allocator.dupe(u8, "public"),
         .timestamp = 1234567890,
         .lsn = null,
     };
@@ -255,9 +261,9 @@ test "UPDATE event with old and new data" {
     const allocator = gpa.allocator();
 
     const metadata = Metadata{
-        .source = "postgres",
-        .resource = "users",
-        .schema = "public",
+        .source = try allocator.dupe(u8, "postgres"),
+        .resource = try allocator.dupe(u8, "users"),
+        .schema = try allocator.dupe(u8, "public"),
         .timestamp = 1234567890,
         .lsn = null,
     };
@@ -302,16 +308,16 @@ test "getPartitionKeyValue extracts field values" {
     }
     const allocator = gpa.allocator();
 
-    const metadata = Metadata{
-        .source = "postgres",
-        .resource = "users",
-        .schema = "public",
-        .timestamp = 1234567890,
-        .lsn = null,
-    };
-
     // Test with INSERT (integer id)
     {
+        const metadata = Metadata{
+            .source = try allocator.dupe(u8, "postgres"),
+            .resource = try allocator.dupe(u8, "users"),
+            .schema = try allocator.dupe(u8, "public"),
+            .timestamp = 1234567890,
+            .lsn = null,
+        };
+
         var event = ChangeEvent.init(ChangeOperation.INSERT, metadata);
         defer event.deinit(allocator);
 
@@ -340,6 +346,14 @@ test "getPartitionKeyValue extracts field values" {
 
     // Test with UPDATE (uses new data)
     {
+        const metadata = Metadata{
+            .source = try allocator.dupe(u8, "postgres"),
+            .resource = try allocator.dupe(u8, "users"),
+            .schema = try allocator.dupe(u8, "public"),
+            .timestamp = 1234567890,
+            .lsn = null,
+        };
+
         var event = ChangeEvent.init(ChangeOperation.UPDATE, metadata);
         defer event.deinit(allocator);
 

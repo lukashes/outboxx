@@ -173,12 +173,20 @@ pub const WalParser = struct {
         const full_table_name = wal_data[table_start .. table_start + colon_pos];
 
         const dot_pos = std.mem.indexOf(u8, full_table_name, ".") orelse return null;
-        const schema_name = full_table_name[0..dot_pos];
-        const table_name = full_table_name[dot_pos + 1 ..];
+        const schema_name_slice = full_table_name[0..dot_pos];
+        const table_name_slice = full_table_name[dot_pos + 1 ..];
+
+        // Duplicate strings (wal_data will be freed, so we need owned copies)
+        const schema_name = try self.allocator.dupe(u8, schema_name_slice);
+        errdefer self.allocator.free(schema_name);
+        const table_name = try self.allocator.dupe(u8, table_name_slice);
+        errdefer self.allocator.free(table_name);
+        const source_name_owned = try self.allocator.dupe(u8, source_name);
+        errdefer self.allocator.free(source_name_owned);
 
         // Create metadata
         const metadata = Metadata{
-            .source = source_name,
+            .source = source_name_owned,
             .resource = table_name,
             .schema = schema_name,
             .timestamp = std.time.timestamp(),
