@@ -85,6 +85,18 @@ pub const PostgresStreamingSource = struct {
             return StreamingSourceError.ConnectionFailed;
         };
 
+        // Create publication if it doesn't exist
+        self.protocol.createPublicationIfNotExists() catch |err| {
+            std.log.warn("Failed to create publication: {}", .{err});
+            return StreamingSourceError.ConnectionFailed;
+        };
+
+        // Create replication slot if it doesn't exist
+        self.protocol.createSlotIfNotExists() catch |err| {
+            std.log.warn("Failed to create replication slot: {}", .{err});
+            return StreamingSourceError.ConnectionFailed;
+        };
+
         self.protocol.startReplication(start_lsn) catch |err| {
             std.log.warn("Failed to start replication: {}", .{err});
             return StreamingSourceError.ReplicationFailed;
@@ -117,7 +129,7 @@ pub const PostgresStreamingSource = struct {
 
         while (changes.items.len < limit and std.time.milliTimestamp() < deadline) {
             const remaining_time = @max(deadline - std.time.milliTimestamp(), 0);
-            const timeout: i32 = @intCast(@min(remaining_time, 100)); // Poll every 100ms max
+            const timeout: i32 = @intCast(@min(remaining_time, 200)); // Poll every 200ms max (reduced CPU spinning)
 
             const repl_msg = self.protocol.receiveMessage(timeout) catch |err| {
                 std.log.warn("Failed to receive replication message: {}", .{err});
@@ -335,3 +347,461 @@ pub const PostgresStreamingSource = struct {
         return try RowDataHelpers.finalize(&builder, self.allocator);
     }
 };
+
+// Unit Tests
+const testing = std.testing;
+
+test "convertInsert: basic INSERT message to ChangeEvent" {
+    const allocator = testing.allocator;
+
+    // Setup: Create source with registry
+    var source = PostgresStreamingSource.init(allocator, "test_slot", "test_pub");
+    defer source.deinit();
+
+    // Register test relation (id=100, public.users, columns: id, name)
+    var rel_msg = pg_output_decoder.RelationMessage{
+        .relation_id = 100,
+        .namespace = try allocator.dupe(u8, "public"),
+        .relation_name = try allocator.dupe(u8, "users"),
+        .replica_identity = 'd',
+        .columns = try allocator.alloc(pg_output_decoder.RelationMessageColumn, 2),
+    };
+    defer rel_msg.deinit(allocator);
+
+    rel_msg.columns[0] = pg_output_decoder.RelationMessageColumn{
+        .flags = 1,
+        .name = try allocator.dupe(u8, "id"),
+        .data_type = 23, // int4
+        .type_modifier = -1,
+    };
+    rel_msg.columns[1] = pg_output_decoder.RelationMessageColumn{
+        .flags = 0,
+        .name = try allocator.dupe(u8, "name"),
+        .data_type = 25, // text
+        .type_modifier = -1,
+    };
+
+    try source.registry.register(rel_msg);
+
+    // Create INSERT message
+    var insert_msg = pg_output_decoder.InsertMessage{
+        .relation_id = 100,
+        .new_tuple = pg_output_decoder.TupleMessage{
+            .columns = try allocator.alloc(pg_output_decoder.TupleData, 2),
+        },
+    };
+    insert_msg.new_tuple.columns[0] = pg_output_decoder.TupleData{
+        .column_type = .text,
+        .value = try allocator.dupe(u8, "1"),
+    };
+    insert_msg.new_tuple.columns[1] = pg_output_decoder.TupleData{
+        .column_type = .text,
+        .value = try allocator.dupe(u8, "Alice"),
+    };
+    defer insert_msg.new_tuple.deinit(allocator);
+
+    // Call convertInsert
+    var event = try source.convertInsert(insert_msg);
+    defer event.deinit(allocator);
+
+    // Verify: operation type
+    try testing.expectEqualStrings("INSERT", event.op);
+
+    // Verify: metadata
+    try testing.expectEqualStrings("postgres", event.meta.source);
+    try testing.expectEqualStrings("users", event.meta.resource);
+    try testing.expectEqualStrings("public", event.meta.schema);
+    try testing.expect(event.meta.timestamp > 0);
+
+    // Verify: insert_data present
+    try testing.expect(event.data == .insert);
+    const insert_data = event.data.insert;
+    try testing.expectEqual(@as(usize, 2), insert_data.len);
+
+    // Verify: field values
+    try testing.expectEqualStrings("id", insert_data[0].name);
+    try testing.expect(insert_data[0].value == .string);
+    try testing.expectEqualStrings("1", insert_data[0].value.string);
+
+    try testing.expectEqualStrings("name", insert_data[1].name);
+    try testing.expect(insert_data[1].value == .string);
+    try testing.expectEqualStrings("Alice", insert_data[1].value.string);
+}
+
+test "convertUpdate: UPDATE message with old and new tuples" {
+    const allocator = testing.allocator;
+
+    // Setup: Create source with registry
+    var source = PostgresStreamingSource.init(allocator, "test_slot", "test_pub");
+    defer source.deinit();
+
+    // Register test relation (id=100, public.users, columns: id, name)
+    var rel_msg = pg_output_decoder.RelationMessage{
+        .relation_id = 100,
+        .namespace = try allocator.dupe(u8, "public"),
+        .relation_name = try allocator.dupe(u8, "users"),
+        .replica_identity = 'd',
+        .columns = try allocator.alloc(pg_output_decoder.RelationMessageColumn, 2),
+    };
+    defer rel_msg.deinit(allocator);
+
+    rel_msg.columns[0] = pg_output_decoder.RelationMessageColumn{
+        .flags = 1,
+        .name = try allocator.dupe(u8, "id"),
+        .data_type = 23, // int4
+        .type_modifier = -1,
+    };
+    rel_msg.columns[1] = pg_output_decoder.RelationMessageColumn{
+        .flags = 0,
+        .name = try allocator.dupe(u8, "name"),
+        .data_type = 25, // text
+        .type_modifier = -1,
+    };
+
+    try source.registry.register(rel_msg);
+
+    // Create UPDATE message with old and new tuples
+    var update_msg = pg_output_decoder.UpdateMessage{
+        .relation_id = 100,
+        .old_tuple = pg_output_decoder.TupleMessage{
+            .columns = try allocator.alloc(pg_output_decoder.TupleData, 2),
+        },
+        .new_tuple = pg_output_decoder.TupleMessage{
+            .columns = try allocator.alloc(pg_output_decoder.TupleData, 2),
+        },
+    };
+    defer update_msg.deinit(allocator);
+
+    // Old tuple: id=1, name=Alice
+    update_msg.old_tuple.?.columns[0] = pg_output_decoder.TupleData{
+        .column_type = .text,
+        .value = try allocator.dupe(u8, "1"),
+    };
+    update_msg.old_tuple.?.columns[1] = pg_output_decoder.TupleData{
+        .column_type = .text,
+        .value = try allocator.dupe(u8, "Alice"),
+    };
+
+    // New tuple: id=1, name=Bob
+    update_msg.new_tuple.columns[0] = pg_output_decoder.TupleData{
+        .column_type = .text,
+        .value = try allocator.dupe(u8, "1"),
+    };
+    update_msg.new_tuple.columns[1] = pg_output_decoder.TupleData{
+        .column_type = .text,
+        .value = try allocator.dupe(u8, "Bob"),
+    };
+
+    // Call convertUpdate
+    var event = try source.convertUpdate(update_msg);
+    defer event.deinit(allocator);
+
+    // Verify: operation type
+    try testing.expectEqualStrings("UPDATE", event.op);
+
+    // Verify: metadata
+    try testing.expectEqualStrings("postgres", event.meta.source);
+    try testing.expectEqualStrings("users", event.meta.resource);
+    try testing.expectEqualStrings("public", event.meta.schema);
+    try testing.expect(event.meta.timestamp > 0);
+
+    // Verify: update data present
+    try testing.expect(event.data == .update);
+    const new_data = event.data.update.new;
+    const old_data = event.data.update.old;
+
+    // Verify: new_data
+    try testing.expectEqual(@as(usize, 2), new_data.len);
+    try testing.expectEqualStrings("id", new_data[0].name);
+    try testing.expectEqualStrings("1", new_data[0].value.string);
+    try testing.expectEqualStrings("name", new_data[1].name);
+    try testing.expectEqualStrings("Bob", new_data[1].value.string);
+
+    // Verify: old_data
+    try testing.expectEqual(@as(usize, 2), old_data.len);
+    try testing.expectEqualStrings("id", old_data[0].name);
+    try testing.expectEqualStrings("1", old_data[0].value.string);
+    try testing.expectEqualStrings("name", old_data[1].name);
+    try testing.expectEqualStrings("Alice", old_data[1].value.string);
+}
+
+test "convertDelete: DELETE message to ChangeEvent" {
+    const allocator = testing.allocator;
+
+    // Setup: Create source with registry
+    var source = PostgresStreamingSource.init(allocator, "test_slot", "test_pub");
+    defer source.deinit();
+
+    // Register test relation
+    var rel_msg = pg_output_decoder.RelationMessage{
+        .relation_id = 100,
+        .namespace = try allocator.dupe(u8, "public"),
+        .relation_name = try allocator.dupe(u8, "users"),
+        .replica_identity = 'd',
+        .columns = try allocator.alloc(pg_output_decoder.RelationMessageColumn, 2),
+    };
+    defer rel_msg.deinit(allocator);
+
+    rel_msg.columns[0] = pg_output_decoder.RelationMessageColumn{
+        .flags = 1,
+        .name = try allocator.dupe(u8, "id"),
+        .data_type = 23,
+        .type_modifier = -1,
+    };
+    rel_msg.columns[1] = pg_output_decoder.RelationMessageColumn{
+        .flags = 0,
+        .name = try allocator.dupe(u8, "name"),
+        .data_type = 25,
+        .type_modifier = -1,
+    };
+
+    try source.registry.register(rel_msg);
+
+    // Create DELETE message
+    var delete_msg = pg_output_decoder.DeleteMessage{
+        .relation_id = 100,
+        .old_tuple = pg_output_decoder.TupleMessage{
+            .columns = try allocator.alloc(pg_output_decoder.TupleData, 2),
+        },
+    };
+    defer delete_msg.deinit(allocator);
+
+    delete_msg.old_tuple.columns[0] = pg_output_decoder.TupleData{
+        .column_type = .text,
+        .value = try allocator.dupe(u8, "1"),
+    };
+    delete_msg.old_tuple.columns[1] = pg_output_decoder.TupleData{
+        .column_type = .text,
+        .value = try allocator.dupe(u8, "Alice"),
+    };
+
+    // Call convertDelete
+    var event = try source.convertDelete(delete_msg);
+    defer event.deinit(allocator);
+
+    // Verify: operation type
+    try testing.expectEqualStrings("DELETE", event.op);
+
+    // Verify: metadata
+    try testing.expectEqualStrings("postgres", event.meta.source);
+    try testing.expectEqualStrings("users", event.meta.resource);
+    try testing.expectEqualStrings("public", event.meta.schema);
+
+    // Verify: delete_data present
+    try testing.expect(event.data == .delete);
+    const delete_data = event.data.delete;
+    try testing.expectEqual(@as(usize, 2), delete_data.len);
+    try testing.expectEqualStrings("id", delete_data[0].name);
+    try testing.expectEqualStrings("1", delete_data[0].value.string);
+    try testing.expectEqualStrings("name", delete_data[1].name);
+    try testing.expectEqualStrings("Alice", delete_data[1].value.string);
+}
+
+test "tupleToRowData: convert tuple with text values to RowData" {
+    const allocator = testing.allocator;
+
+    // Setup: Create source with registry
+    var source = PostgresStreamingSource.init(allocator, "test_slot", "test_pub");
+    defer source.deinit();
+
+    // Register relation with 3 columns: id, name, email
+    var rel_msg = pg_output_decoder.RelationMessage{
+        .relation_id = 200,
+        .namespace = try allocator.dupe(u8, "public"),
+        .relation_name = try allocator.dupe(u8, "users"),
+        .replica_identity = 'd',
+        .columns = try allocator.alloc(pg_output_decoder.RelationMessageColumn, 3),
+    };
+    defer rel_msg.deinit(allocator);
+
+    rel_msg.columns[0] = pg_output_decoder.RelationMessageColumn{
+        .flags = 1,
+        .name = try allocator.dupe(u8, "id"),
+        .data_type = 23,
+        .type_modifier = -1,
+    };
+    rel_msg.columns[1] = pg_output_decoder.RelationMessageColumn{
+        .flags = 0,
+        .name = try allocator.dupe(u8, "name"),
+        .data_type = 25,
+        .type_modifier = -1,
+    };
+    rel_msg.columns[2] = pg_output_decoder.RelationMessageColumn{
+        .flags = 0,
+        .name = try allocator.dupe(u8, "email"),
+        .data_type = 25,
+        .type_modifier = -1,
+    };
+
+    try source.registry.register(rel_msg);
+
+    // Create tuple with text values
+    var tuple = pg_output_decoder.TupleMessage{
+        .columns = try allocator.alloc(pg_output_decoder.TupleData, 3),
+    };
+    defer tuple.deinit(allocator);
+
+    tuple.columns[0] = pg_output_decoder.TupleData{
+        .column_type = .text,
+        .value = try allocator.dupe(u8, "42"),
+    };
+    tuple.columns[1] = pg_output_decoder.TupleData{
+        .column_type = .text,
+        .value = try allocator.dupe(u8, "John"),
+    };
+    tuple.columns[2] = pg_output_decoder.TupleData{
+        .column_type = .text,
+        .value = try allocator.dupe(u8, "john@example.com"),
+    };
+
+    // Get relation info
+    const rel_info = try source.registry.get(200);
+
+    // Call tupleToRowData
+    const row_data = try source.tupleToRowData(tuple, rel_info);
+    defer {
+        for (row_data) |field| {
+            allocator.free(field.name);
+            if (field.value == .string) {
+                allocator.free(field.value.string);
+            }
+        }
+        allocator.free(row_data);
+    }
+
+    // Verify: 3 fields
+    try testing.expectEqual(@as(usize, 3), row_data.len);
+
+    // Verify: field 0 (id)
+    try testing.expectEqualStrings("id", row_data[0].name);
+    try testing.expect(row_data[0].value == .string);
+    try testing.expectEqualStrings("42", row_data[0].value.string);
+
+    // Verify: field 1 (name)
+    try testing.expectEqualStrings("name", row_data[1].name);
+    try testing.expect(row_data[1].value == .string);
+    try testing.expectEqualStrings("John", row_data[1].value.string);
+
+    // Verify: field 2 (email)
+    try testing.expectEqualStrings("email", row_data[2].name);
+    try testing.expect(row_data[2].value == .string);
+    try testing.expectEqualStrings("john@example.com", row_data[2].value.string);
+}
+
+test "tupleToRowData: handle NULL values in tuple" {
+    const allocator = testing.allocator;
+
+    // Setup: Create source with registry
+    var source = PostgresStreamingSource.init(allocator, "test_slot", "test_pub");
+    defer source.deinit();
+
+    // Register relation with 3 columns
+    var rel_msg = pg_output_decoder.RelationMessage{
+        .relation_id = 300,
+        .namespace = try allocator.dupe(u8, "public"),
+        .relation_name = try allocator.dupe(u8, "users"),
+        .replica_identity = 'd',
+        .columns = try allocator.alloc(pg_output_decoder.RelationMessageColumn, 3),
+    };
+    defer rel_msg.deinit(allocator);
+
+    rel_msg.columns[0] = pg_output_decoder.RelationMessageColumn{
+        .flags = 1,
+        .name = try allocator.dupe(u8, "id"),
+        .data_type = 23,
+        .type_modifier = -1,
+    };
+    rel_msg.columns[1] = pg_output_decoder.RelationMessageColumn{
+        .flags = 0,
+        .name = try allocator.dupe(u8, "name"),
+        .data_type = 25,
+        .type_modifier = -1,
+    };
+    rel_msg.columns[2] = pg_output_decoder.RelationMessageColumn{
+        .flags = 0,
+        .name = try allocator.dupe(u8, "email"),
+        .data_type = 25,
+        .type_modifier = -1,
+    };
+
+    try source.registry.register(rel_msg);
+
+    // Create tuple with NULL values: id=1, name=NULL, email="test@example.com"
+    var tuple = pg_output_decoder.TupleMessage{
+        .columns = try allocator.alloc(pg_output_decoder.TupleData, 3),
+    };
+    defer tuple.deinit(allocator);
+
+    tuple.columns[0] = pg_output_decoder.TupleData{
+        .column_type = .text,
+        .value = try allocator.dupe(u8, "1"),
+    };
+    tuple.columns[1] = pg_output_decoder.TupleData{
+        .column_type = .null,
+        .value = null, // NULL value
+    };
+    tuple.columns[2] = pg_output_decoder.TupleData{
+        .column_type = .text,
+        .value = try allocator.dupe(u8, "test@example.com"),
+    };
+
+    // Get relation info
+    const rel_info = try source.registry.get(300);
+
+    // Call tupleToRowData
+    const row_data = try source.tupleToRowData(tuple, rel_info);
+    defer {
+        for (row_data) |field| {
+            allocator.free(field.name);
+            if (field.value == .string) {
+                allocator.free(field.value.string);
+            }
+        }
+        allocator.free(row_data);
+    }
+
+    // Verify: 3 fields
+    try testing.expectEqual(@as(usize, 3), row_data.len);
+
+    // Verify: field 0 (id) - has value
+    try testing.expectEqualStrings("id", row_data[0].name);
+    try testing.expect(row_data[0].value == .string);
+    try testing.expectEqualStrings("1", row_data[0].value.string);
+
+    // Verify: field 1 (name) - NULL
+    try testing.expectEqualStrings("name", row_data[1].name);
+    try testing.expect(row_data[1].value == .null);
+
+    // Verify: field 2 (email) - has value
+    try testing.expectEqualStrings("email", row_data[2].name);
+    try testing.expect(row_data[2].value == .string);
+    try testing.expectEqualStrings("test@example.com", row_data[2].value.string);
+}
+
+test "convertInsert: error when relation not found in registry" {
+    const allocator = testing.allocator;
+
+    // Setup: Create source with empty registry (no relations registered)
+    var source = PostgresStreamingSource.init(allocator, "test_slot", "test_pub");
+    defer source.deinit();
+
+    // Create INSERT message for non-existent relation (id=999)
+    var insert_msg = pg_output_decoder.InsertMessage{
+        .relation_id = 999, // This relation is NOT registered
+        .new_tuple = pg_output_decoder.TupleMessage{
+            .columns = try allocator.alloc(pg_output_decoder.TupleData, 1),
+        },
+    };
+    defer insert_msg.new_tuple.deinit(allocator);
+
+    insert_msg.new_tuple.columns[0] = pg_output_decoder.TupleData{
+        .column_type = .text,
+        .value = try allocator.dupe(u8, "test"),
+    };
+
+    // Call convertInsert - should return RelationNotFound error
+    const result = source.convertInsert(insert_msg);
+
+    // Verify: error is RelationNotFound
+    try testing.expectError(RelationRegistryError.RelationNotFound, result);
+}

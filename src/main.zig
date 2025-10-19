@@ -116,7 +116,7 @@ fn run() !void {
             printStatus("Using PostgreSQL streaming source (pgoutput)\n", .{});
 
             var source = PostgresStreamingSource.init(allocator, postgres.slot_name, postgres.publication_name);
-            defer source.deinit();
+            // NOTE: source will be deinit'd by processor.deinit()
 
             printStatus("Connecting to PostgreSQL streaming replication...\n", .{});
             try source.connect(conn_str, "0/0");
