@@ -225,10 +225,8 @@ pub fn build(b: *std.Build) void {
     });
     test_helpers_module.addImport("config", config_module);
 
-    // Add test_helpers to replication_protocol_tests
+    // Add test_helpers to integration tests
     replication_protocol_tests.root_module.addImport("test_helpers", test_helpers_module);
-
-    // Add test_helpers to streaming_integration_tests
     streaming_integration_tests.root_module.addImport("test_helpers", test_helpers_module);
 
     const run_config_tests = b.addRunArtifact(config_tests);
@@ -245,20 +243,17 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_config_tests.step);
     test_step.dependOn(&run_domain_tests.step);
     test_step.dependOn(&run_json_serialization_tests.step);
-    test_step.dependOn(&run_kafka_producer_tests.step);
-    test_step.dependOn(&run_replication_protocol_tests.step);
     test_step.dependOn(&run_pg_output_decoder_tests.step);
     test_step.dependOn(&run_relation_registry_tests.step);
     test_step.dependOn(&run_streaming_source_tests.step);
-    test_step.dependOn(&run_validator_tests.step);
 
     // E2E Tests - Full cycle: PostgreSQL → CDC → Kafka
     // These tests validate the complete data pipeline
 
-    // E2E: Streaming CDC operations test (INSERT, UPDATE, DELETE) using PostgresStreamingSource
+    // E2E: CDC operations test (INSERT, UPDATE, DELETE)
     const e2e_streaming_test = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("tests/e2e/streaming_cdc_test.zig"),
+            .root_source_file = b.path("tests/e2e/cdc_test.zig"),
             .target = target,
             .optimize = optimize,
         }),
@@ -288,8 +283,11 @@ pub fn build(b: *std.Build) void {
     const run_streaming_integration_tests = b.addRunArtifact(streaming_integration_tests);
 
     const integration_test_step = b.step("test-integration", "Run integration tests");
+    integration_test_step.dependOn(&run_kafka_producer_tests.step);
     integration_test_step.dependOn(&run_kafka_integration_tests.step);
     integration_test_step.dependOn(&run_streaming_integration_tests.step);
+    integration_test_step.dependOn(&run_replication_protocol_tests.step);
+    integration_test_step.dependOn(&run_validator_tests.step);
 
     // E2E test step - Full pipeline tests (PostgreSQL → CDC → Kafka)
     const e2e_test_step = b.step("test-e2e", "Run end-to-end tests");

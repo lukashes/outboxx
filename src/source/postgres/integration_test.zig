@@ -8,7 +8,7 @@ const domain = @import("domain");
 const ChangeOperation = domain.ChangeOperation;
 
 const source_mod = @import("source.zig");
-const PostgresStreamingSource = source_mod.PostgresStreamingSource;
+const PostgresSource = source_mod.PostgresSource;
 
 const c = @cImport({
     @cInclude("libpq-fe.h");
@@ -150,21 +150,14 @@ test "Streaming source: receive and convert INSERT messages to ChangeEvents" {
     const conn_str = try getTestConnectionString(allocator);
     defer allocator.free(conn_str);
 
-    var source = PostgresStreamingSource.init(allocator, slot_name, pub_name);
+    var source = PostgresSource.init(allocator, slot_name, pub_name);
     defer source.deinit(); // Source defer - declared SECOND, executes FIRST (before cleanup)
 
-    source.connect(conn_str, start_lsn) catch |err| {
-        std.log.warn("Streaming source connection failed: {}", .{err});
-        return error.SkipZigTest;
-    };
+    try source.connect(conn_str, start_lsn);
 
     std.log.info("Streaming source connected, receiving batch...", .{});
 
-    // Receive batch with timeout
-    const batch = source.receiveBatch(10) catch |err| {
-        std.log.warn("Failed to receive batch: {}", .{err});
-        return error.SkipZigTest;
-    };
+    const batch = try source.receiveBatch(10);
     defer {
         var mut_batch = batch;
         mut_batch.deinit();
@@ -271,19 +264,12 @@ test "Streaming source: UPDATE operation E2E with old and new tuples" {
     const conn_str = try getTestConnectionString(allocator);
     defer allocator.free(conn_str);
 
-    var source = PostgresStreamingSource.init(allocator, slot_name, pub_name);
+    var source = PostgresSource.init(allocator, slot_name, pub_name);
     defer source.deinit();
 
-    source.connect(conn_str, start_lsn) catch |err| {
-        std.log.warn("Streaming source connection failed: {}", .{err});
-        return error.SkipZigTest;
-    };
+    try source.connect(conn_str, start_lsn);
 
-    // Receive batch
-    const batch = source.receiveBatch(10) catch |err| {
-        std.log.warn("Failed to receive batch: {}", .{err});
-        return error.SkipZigTest;
-    };
+    const batch = try source.receiveBatch(10);
     defer {
         var mut_batch = batch;
         mut_batch.deinit();
@@ -420,19 +406,12 @@ test "Streaming source: DELETE operation E2E" {
     const conn_str = try getTestConnectionString(allocator);
     defer allocator.free(conn_str);
 
-    var source = PostgresStreamingSource.init(allocator, slot_name, pub_name);
+    var source = PostgresSource.init(allocator, slot_name, pub_name);
     defer source.deinit();
 
-    source.connect(conn_str, start_lsn) catch |err| {
-        std.log.warn("Streaming source connection failed: {}", .{err});
-        return error.SkipZigTest;
-    };
+    try source.connect(conn_str, start_lsn);
 
-    // Receive batch
-    const batch = source.receiveBatch(10) catch |err| {
-        std.log.warn("Failed to receive batch: {}", .{err});
-        return error.SkipZigTest;
-    };
+    const batch = try source.receiveBatch(10);
     defer {
         var mut_batch = batch;
         mut_batch.deinit();
@@ -545,24 +524,17 @@ test "Streaming source: Multiple batches with limit parameter" {
     const conn_str = try getTestConnectionString(allocator);
     defer allocator.free(conn_str);
 
-    var source = PostgresStreamingSource.init(allocator, slot_name, pub_name);
+    var source = PostgresSource.init(allocator, slot_name, pub_name);
     defer source.deinit();
 
-    source.connect(conn_str, start_lsn) catch |err| {
-        std.log.warn("Streaming source connection failed: {}", .{err});
-        return error.SkipZigTest;
-    };
+    try source.connect(conn_str, start_lsn);
 
-    // Receive batches with limit=100 until we get all 500 changes
     var total_changes: usize = 0;
     var batch_count: usize = 0;
     var last_lsn: u64 = 0;
 
     while (total_changes < 500) {
-        const batch = source.receiveBatch(100) catch |err| {
-            std.log.warn("Failed to receive batch: {}", .{err});
-            return error.SkipZigTest;
-        };
+        const batch = try source.receiveBatch(100);
         defer {
             var mut_batch = batch;
             mut_batch.deinit();
@@ -647,23 +619,16 @@ test "Streaming source: Timeout behavior with no data" {
     const conn_str = try getTestConnectionString(allocator);
     defer allocator.free(conn_str);
 
-    var source = PostgresStreamingSource.init(allocator, slot_name, pub_name);
+    var source = PostgresSource.init(allocator, slot_name, pub_name);
     defer source.deinit();
 
-    source.connect(conn_str, start_lsn) catch |err| {
-        std.log.warn("Streaming source connection failed: {}", .{err});
-        return error.SkipZigTest;
-    };
+    try source.connect(conn_str, start_lsn);
 
     std.log.info("Waiting for timeout with no data (1 second)...", .{});
 
     const start_time = std.time.milliTimestamp();
 
-    // Try to receive batch with 1 second timeout (should timeout with empty batch)
-    const batch = source.receiveBatchWithTimeout(10, 1000) catch |err| {
-        std.log.warn("Failed to receive batch: {}", .{err});
-        return error.SkipZigTest;
-    };
+    const batch = try source.receiveBatchWithWaitTime(10, 1000);
     defer {
         var mut_batch = batch;
         mut_batch.deinit();

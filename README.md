@@ -2,7 +2,7 @@
 
 Lightweight PostgreSQL CDC tool that streams WAL changes to Kafka. Built in Zig for minimal resource consumption.
 
-**🚧 Development Status**: Early development phase - core WAL reader implemented, working toward complete CDC pipeline.
+**🚀 Development Status**: Core CDC pipeline implemented with streaming replication. Under active optimization, approaching alpha release.
 
 ## What is Outboxx?
 
@@ -32,26 +32,25 @@ Outboxx captures PostgreSQL database changes in real-time and streams them to Ka
 
 Outboxx is heavily inspired by [Debezium](https://debezium.io/), the industry standard for Change Data Capture. Debezium is an excellent, battle-tested solution with a rich feature set. However, being a JVM-based application, it comes with resource overhead that may not be suitable for all environments:
 
-| Feature | Outboxx | Debezium |
-|---------|---------|----------|
+| Aspect | Outboxx | Debezium |
+|--------|---------|----------|
 | **Runtime** | Native binary | JVM (Kafka Connect) |
-| **Memory Usage** | ~10-50MB | ~200-500MB |
+| **Memory Usage** | <10 MB | ~200-500 MB |
 | **Startup Time** | <1s | 10-30s |
 | **Configuration** | Simple TOML | Complex JSON/Properties |
-| **Resource Usage** | Minimal overhead | JVM overhead |
 | **Deployment** | Single binary | Kafka Connect cluster |
 
 **Choose Outboxx when:**
-- You love Debezium's approach but need lower resource usage
-- Resource-constrained environments (edge computing, containers)
-- Simple deployment scenarios without Kafka Connect infrastructure
-- Zig/native performance is preferred over JVM ecosystem
+- Memory is constrained (containers, edge computing, cost optimization)
+- Simple deployment without Kafka Connect infrastructure
+- Learning Zig or experimenting with lightweight CDC solutions
+- Native binary and minimal dependencies preferred
 
 **Stick with Debezium when:**
-- You need its mature ecosystem and enterprise features
-- Complex transformations and extensive connector library are required
-- You already have Kafka Connect infrastructure
-- Maximum feature coverage is more important than resource efficiency
+- Production-critical workloads requiring mature, battle-tested solution
+- Complex transformations and extensive connector ecosystem needed
+- Kafka Connect infrastructure already in place
+- Enterprise support and maximum feature coverage required
 
 Outboxx aims to bring Debezium's excellent CDC concepts to resource-constrained environments where every MB of RAM matters.
 
@@ -113,7 +112,7 @@ For complete configuration examples and architectural documentation, see [`docs/
 
 ### 1. Prerequisites
 
-**PostgreSQL Requirements**: Version 14 or later (for pgoutput protocol v2)
+**PostgreSQL Requirements**: Version 14 or later (tested and supported versions)
 
 **Configure PostgreSQL** (`postgresql.conf`):
 ```ini

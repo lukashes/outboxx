@@ -193,6 +193,6 @@ The streaming replication is already implemented in Outboxx! You can:
 1. Run Outboxx with development config: `./zig-out/bin/outboxx --config dev/config.toml`
 2. Make database changes and watch Kafka topics
 3. Develop new features or optimizations
-4. Run tests: `make test-all`
+4. Run tests: `make test`
 
 Logical replication is ready for use!

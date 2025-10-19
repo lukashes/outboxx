@@ -1,4 +1,4 @@
-.PHONY: help build run test test-integration test-all clean fmt lint dev install-deps check-deps env-up env-down env-restart env-logs env-status coverage
+.PHONY: help build run test test-integration test-unit clean fmt lint dev install-deps check-deps env-up env-down env-restart env-logs env-status coverage
 
 # Use direnv to auto-load Nix environment for local development
 # This allows commands to work without 'nix develop' wrapper
@@ -33,10 +33,10 @@ help:
 	@echo "Build & Run:"
 	@echo "  make build         - Build the project"
 	@echo "  make run           - Run the application"
-	@echo "  make test          - Run unit tests"
+	@echo "  make test-unit     - Run unit tests"
 	@echo "  make test-integration - Run integration tests"
 	@echo "  make test-e2e      - Run E2E tests (PostgreSQL + Kafka full pipeline)"
-	@echo "  make test-all      - Run all tests with database setup"
+	@echo "  make test          - Run all tests with database setup"
 	@echo "  make dev           - Development workflow (format + test + build)"
 	@echo "  make fmt           - Format code"
 	@echo "  make lint          - Check code formatting"
@@ -65,7 +65,7 @@ run:
 	zig build run
 
 # Run unit tests
-test:
+test-unit:
 	@echo -n "Running unit tests... "
 	$(call run_with_spinner,zig build test,Unit tests)
 
@@ -80,16 +80,7 @@ test-e2e:
 	$(call run_with_spinner,zig build test-e2e,E2E tests)
 
 # Run all tests with database setup
-test-all: env-up
-	@echo "Waiting for PostgreSQL to be ready..."
-	@sleep 5
-	@docker exec outboxx-postgres pg_isready -U postgres -d outboxx_test >/dev/null 2>&1
-	@echo -n "Running unit tests... "
-	$(call run_with_spinner,zig build test,Unit tests)
-	@echo -n "Running integration tests... "
-	$(call run_with_spinner,zig build test-integration,Integration tests)
-	@echo -n "Running E2E tests... "
-	$(call run_with_spinner,zig build test-e2e,E2E tests)
+test: env-up test-unit test-integration test-e2e
 
 # Development workflow
 dev:

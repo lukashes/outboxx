@@ -24,7 +24,7 @@ Outboxx is a lightweight PostgreSQL Change Data Capture (CDC) tool written in Zi
 - ✅ **Comprehensive Testing**: Unit, integration, and E2E tests with real services
 - ✅ **Development Environment**: Docker Compose setup with PostgreSQL and Kafka
 - ✅ **Nix Environment**: Isolated, reproducible development environment with Zig 0.15.1
-- ✅ **Production-Ready**: ~3.2k events/sec throughput, 3.73 MiB memory usage
+- ✅ **Performance Validated**: High-throughput benchmarks completed, significantly lower memory footprint than JVM alternatives
 
 ## Development Workflow
 
@@ -43,11 +43,8 @@ This project uses **Nix** for reproducible builds and **direnv** (optional) for 
 # Optional: Enable direnv for automatic environment (recommended for contributors)
 direnv allow
 
-# Start PostgreSQL development environment
-make env-up
-
-# Run all tests (unit + integration)
-make test-all
+# Run all tests (unit + integration + e2e)
+make test
 
 # Development workflow (format + test + build)
 make dev
@@ -57,10 +54,10 @@ make dev
 ```bash
 # Build and test (works everywhere - auto-loads Nix environment)
 make build          # Build the project
-make test           # Run unit tests
+make test-unit      # Run unit tests
 make test-integration # Run integration tests (requires PostgreSQL + Kafka)
 make test-e2e       # Run E2E tests - full pipeline verification
-make test-all       # Run all tests (starts PostgreSQL + Kafka if needed)
+make test           # Run all tests (starts PostgreSQL + Kafka if needed)
 make dev            # Development workflow (format + test + build)
 
 # Direct zig commands (require direnv or manual nix develop)
@@ -270,7 +267,7 @@ assert(messages[0].data.name == "Alice"); // ✅ Correct data
 #### PostgreSQL Integration
 - Uses PostgreSQL streaming replication with `pgoutput` plugin (binary protocol)
 - **Publications filter at PostgreSQL level**: Only subscribed tables sent (efficient)
-- Requires PostgreSQL 14+ for pgoutput protocol v2
+- Requires PostgreSQL 14+ (tested and supported versions)
 - Requires `REPLICA IDENTITY FULL` for complete UPDATE/DELETE visibility
 - WAL flushing (`pg_switch_wal()`) ensures reliable test execution
 - Each test uses isolated replication slots and publications to prevent interference
@@ -532,10 +529,10 @@ This follows Unix philosophy: stdout for data, stderr for diagnostics.
 
 ### Development Process
 2. Start development environment: `make env-up` (PostgreSQL + Kafka)
-3. Run tests to ensure baseline: `make test-all`
+3. Run tests to ensure baseline: `make test`
 4. Implement changes following Zig idioms
 5. Add/update tests for new functionality
-6. Verify all tests pass: `make test-all`
+6. Verify all tests pass: `make test`
 7. Format code: `zig build fmt`
 
 ### Important Testing Notes

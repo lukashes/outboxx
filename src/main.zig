@@ -3,7 +3,7 @@ const config_mod = @import("config");
 const Config = config_mod.Config;
 const Stream = config_mod.Stream;
 const Processor = @import("processor/processor.zig").Processor;
-const PostgresStreamingSource = @import("postgres_source").PostgresStreamingSource;
+const PostgresSource = @import("postgres_source").PostgresSource;
 const PostgresValidator = @import("source/postgres/validator.zig").PostgresValidator;
 const builtin = @import("builtin");
 const posix = std.posix;
@@ -68,7 +68,7 @@ fn run() !void {
     const conn_str = try config.postgresConnectionString(allocator);
     defer allocator.free(conn_str);
 
-    var source = PostgresStreamingSource.init(allocator, postgres.slot_name, postgres.publication_name);
+    var source = PostgresSource.init(allocator, postgres.slot_name, postgres.publication_name);
     // NOTE: source will be deinit'd by processor.deinit()
 
     printStatus("Connecting to PostgreSQL streaming replication...\n", .{});
