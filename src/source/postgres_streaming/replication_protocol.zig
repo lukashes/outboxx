@@ -114,6 +114,120 @@ pub const ReplicationProtocol = struct {
         std.log.debug("Replication connection established", .{});
     }
 
+    /// Create publication if it doesn't exist (for all tables)
+    pub fn createPublicationIfNotExists(self: *Self) ReplicationError!void {
+        if (self.connection == null) return ReplicationError.ConnectionFailed;
+
+        // Check if publication exists
+        const check_sql_tmp = std.fmt.allocPrint(
+            self.allocator,
+            "SELECT pubname FROM pg_publication WHERE pubname = '{s}'",
+            .{self.publication_name},
+        ) catch return ReplicationError.OutOfMemory;
+        defer self.allocator.free(check_sql_tmp);
+
+        const check_sql = self.allocator.dupeZ(u8, check_sql_tmp) catch return ReplicationError.OutOfMemory;
+        defer self.allocator.free(check_sql);
+
+        const check_result = c.PQexec(self.connection, check_sql.ptr);
+        defer c.PQclear(check_result);
+
+        const check_status = c.PQresultStatus(check_result);
+        if (check_status != c.PGRES_TUPLES_OK) {
+            const error_msg = c.PQresultErrorMessage(check_result);
+            std.log.warn("Failed to check publication: {s}", .{error_msg});
+            return ReplicationError.ConnectionFailed;
+        }
+
+        const num_rows = c.PQntuples(check_result);
+        if (num_rows > 0) {
+            std.log.info("Publication '{s}' already exists", .{self.publication_name});
+            return;
+        }
+
+        // Publication doesn't exist, create it for all tables
+        const create_sql_tmp = std.fmt.allocPrint(
+            self.allocator,
+            "CREATE PUBLICATION {s} FOR ALL TABLES",
+            .{self.publication_name},
+        ) catch return ReplicationError.OutOfMemory;
+        defer self.allocator.free(create_sql_tmp);
+
+        const create_sql = self.allocator.dupeZ(u8, create_sql_tmp) catch return ReplicationError.OutOfMemory;
+        defer self.allocator.free(create_sql);
+
+        std.log.info("Creating publication: {s}", .{self.publication_name});
+
+        const create_result = c.PQexec(self.connection, create_sql.ptr);
+        defer c.PQclear(create_result);
+
+        const create_status = c.PQresultStatus(create_result);
+        if (create_status != c.PGRES_COMMAND_OK) {
+            const error_msg = c.PQresultErrorMessage(create_result);
+            std.log.warn("Failed to create publication: {s}", .{error_msg});
+            return ReplicationError.ConnectionFailed;
+        }
+
+        std.log.info("Publication '{s}' created successfully", .{self.publication_name});
+    }
+
+    /// Create replication slot if it doesn't exist
+    pub fn createSlotIfNotExists(self: *Self) ReplicationError!void {
+        if (self.connection == null) return ReplicationError.ConnectionFailed;
+
+        // Check if slot exists
+        const check_sql_tmp = std.fmt.allocPrint(
+            self.allocator,
+            "SELECT slot_name FROM pg_replication_slots WHERE slot_name = '{s}'",
+            .{self.slot_name},
+        ) catch return ReplicationError.OutOfMemory;
+        defer self.allocator.free(check_sql_tmp);
+
+        const check_sql = self.allocator.dupeZ(u8, check_sql_tmp) catch return ReplicationError.OutOfMemory;
+        defer self.allocator.free(check_sql);
+
+        const check_result = c.PQexec(self.connection, check_sql.ptr);
+        defer c.PQclear(check_result);
+
+        const check_status = c.PQresultStatus(check_result);
+        if (check_status != c.PGRES_TUPLES_OK) {
+            const error_msg = c.PQresultErrorMessage(check_result);
+            std.log.warn("Failed to check replication slot: {s}", .{error_msg});
+            return ReplicationError.ConnectionFailed;
+        }
+
+        const num_rows = c.PQntuples(check_result);
+        if (num_rows > 0) {
+            std.log.info("Replication slot '{s}' already exists", .{self.slot_name});
+            return;
+        }
+
+        // Slot doesn't exist, create it
+        const create_sql_tmp = std.fmt.allocPrint(
+            self.allocator,
+            "CREATE_REPLICATION_SLOT {s} LOGICAL pgoutput",
+            .{self.slot_name},
+        ) catch return ReplicationError.OutOfMemory;
+        defer self.allocator.free(create_sql_tmp);
+
+        const create_sql = self.allocator.dupeZ(u8, create_sql_tmp) catch return ReplicationError.OutOfMemory;
+        defer self.allocator.free(create_sql);
+
+        std.log.info("Creating replication slot: {s}", .{self.slot_name});
+
+        const create_result = c.PQexec(self.connection, create_sql.ptr);
+        defer c.PQclear(create_result);
+
+        const create_status = c.PQresultStatus(create_result);
+        if (create_status != c.PGRES_TUPLES_OK) {
+            const error_msg = c.PQresultErrorMessage(create_result);
+            std.log.warn("Failed to create replication slot: {s}", .{error_msg});
+            return ReplicationError.ConnectionFailed;
+        }
+
+        std.log.info("Replication slot '{s}' created successfully", .{self.slot_name});
+    }
+
     pub fn startReplication(self: *Self, start_lsn: []const u8) ReplicationError!void {
         if (self.connection == null) return ReplicationError.ConnectionFailed;
 
@@ -146,40 +260,51 @@ pub const ReplicationProtocol = struct {
     pub fn receiveMessage(self: *Self, timeout_ms: i32) ReplicationError!?ReplicationMessage {
         if (self.connection == null) return ReplicationError.ConnectionFailed;
 
-        // Simple polling approach: try to consume input and check if busy
-        const start_time = std.time.milliTimestamp();
-        const timeout_time = start_time + timeout_ms;
+        // Step 1: Try non-blocking read first
+        var buffer: [*c]u8 = undefined;
+        var len = c.PQgetCopyData(self.connection, &buffer, 1); // async=1 (non-blocking)
 
-        while (std.time.milliTimestamp() < timeout_time) {
-            // Consume input
+        if (len == 0) {
+            // Step 2: No data available - wait for socket to become readable
+            const socket = c.PQsocket(self.connection);
+            if (socket < 0) {
+                std.log.warn("Invalid socket from PQsocket", .{});
+                return ReplicationError.ConnectionFailed;
+            }
+
+            var pollfds = [_]std.posix.pollfd{
+                .{
+                    .fd = socket,
+                    .events = std.posix.POLL.IN, // Wait for readable
+                    .revents = 0,
+                },
+            };
+
+            // Step 3: Block until data arrives or timeout
+            const ready = std.posix.poll(&pollfds, timeout_ms) catch |err| {
+                std.log.warn("poll() failed: {}", .{err});
+                return ReplicationError.ReceiveFailed;
+            };
+
+            if (ready == 0) {
+                // Timeout - no data
+                return null;
+            }
+
+            // Step 4: Socket is readable - consume input
             if (c.PQconsumeInput(self.connection) == 0) {
                 const error_msg = c.PQerrorMessage(self.connection);
                 std.log.warn("Failed to consume input: {s}", .{error_msg});
                 return ReplicationError.ReceiveFailed;
             }
 
-            // Check if data is available
-            if (c.PQisBusy(self.connection) == 0) {
-                // Data available, break out to process it
-                break;
-            }
-
-            // Sleep a bit before retrying
-            std.Thread.sleep(10 * std.time.ns_per_ms);
+            // Step 5: Try to get data again after consuming input
+            len = c.PQgetCopyData(self.connection, &buffer, 1);
         }
 
-        // Final check after timeout
-        if (c.PQisBusy(self.connection) != 0) {
-            // Timeout - no complete message
-            return null;
-        }
-
-        // Get CopyData message
-        var buffer: [*c]u8 = undefined;
-        const len = c.PQgetCopyData(self.connection, &buffer, 0);
-
+        // Step 6: Process received data
         if (len == -1) {
-            // No more data (shouldn't happen after select)
+            // No more data (clean end of COPY stream)
             return null;
         }
 
@@ -187,6 +312,11 @@ pub const ReplicationProtocol = struct {
             const error_msg = c.PQerrorMessage(self.connection);
             std.log.warn("Error reading copy data: {s}", .{error_msg});
             return ReplicationError.ReceiveFailed;
+        }
+
+        if (len <= 0) {
+            // Unexpected: after poll() indicated data, we got nothing
+            return null;
         }
 
         defer c.PQfreemem(buffer);

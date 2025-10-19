@@ -59,6 +59,14 @@ pub fn build(b: *std.Build) void {
     postgres_polling_source_module.addImport("wal_reader", wal_reader_module);
     postgres_polling_source_module.addImport("wal_parser", postgres_wal_parser_module);
 
+    // PostgreSQL streaming source module (adapter)
+    const postgres_streaming_source_module = b.createModule(.{
+        .root_source_file = b.path("src/source/postgres_streaming/source.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    postgres_streaming_source_module.addImport("domain", domain_module);
+
     // Kafka producer module
     const kafka_producer_module = b.createModule(.{
         .root_source_file = b.path("src/kafka/producer.zig"),
@@ -86,6 +94,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
+            .omit_frame_pointer = false, // Keep frame pointers for profiling
         }),
     });
 
@@ -339,6 +348,24 @@ pub fn build(b: *std.Build) void {
 
     const run_e2e_basic_test = b.addRunArtifact(e2e_basic_test);
 
+    // E2E: Streaming CDC operations test (INSERT, UPDATE, DELETE) using PostgresStreamingSource
+    const e2e_streaming_test = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/e2e/streaming_cdc_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    e2e_streaming_test.root_module.addImport("test_helpers", test_helpers_module);
+    e2e_streaming_test.root_module.addImport("cdc_processor", cdc_processor_module);
+    e2e_streaming_test.root_module.addImport("config", config_module);
+    e2e_streaming_test.root_module.addImport("postgres_streaming_source", postgres_streaming_source_module);
+    e2e_streaming_test.linkLibC();
+    e2e_streaming_test.linkSystemLibrary("pq");
+    e2e_streaming_test.linkSystemLibrary("rdkafka");
+
+    const run_e2e_streaming_test = b.addRunArtifact(e2e_streaming_test);
+
     // Kafka integration tests (in kafka directory)
     const kafka_integration_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -360,6 +387,7 @@ pub fn build(b: *std.Build) void {
     // E2E test step - Full pipeline tests (PostgreSQL → CDC → Kafka)
     const e2e_test_step = b.step("test-e2e", "Run end-to-end tests");
     e2e_test_step.dependOn(&run_e2e_basic_test.step);
+    e2e_test_step.dependOn(&run_e2e_streaming_test.step);
 
     // Development build with debug symbols and runtime safety
     const debug_exe = b.addExecutable(.{
