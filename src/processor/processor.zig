@@ -1,20 +1,25 @@
 const std = @import("std");
-const wal_reader_module = @import("wal_reader");
-const WalReader = wal_reader_module.WalReader;
-const WalEvent = wal_reader_module.WalEvent;
-const WalReaderError = wal_reader_module.WalReaderError;
+
+// PostgreSQL polling source
+const postgres_polling = @import("postgres_polling_source");
+const PostgresPollingSource = postgres_polling.PostgresPollingSource;
+const Batch = postgres_polling.Batch;
+
+// Infrastructure
 const KafkaProducer = @import("kafka_producer").KafkaProducer;
 const config_module = @import("config");
 const KafkaConfig = config_module.KafkaSink;
 const Stream = config_module.Stream;
 
-// New architecture imports
+// Domain and serialization
 const domain = @import("domain");
 const ChangeEvent = domain.ChangeEvent;
-const postgres_parser = @import("postgres_wal_parser");
-const WalParser = postgres_parser.WalParser;
 const json_serializer = @import("json_serialization");
 const JsonSerializer = json_serializer.JsonSerializer;
+
+// Legacy - for error type compatibility
+const wal_reader_module = @import("wal_reader");
+const WalReaderError = wal_reader_module.WalReaderError;
 
 // Kafka flush timeout: 30 seconds is a balance between:
 // - Allowing enough time for Kafka brokers to acknowledge messages
@@ -23,56 +28,36 @@ const KAFKA_FLUSH_TIMEOUT_MS: i32 = 30_000;
 
 pub const Processor = struct {
     allocator: std.mem.Allocator,
-    wal_reader: *WalReader,
+    source: PostgresPollingSource,
     kafka_producer: ?KafkaProducer,
     kafka_config: KafkaConfig,
     streams: []const Stream,
-    wal_parser: WalParser,
     serializer: JsonSerializer,
 
-    last_sent_lsn: ?[]const u8,
     events_processed: usize,
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, wal_reader: *WalReader, streams: []const Stream, kafka_config: KafkaConfig) Self {
+    pub fn init(allocator: std.mem.Allocator, source: PostgresPollingSource, streams: []const Stream, kafka_config: KafkaConfig) Self {
         return Self{
             .allocator = allocator,
-            .wal_reader = wal_reader,
+            .source = source,
             .kafka_producer = null,
             .kafka_config = kafka_config,
             .streams = streams,
-            .wal_parser = WalParser.init(allocator),
             .serializer = JsonSerializer.init(),
-            .last_sent_lsn = null,
             .events_processed = 0,
         };
     }
 
-    pub fn shutdown(self: *Self) void {
-        std.log.debug("Shutting down processor...", .{});
-
-        self.flushAndCommit() catch |err| {
-            std.log.warn("Failed to flush and commit on shutdown: {}", .{err});
-        };
-
-        std.log.debug("Shutdown finished", .{});
-    }
-
     pub fn deinit(self: *Self) void {
-        if (self.last_sent_lsn) |lsn| {
-            self.allocator.free(lsn);
-        }
         if (self.kafka_producer) |*producer| {
             producer.deinit();
         }
-        // Note: wal_reader is not owned by Processor, so we don't deinit it
-        self.wal_parser.deinit();
+        self.source.deinit();
     }
 
     pub fn initialize(self: *Self) WalReaderError!void {
-        // Note: WalReader is already initialized by caller
-
         // Initialize Kafka producer
         const brokers_str = try std.mem.join(self.allocator, ",", self.kafka_config.brokers);
         defer self.allocator.free(brokers_str);
@@ -90,32 +75,6 @@ pub const Processor = struct {
         };
 
         std.log.info("Processor initialized successfully", .{});
-    }
-
-    pub fn createSlot(self: *Self) WalReaderError!void {
-        return self.wal_reader.createSlot();
-    }
-
-    pub fn dropSlot(self: *Self) WalReaderError!void {
-        return self.wal_reader.dropSlot();
-    }
-
-    pub fn flushAndCommit(self: *Self) WalReaderError!void {
-        if (self.last_sent_lsn == null) {
-            std.log.debug("flushAndCommit: no LSN to commit", .{});
-            return;
-        }
-
-        var kafka_producer = &(self.kafka_producer orelse return WalReaderError.ConnectionFailed);
-
-        const lsn = self.last_sent_lsn.?;
-        std.log.debug("Flushing Kafka and committing LSN: {s}", .{lsn});
-
-        kafka_producer.flush(KAFKA_FLUSH_TIMEOUT_MS);
-
-        try self.wal_reader.advanceSlot(lsn);
-
-        std.log.debug("Successfully committed LSN: {s}", .{lsn});
     }
 
     // Match streams that should process this event based on table and operation
@@ -146,102 +105,77 @@ pub const Processor = struct {
     }
 
     pub fn processChangesToKafka(self: *Self, limit: u32) WalReaderError!void {
-        // Always peek from current slot position
-        var result = try self.wal_reader.peekChanges(limit);
-        defer result.deinit(self.allocator);
+        // Receive batch of changes from source
+        var batch = try self.source.receiveBatch(limit);
+        defer batch.deinit();
 
         // If no events, nothing to do
-        if (result.events.items.len == 0) {
+        if (batch.changes.len == 0) {
             return;
         }
 
         var kafka_producer = &(self.kafka_producer orelse return WalReaderError.ConnectionFailed);
 
-        // Process entire batch asynchronously
-        for (result.events.items) |wal_event| {
-            // Track LSN for each processed event
-            std.log.debug("Processing WAL event with LSN: {s}", .{wal_event.lsn});
+        std.log.debug("Processing {} changes from batch (LSN: {})", .{ batch.changes.len, batch.last_lsn });
 
-            const new_lsn = try self.allocator.dupe(u8, wal_event.lsn);
-            if (self.last_sent_lsn) |old_lsn| {
-                self.allocator.free(old_lsn);
+        // Process each change event
+        for (batch.changes) |change_event| {
+            // Find matching streams for this event
+            var matched_streams = self.matchStreams(change_event.meta.resource, change_event.op);
+            defer matched_streams.deinit(self.allocator);
+
+            if (matched_streams.items.len == 0) {
+                std.log.debug("No matching streams for {s}.{s} ({s})", .{ change_event.meta.schema, change_event.meta.resource, change_event.op });
+                continue;
             }
-            self.last_sent_lsn = new_lsn;
 
-            // Try to parse WAL event
-            // Note: Fast filtering happens in WalReader.peekChanges() for test_decoding
-            if (self.wal_parser.parse(wal_event.data, "postgres")) |change_event_opt| {
-                if (change_event_opt) |domain_event| {
-                    var event = domain_event;
-                    defer event.deinit(self.allocator);
+            // Serialize once, send to all matching streams
+            const json_bytes = self.serializer.serialize(change_event, self.allocator) catch |err| {
+                std.log.warn("Failed to serialize message to JSON: {}", .{err});
+                continue;
+            };
+            defer self.allocator.free(json_bytes);
 
-                    // Find matching streams for this event
-                    var matched_streams = self.matchStreams(event.meta.resource, event.op);
-                    defer matched_streams.deinit(self.allocator);
-
-                    if (matched_streams.items.len == 0) {
-                        std.log.debug("No matching streams for {s}.{s} ({s})", .{ event.meta.schema, event.meta.resource, event.op });
-                        continue;
+            // Send to all matching streams
+            for (matched_streams.items) |stream| {
+                const partition_key_field = stream.sink.routing_key orelse "id";
+                const partition_key = if (change_event.getPartitionKeyValue(self.allocator, partition_key_field)) |key_opt| blk: {
+                    if (key_opt) |key| {
+                        break :blk key;
+                    } else {
+                        break :blk try self.allocator.dupe(u8, change_event.meta.resource);
                     }
+                } else |_| blk: {
+                    break :blk try self.allocator.dupe(u8, change_event.meta.resource);
+                };
+                defer self.allocator.free(partition_key);
 
-                    // Serialize once, send to all matching streams
-                    const json_bytes = self.serializer.serialize(event, self.allocator) catch |err| {
-                        std.log.warn("Failed to serialize message to JSON: {}", .{err});
-                        continue;
-                    };
-                    defer self.allocator.free(json_bytes);
+                const topic_name = stream.sink.destination;
 
-                    // Send to all matching streams
-                    for (matched_streams.items) |stream| {
-                        const partition_key_field = stream.sink.routing_key orelse "id";
-                        const partition_key = if (event.getPartitionKeyValue(self.allocator, partition_key_field)) |key_opt| blk: {
-                            if (key_opt) |key| {
-                                break :blk key;
-                            } else {
-                                break :blk try self.allocator.dupe(u8, event.meta.resource);
-                            }
-                        } else |_| blk: {
-                            break :blk try self.allocator.dupe(u8, event.meta.resource);
-                        };
-                        defer self.allocator.free(partition_key);
+                kafka_producer.sendMessage(topic_name, partition_key, json_bytes) catch |err| {
+                    std.log.warn("Failed to send message to Kafka topic '{s}': {}", .{ topic_name, err });
+                    continue;
+                };
 
-                        const topic_name = stream.sink.destination;
+                // Increment events counter
+                self.events_processed += 1;
 
-                        kafka_producer.sendMessage(topic_name, partition_key, json_bytes) catch |err| {
-                            std.log.warn("Failed to send message to Kafka topic '{s}': {}", .{ topic_name, err });
-                            continue;
-                        };
-
-                        // Increment events counter
-                        self.events_processed += 1;
-
-                        // Log progress every 10000 events
-                        if (self.events_processed % 10000 == 0) {
-                            std.log.info("Processed {} CDC events", .{self.events_processed});
-                        }
-
-                        std.log.debug("Sent {s} message for {s}.{s} to topic '{s}' (partition key: {s})", .{ event.op, event.meta.schema, event.meta.resource, topic_name, partition_key });
-                    }
+                // Log progress every 10000 events
+                if (self.events_processed % 10000 == 0) {
+                    std.log.info("Processed {} CDC events", .{self.events_processed});
                 }
-            } else |err| {
-                std.log.warn("Skipped WAL event (parse error): {}", .{err});
+
+                std.log.debug("Sent {s} message for {s}.{s} to topic '{s}' (partition key: {s})", .{ change_event.op, change_event.meta.schema, change_event.meta.resource, topic_name, partition_key });
             }
         }
 
-        // Use last_lsn from ALL events (including filtered ones) for slot advancement
-        // This ensures slot advances even when all events are filtered out
-        if (result.last_lsn) |last_lsn| {
-            const new_lsn = try self.allocator.dupe(u8, last_lsn);
-            if (self.last_sent_lsn) |old_lsn| {
-                self.allocator.free(old_lsn);
-            }
-            self.last_sent_lsn = new_lsn;
-        }
+        // CRITICAL: Kafka flush BEFORE LSN feedback (no data loss guarantee)
+        kafka_producer.flush(KAFKA_FLUSH_TIMEOUT_MS);
 
-        // Flush and commit after processing entire batch
-        if (self.last_sent_lsn != null) {
-            try self.flushAndCommit();
-        }
+        // Confirm LSN to PostgreSQL ONLY after Kafka flush succeeds
+        try self.source.sendFeedback(batch.last_lsn);
+
+        std.log.debug("Successfully committed LSN: {}", .{batch.last_lsn});
     }
 
     pub fn startStreaming(self: *Self, stop_signal: *std.atomic.Value(bool)) !void {
@@ -252,10 +186,10 @@ pub const Processor = struct {
             };
 
             // Sleep between polls
-            std.Thread.sleep(1 * std.time.ns_per_s); // 10 seconds
+            std.Thread.sleep(1 * std.time.ns_per_s); // 1 second between polls
         }
 
-        try self.flushAndCommit();
+        std.log.info("Streaming stopped gracefully", .{});
     }
 };
 
@@ -293,8 +227,11 @@ test "matchStreams: exact table and operation match" {
     var wal_reader = @import("wal_reader").WalReader.init(allocator, "test_slot", "test_pub", &[_][]const u8{});
     defer wal_reader.deinit();
 
+    var source = PostgresPollingSource.init(allocator, &wal_reader);
+    defer source.deinit();
+
     const kafka_config = KafkaSink{ .brokers = &[_][]const u8{"localhost:9092"} };
-    var processor = Processor.init(allocator, &wal_reader, streams, kafka_config);
+    var processor = Processor.init(allocator, source, streams, kafka_config);
     defer processor.deinit();
 
     var matched = processor.matchStreams("users", "insert");
@@ -316,8 +253,11 @@ test "matchStreams: case-insensitive operation matching" {
     var wal_reader = @import("wal_reader").WalReader.init(allocator, "test_slot", "test_pub", &[_][]const u8{});
     defer wal_reader.deinit();
 
+    var source = PostgresPollingSource.init(allocator, &wal_reader);
+    defer source.deinit();
+
     const kafka_config = KafkaSink{ .brokers = &[_][]const u8{"localhost:9092"} };
-    var processor = Processor.init(allocator, &wal_reader, streams, kafka_config);
+    var processor = Processor.init(allocator, source, streams, kafka_config);
     defer processor.deinit();
 
     // Test different cases: INSERT, Insert, insert
@@ -346,8 +286,11 @@ test "matchStreams: no match when table differs" {
     var wal_reader = @import("wal_reader").WalReader.init(allocator, "test_slot", "test_pub", &[_][]const u8{});
     defer wal_reader.deinit();
 
+    var source = PostgresPollingSource.init(allocator, &wal_reader);
+    defer source.deinit();
+
     const kafka_config = KafkaSink{ .brokers = &[_][]const u8{"localhost:9092"} };
-    var processor = Processor.init(allocator, &wal_reader, streams, kafka_config);
+    var processor = Processor.init(allocator, source, streams, kafka_config);
     defer processor.deinit();
 
     var matched = processor.matchStreams("orders", "insert");
@@ -368,8 +311,11 @@ test "matchStreams: no match when operation not in list" {
     var wal_reader = @import("wal_reader").WalReader.init(allocator, "test_slot", "test_pub", &[_][]const u8{});
     defer wal_reader.deinit();
 
+    var source = PostgresPollingSource.init(allocator, &wal_reader);
+    defer source.deinit();
+
     const kafka_config = KafkaSink{ .brokers = &[_][]const u8{"localhost:9092"} };
-    var processor = Processor.init(allocator, &wal_reader, streams, kafka_config);
+    var processor = Processor.init(allocator, source, streams, kafka_config);
     defer processor.deinit();
 
     var matched = processor.matchStreams("users", "delete");
@@ -394,8 +340,11 @@ test "matchStreams: multiple streams match same event" {
     var wal_reader = @import("wal_reader").WalReader.init(allocator, "test_slot", "test_pub", &[_][]const u8{});
     defer wal_reader.deinit();
 
+    var source = PostgresPollingSource.init(allocator, &wal_reader);
+    defer source.deinit();
+
     const kafka_config = KafkaSink{ .brokers = &[_][]const u8{"localhost:9092"} };
-    var processor = Processor.init(allocator, &wal_reader, streams, kafka_config);
+    var processor = Processor.init(allocator, source, streams, kafka_config);
     defer processor.deinit();
 
     var matched = processor.matchStreams("users", "insert");
@@ -418,8 +367,11 @@ test "matchStreams: multiple operations for same table" {
     var wal_reader = @import("wal_reader").WalReader.init(allocator, "test_slot", "test_pub", &[_][]const u8{});
     defer wal_reader.deinit();
 
+    var source = PostgresPollingSource.init(allocator, &wal_reader);
+    defer source.deinit();
+
     const kafka_config = KafkaSink{ .brokers = &[_][]const u8{"localhost:9092"} };
-    var processor = Processor.init(allocator, &wal_reader, streams, kafka_config);
+    var processor = Processor.init(allocator, source, streams, kafka_config);
     defer processor.deinit();
 
     // All operations should match
@@ -445,8 +397,11 @@ test "matchStreams: empty streams list returns no matches" {
     var wal_reader = @import("wal_reader").WalReader.init(allocator, "test_slot", "test_pub", &[_][]const u8{});
     defer wal_reader.deinit();
 
+    var source = PostgresPollingSource.init(allocator, &wal_reader);
+    defer source.deinit();
+
     const kafka_config = KafkaSink{ .brokers = &[_][]const u8{"localhost:9092"} };
-    var processor = Processor.init(allocator, &wal_reader, streams, kafka_config);
+    var processor = Processor.init(allocator, source, streams, kafka_config);
     defer processor.deinit();
 
     var matched = processor.matchStreams("users", "insert");

@@ -4,6 +4,7 @@ const test_helpers = @import("test_helpers");
 
 const Processor = @import("cdc_processor").Processor;
 const WalReader = @import("wal_reader").WalReader;
+const PostgresPollingSource = @import("postgres_polling_source").PostgresPollingSource;
 const KafkaSink = @import("config").KafkaSink;
 const Stream = @import("config").Stream;
 const c = test_helpers.c;
@@ -70,7 +71,10 @@ test "E2E: INSERT operation - full pipeline verification" {
     defer allocator.free(streams);
     streams[0] = stream_config;
 
-    var processor = Processor.init(allocator, &wal_reader, streams, kafka_config);
+    var source = PostgresPollingSource.init(allocator, &wal_reader);
+    defer source.deinit();
+
+    var processor = Processor.init(allocator, source, streams, kafka_config);
     defer processor.deinit();
 
     processor.initialize() catch |err| {
@@ -202,7 +206,10 @@ test "E2E: UPDATE operation - full pipeline verification" {
     defer allocator.free(streams);
     streams[0] = stream_config;
 
-    var processor = Processor.init(allocator, &wal_reader, streams, kafka_config);
+    var source = PostgresPollingSource.init(allocator, &wal_reader);
+    defer source.deinit();
+
+    var processor = Processor.init(allocator, source, streams, kafka_config);
     defer processor.deinit();
 
     processor.initialize() catch |err| {
@@ -337,7 +344,10 @@ test "E2E: DELETE operation - full pipeline verification" {
     defer allocator.free(streams);
     streams[0] = stream_config;
 
-    var processor = Processor.init(allocator, &wal_reader, streams, kafka_config);
+    var source = PostgresPollingSource.init(allocator, &wal_reader);
+    defer source.deinit();
+
+    var processor = Processor.init(allocator, source, streams, kafka_config);
     defer processor.deinit();
 
     processor.initialize() catch |err| {

@@ -242,7 +242,7 @@ pub const WalReader = struct {
 
         const num_rows = c.PQntuples(result);
 
-        var events = std.ArrayList(WalEvent){};
+        var events = std.ArrayList(WalEvent).empty;
         var last_lsn: ?[]const u8 = null;
 
         var i: c_int = 0;
