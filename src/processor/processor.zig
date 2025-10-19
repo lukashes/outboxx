@@ -21,10 +21,11 @@ const JsonSerializer = json_serializer.JsonSerializer;
 const wal_reader_module = @import("wal_reader");
 const WalReaderError = wal_reader_module.WalReaderError;
 
-// Kafka flush timeout: 30 seconds is a balance between:
+// Kafka flush timeout: 5 seconds is a balance between:
 // - Allowing enough time for Kafka brokers to acknowledge messages
 // - Not blocking CDC processing for too long on Kafka issues
-const KAFKA_FLUSH_TIMEOUT_MS: i32 = 30_000;
+// - Keeping replication lag low for real-time CDC
+const KAFKA_FLUSH_TIMEOUT_MS: i32 = 5_000;
 
 /// Generic processor that works with any source type
 /// SourceType must implement: receiveBatch(limit: usize) and sendFeedback(lsn: u64)
@@ -112,8 +113,11 @@ pub fn Processor(comptime SourceType: type) type {
         var batch = try self.source.receiveBatch(limit);
         defer batch.deinit();
 
-        // If no events, nothing to do
+        // If no events, confirm last LSN and return (avoid re-reading same events)
         if (batch.changes.len == 0) {
+            if (batch.last_lsn > 0) {
+                try self.source.sendFeedback(batch.last_lsn);
+            }
             return;
         }
 
@@ -183,13 +187,12 @@ pub fn Processor(comptime SourceType: type) type {
 
     pub fn startStreaming(self: *Self, stop_signal: *std.atomic.Value(bool)) !void {
         while (!stop_signal.load(.monotonic)) {
-            self.processChangesToKafka(100000) catch |err| {
+            self.processChangesToKafka(1000) catch |err| {
                 std.log.warn("Error in streaming (will retry): {}", .{err});
                 // Continue streaming even if there's an error
             };
 
-            // Sleep between polls
-            std.Thread.sleep(1 * std.time.ns_per_s); // 1 second between polls
+            // No sleep needed - receiveBatchWithTimeout() blocks on poll() when no data
         }
 
         std.log.info("Streaming stopped gracefully", .{});

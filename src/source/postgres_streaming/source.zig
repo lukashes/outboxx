@@ -49,12 +49,17 @@ pub const StreamingSourceError = error{
 
 /// PostgreSQL streaming source adapter
 /// Uses logical replication with pgoutput format
+///
+/// LSN Tracking Design:
+/// - extractChangeFromMessage() returns LSN explicitly (or 0 on error)
+/// - receiveBatchWithTimeout() tracks LSN locally and updates instance field
+/// - last_lsn is used as starting point for next batch
 pub const PostgresStreamingSource = struct {
     allocator: std.mem.Allocator,
     protocol: ReplicationProtocol,
     decoder: PgOutputDecoder,
     registry: RelationRegistry,
-    last_lsn: u64,
+    last_lsn: u64, // Last confirmed LSN (starting point for next batch)
 
     const Self = @This();
 
@@ -124,13 +129,16 @@ pub const PostgresStreamingSource = struct {
             changes.deinit(self.allocator);
         }
 
+        var last_confirmed_lsn: u64 = self.last_lsn; // Track LSN locally
+
         const start_time = std.time.milliTimestamp();
         const deadline = start_time + timeout_ms;
 
         while (changes.items.len < limit and std.time.milliTimestamp() < deadline) {
             const remaining_time = @max(deadline - std.time.milliTimestamp(), 0);
-            const timeout: i32 = @intCast(@min(remaining_time, 200)); // Poll every 200ms max (reduced CPU spinning)
+            const timeout: i32 = @intCast(remaining_time);
 
+            // Step 1: Blocking receive (poll() inside)
             const repl_msg = self.protocol.receiveMessage(timeout) catch |err| {
                 std.log.warn("Failed to receive replication message: {}", .{err});
                 return StreamingSourceError.ReplicationFailed;
@@ -145,57 +153,87 @@ pub const PostgresStreamingSource = struct {
                 continue;
             }
 
+            // Extract change from the first message
             var msg = repl_msg.?;
             defer msg.deinit(self.allocator);
 
-            switch (msg) {
-                .xlog_data => |xlog| {
-                    // Update last_lsn from WAL position
-                    self.last_lsn = xlog.server_wal_end;
+            const msg_lsn = try self.extractChangeFromMessage(msg, &changes);
+            last_confirmed_lsn = msg_lsn; // Update LSN (always > 0 on success)
 
-                    // Decode pgoutput message
-                    var pg_msg = self.decoder.decode(xlog.wal_data) catch |err| {
-                        std.log.warn("Failed to decode pgoutput message: {}", .{err});
-                        continue; // Skip invalid messages
-                    };
-                    defer pg_msg.deinit(self.allocator);
+            // Step 2: DRAIN all buffered messages (non-blocking)
+            while (changes.items.len < limit) {
+                const next_msg = self.protocol.receiveMessage(0) catch break; // 0ms timeout = non-blocking
+                if (next_msg == null) break; // No more buffered data
 
-                    // Convert to ChangeEvent
-                    const change_opt = self.convertToChangeEvent(pg_msg) catch |err| {
-                        std.log.warn("Failed to convert message to ChangeEvent: {}", .{err});
-                        continue;
-                    };
+                var buffered_msg = next_msg.?;
+                defer buffered_msg.deinit(self.allocator);
 
-                    if (change_opt) |change_event| {
-                        try changes.append(self.allocator, change_event);
-                    }
-                },
-                .keepalive => |keepalive| {
-                    // Update last_lsn from keepalive
-                    self.last_lsn = keepalive.server_wal_end;
-
-                    // Reply if requested
-                    if (keepalive.reply_requested) {
-                        const status = StandbyStatusUpdate{
-                            .wal_write_position = keepalive.server_wal_end,
-                            .wal_flush_position = keepalive.server_wal_end,
-                            .wal_apply_position = keepalive.server_wal_end,
-                            .client_time = std.time.timestamp(),
-                            .reply_requested = false,
-                        };
-                        self.protocol.sendStatusUpdate(status) catch |err| {
-                            std.log.warn("Failed to send status update: {}", .{err});
-                        };
-                    }
-                },
+                const buffered_lsn = try self.extractChangeFromMessage(buffered_msg, &changes);
+                last_confirmed_lsn = buffered_lsn; // Update LSN (always > 0 on success)
             }
         }
 
+        // Update instance LSN for next batch
+        self.last_lsn = last_confirmed_lsn;
+
         return .{
             .changes = try changes.toOwnedSlice(self.allocator),
-            .last_lsn = self.last_lsn,
+            .last_lsn = last_confirmed_lsn,
             .allocator = self.allocator,
         };
+    }
+
+    /// Extract change from replication message and return LSN for confirmation
+    /// Returns LSN of the message if successfully processed
+    /// Propagates errors (DecodeFailed, ConversionFailed) to caller
+    ///
+    /// LSN is returned even for messages that don't produce ChangeEvents
+    /// (BEGIN/COMMIT/RELATION) - they are still considered "processed"
+    ///
+    /// Error handling strategy (Fail-stop):
+    /// - Decode/convert errors propagate up to main()
+    /// - Application exits with non-zero code
+    /// - Supervisor (systemd/k8s) restarts application
+    /// - PostgreSQL re-sends the same message (LSN not confirmed)
+    /// - If error persists → crash loop → operator intervention required
+    fn extractChangeFromMessage(self: *Self, msg: replication_protocol.ReplicationMessage, changes: *std.ArrayList(ChangeEvent)) !u64 {
+        switch (msg) {
+            .xlog_data => |xlog| {
+                // Decode pgoutput message
+                var pg_msg = self.decoder.decode(xlog.wal_data) catch |err| {
+                    std.log.warn("Failed to decode pgoutput message at LSN {}: {}", .{ xlog.server_wal_end, err });
+                    return StreamingSourceError.DecodeFailed; // Propagate error up
+                };
+                defer pg_msg.deinit(self.allocator);
+
+                // Convert to ChangeEvent
+                const change_opt = self.convertToChangeEvent(pg_msg) catch |err| {
+                    std.log.warn("Failed to convert message to ChangeEvent at LSN {}: {}", .{ xlog.server_wal_end, err });
+                    return StreamingSourceError.ConversionFailed; // Propagate error up
+                };
+
+                // Add ChangeEvent to batch if present
+                if (change_opt) |change_event| {
+                    try changes.append(self.allocator, change_event);
+                    // If append fails (OOM), error propagates up
+                    // → batch won't be returned → LSN won't be confirmed → no data loss
+                }
+
+                // Successfully processed - return LSN for confirmation
+                return xlog.server_wal_end;
+            },
+            .keepalive => |keepalive| {
+                // Do NOT send reply here (even if reply_requested=true)
+                // Reason: We must maintain at-least-once guarantee
+                // - Sending reply here would confirm LSN before Kafka flush
+                // - If Kafka flush fails, data would be lost
+                // - Processor will send feedback after successful Kafka flush
+                //
+                // Note: PostgreSQL may wait for reply, but our batch timeout (~6 sec)
+                // is much shorter than wal_sender_timeout (default 60 sec)
+                return keepalive.server_wal_end;
+            },
+        }
     }
 
     /// Send LSN feedback to PostgreSQL (confirm processing)

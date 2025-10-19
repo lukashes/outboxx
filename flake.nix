@@ -30,6 +30,9 @@
 
             # Development tools
             docker-compose
+
+            # Profiling tools (for flamegraph generation)
+            flamegraph          # FlameGraph scripts
           ];
 
           shellHook = ''
