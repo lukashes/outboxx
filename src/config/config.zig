@@ -21,6 +21,26 @@ pub const SupportedValues = struct {
     pub const SINK_TYPES = [_][]const u8{ "kafka", "webhook" };
     pub const OPERATIONS = [_][]const u8{ "insert", "update", "delete" };
     pub const FORMATS = [_][]const u8{"json"};
+    pub const SOURCE_ENGINES = [_][]const u8{ "polling", "streaming" };
+};
+
+// PostgreSQL source engine type
+pub const SourceEngine = enum {
+    polling,
+    streaming,
+
+    pub fn fromString(str: []const u8) !SourceEngine {
+        if (std.mem.eql(u8, str, "polling")) return .polling;
+        if (std.mem.eql(u8, str, "streaming")) return .streaming;
+        return error.InvalidSourceEngine;
+    }
+
+    pub fn toString(self: SourceEngine) []const u8 {
+        return switch (self) {
+            .polling => "polling",
+            .streaming => "streaming",
+        };
+    }
 };
 
 // Configuration structures matching TOML format
@@ -30,6 +50,7 @@ pub const Metadata = struct {
 };
 
 pub const PostgresSource = struct {
+    engine: SourceEngine = .streaming, // Default to streaming source
     host: []const u8,
     port: u16,
     database: []const u8,
@@ -464,6 +485,8 @@ pub const Config = struct {
         // Enhanced source validation with string limits and format checks
         if (std.mem.eql(u8, self.source.type, "postgres")) {
             const postgres = self.source.postgres.?;
+            // Validate engine field
+            try validateEnum(allocator, postgres.engine.toString(), &SupportedValues.SOURCE_ENGINES, "postgres.engine");
             try validateHostname(postgres.host, "postgres.host");
             try validatePort(postgres.port, "postgres.port");
             try validatePostgresIdentifier(postgres.database, "postgres.database");
@@ -679,6 +702,7 @@ pub const ConfigParser = struct {
     fn parsePostgresValue(self: *ConfigParser, config: *Config, key: []const u8, value_str: []const u8) !void {
         if (config.source.postgres == null) {
             config.source.postgres = PostgresSource{
+                .engine = .streaming, // Default to streaming
                 .host = "localhost",
                 .port = 5432,
                 .database = "outboxx_test",
@@ -691,7 +715,13 @@ pub const ConfigParser = struct {
 
         var postgres = &config.source.postgres.?;
 
-        if (std.mem.eql(u8, key, "host")) {
+        if (std.mem.eql(u8, key, "engine")) {
+            const engine_str = try self.parseStringValue(config, value_str);
+            postgres.engine = SourceEngine.fromString(engine_str) catch blk: {
+                std.log.warn("Invalid postgres.engine value '{s}', using default 'streaming'", .{engine_str});
+                break :blk .streaming;
+            };
+        } else if (std.mem.eql(u8, key, "host")) {
             postgres.host = try self.parseStringValue(config, value_str);
         } else if (std.mem.eql(u8, key, "port")) {
             postgres.port = self.parseIntValue(u16, value_str) catch |err| {

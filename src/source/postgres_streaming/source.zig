@@ -93,10 +93,17 @@ pub const PostgresStreamingSource = struct {
         std.log.debug("Streaming replication started from LSN: {s}", .{start_lsn});
     }
 
-    /// Receive batch of changes from PostgreSQL
+    /// Receive batch of changes from PostgreSQL (default timeout: 1 second)
+    /// Wrapper for compatibility with polling source API
+    pub fn receiveBatch(self: *Self, limit: usize) StreamingSourceError!Batch {
+        const DEFAULT_TIMEOUT_MS = 1000; // 1 second timeout
+        return self.receiveBatchWithTimeout(limit, DEFAULT_TIMEOUT_MS);
+    }
+
+    /// Receive batch of changes from PostgreSQL (with timeout)
     /// limit: desired batch size (soft limit)
     /// timeout_ms: max time to wait for batch (1000ms = 1 second)
-    pub fn receiveBatch(self: *Self, limit: usize, timeout_ms: i32) StreamingSourceError!Batch {
+    pub fn receiveBatchWithTimeout(self: *Self, limit: usize, timeout_ms: i32) StreamingSourceError!Batch {
         var changes = std.ArrayList(ChangeEvent).empty;
         errdefer {
             for (changes.items) |*change| {
@@ -238,7 +245,7 @@ pub const PostgresStreamingSource = struct {
         // Build metadata
         const metadata = Metadata{
             .source = try self.allocator.dupe(u8, "postgres"),
-            .resource = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ rel_info.namespace, rel_info.relation_name }),
+            .resource = try self.allocator.dupe(u8, rel_info.relation_name),
             .schema = try self.allocator.dupe(u8, rel_info.namespace),
             .timestamp = std.time.timestamp(),
             .lsn = null,
@@ -258,7 +265,7 @@ pub const PostgresStreamingSource = struct {
 
         const metadata = Metadata{
             .source = try self.allocator.dupe(u8, "postgres"),
-            .resource = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ rel_info.namespace, rel_info.relation_name }),
+            .resource = try self.allocator.dupe(u8, rel_info.relation_name),
             .schema = try self.allocator.dupe(u8, rel_info.namespace),
             .timestamp = std.time.timestamp(),
             .lsn = null,
@@ -283,7 +290,7 @@ pub const PostgresStreamingSource = struct {
 
         const metadata = Metadata{
             .source = try self.allocator.dupe(u8, "postgres"),
-            .resource = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ rel_info.namespace, rel_info.relation_name }),
+            .resource = try self.allocator.dupe(u8, rel_info.relation_name),
             .schema = try self.allocator.dupe(u8, rel_info.namespace),
             .timestamp = std.time.timestamp(),
             .lsn = null,
