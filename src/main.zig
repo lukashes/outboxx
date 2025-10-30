@@ -7,7 +7,7 @@ const PostgresSource = @import("postgres_source").PostgresSource;
 const PostgresValidator = @import("source/postgres/validator.zig").PostgresValidator;
 const builtin = @import("builtin");
 const posix = std.posix;
-const constants = @import("constants.zig");
+const constants = @import("constants");
 
 pub const CliError = error{
     NoConfigPath,

@@ -2,6 +2,7 @@ const std = @import("std");
 const c = @cImport({
     @cInclude("librdkafka/rdkafka.h");
 });
+const constants = @import("constants");
 
 const KafkaError = error{
     ProducerCreationFailed,
@@ -19,6 +20,25 @@ pub const KafkaProducer = struct {
 
     const Self = @This();
 
+    fn logCallback(
+        rk: ?*const c.rd_kafka_t,
+        level: c_int,
+        fac: [*c]const u8,
+        buf: [*c]const u8,
+    ) callconv(.c) void {
+        _ = rk;
+        _ = fac;
+
+        const message = std.mem.span(buf);
+
+        switch (level) {
+            0...2 => std.log.err("kafka client: {s}", .{message}),
+            3 => std.log.warn("kafka client: {s}", .{message}),
+            4...5 => std.log.info("kafka client: {s}", .{message}),
+            else => std.log.debug("kafka client: {s}", .{message}),
+        }
+    }
+
     fn setConfig(conf: ?*c.rd_kafka_conf_t, key: [*:0]const u8, value: [*:0]const u8, errstr: *[512]u8) !void {
         if (c.rd_kafka_conf_set(conf, key, value, errstr, errstr.len) != c.RD_KAFKA_CONF_OK) {
             std.log.warn("Failed to set {s}: {s}", .{ key, errstr });
@@ -35,6 +55,9 @@ pub const KafkaProducer = struct {
             return KafkaError.ConfigurationFailed;
         }
         errdefer c.rd_kafka_conf_destroy(conf);
+
+        // Set custom log callback for full control over librdkafka logs
+        c.rd_kafka_conf_set_log_cb(conf, logCallback);
 
         // Set bootstrap servers
         const brokers_cstr = try allocator.dupeZ(u8, brokers);
@@ -59,6 +82,11 @@ pub const KafkaProducer = struct {
         try setConfig(conf, "enable.idempotence", "true", &errstr);
         try setConfig(conf, "acks", "all", &errstr);
         try setConfig(conf, "max.in.flight.requests.per.connection", "5", &errstr);
+
+        // Batching: optimized for CDC workload (balance latency + throughput)
+        // Application sends batches every 500ms, librdkafka further optimizes network utilization
+        try setConfig(conf, "linger.ms", constants.CDC.KAFKA_LINGER_MS, &errstr);
+        try setConfig(conf, "batch.size", constants.CDC.KAFKA_BATCH_SIZE, &errstr);
 
         // Create producer (takes ownership of conf)
         const producer = c.rd_kafka_new(c.RD_KAFKA_PRODUCER, conf, &errstr, errstr.len);
@@ -120,8 +148,6 @@ pub const KafkaProducer = struct {
     }
 
     pub fn sendMessage(self: *Self, topic_name: []const u8, key: ?[]const u8, message: []const u8) !void {
-        const producer = self.producer orelse return KafkaError.MessageSendFailed;
-
         const topic = try self.getOrCreateTopic(topic_name);
 
         var key_ptr: ?*const anyopaque = null;
@@ -148,7 +174,10 @@ pub const KafkaProducer = struct {
             std.log.warn("Failed to produce message: {s}", .{c.rd_kafka_err2str(errno)});
             return KafkaError.MessageSendFailed;
         }
+    }
 
+    pub fn poll(self: *Self) void {
+        const producer = self.producer orelse return;
         _ = c.rd_kafka_poll(producer, 0);
     }
 

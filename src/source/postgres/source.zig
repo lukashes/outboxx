@@ -6,6 +6,7 @@ const Metadata = domain.Metadata;
 const RowData = domain.RowData;
 const RowDataHelpers = domain.RowDataHelpers;
 const FieldValueHelpers = domain.FieldValueHelpers;
+const constants = @import("constants");
 
 const replication_protocol = @import("replication_protocol.zig");
 const ReplicationProtocol = replication_protocol.ReplicationProtocol;
@@ -110,16 +111,15 @@ pub const PostgresSource = struct {
         std.log.info("Streaming replication started from LSN: {s}", .{start_lsn});
     }
 
-    /// Receive batch of changes from PostgreSQL (default wait time: 1 second)
+    /// Receive batch of changes from PostgreSQL (default wait time from constants)
     /// Wrapper for compatibility with polling source API
     pub fn receiveBatch(self: *Self, limit: usize) PostgresSourceError!Batch {
-        const DEFAULT_WAIT_TIME_MS = 1000; // 1 second wait time
-        return self.receiveBatchWithWaitTime(limit, DEFAULT_WAIT_TIME_MS);
+        return self.receiveBatchWithWaitTime(limit, constants.CDC.BATCH_WAIT_MS);
     }
 
     /// Receive batch of changes from PostgreSQL (with wait time)
     /// limit: desired batch size (soft limit)
-    /// wait_time_ms: max time to wait for batch (1000ms = 1 second)
+    /// wait_time_ms: max time to wait for batch
     pub fn receiveBatchWithWaitTime(self: *Self, limit: usize, wait_time_ms: i32) PostgresSourceError!Batch {
         var changes = std.ArrayList(ChangeEvent).empty;
         errdefer {

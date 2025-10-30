@@ -12,6 +12,13 @@ pub fn build(b: *std.Build) void {
     const toml_dep = b.dependency("toml", .{});
     const toml_module = toml_dep.module("toml");
 
+    // Constants module (application-wide constants)
+    const constants_module = b.createModule(.{
+        .root_source_file = b.path("src/constants.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // Config module (for type definitions like KafkaSink, Stream, etc.)
     const config_module = b.createModule(.{
         .root_source_file = b.path("src/config/config.zig"),
@@ -41,6 +48,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     postgres_source_module.addImport("domain", domain_module);
+    postgres_source_module.addImport("constants", constants_module);
 
     // Kafka producer module
     const kafka_producer_module = b.createModule(.{
@@ -48,6 +56,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    kafka_producer_module.addImport("constants", constants_module);
 
     // Processor module with all dependencies
     const cdc_processor_module = b.createModule(.{
@@ -60,6 +69,7 @@ pub fn build(b: *std.Build) void {
     cdc_processor_module.addImport("json_serialization", json_serialization_module);
     cdc_processor_module.addImport("kafka_producer", kafka_producer_module);
     cdc_processor_module.addImport("config", config_module);
+    cdc_processor_module.addImport("constants", constants_module);
 
     // Main executable
     const exe = b.addExecutable(.{
@@ -79,6 +89,7 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("kafka_producer", kafka_producer_module);
     exe.root_module.addImport("config", config_module);
     exe.root_module.addImport("postgres_source", postgres_source_module);
+    exe.root_module.addImport("constants", constants_module);
 
     // Link libc for PostgreSQL and Kafka C libraries
     exe.linkLibC();
@@ -150,6 +161,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    kafka_producer_tests.root_module.addImport("constants", constants_module);
     kafka_producer_tests.linkLibC();
     kafka_producer_tests.linkSystemLibrary("rdkafka");
 
@@ -191,6 +203,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     streaming_source_tests.root_module.addImport("domain", domain_module);
+    streaming_source_tests.root_module.addImport("constants", constants_module);
     streaming_source_tests.linkLibC();
     streaming_source_tests.linkSystemLibrary("pq");
 
@@ -203,6 +216,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     streaming_integration_tests.root_module.addImport("domain", domain_module);
+    streaming_integration_tests.root_module.addImport("constants", constants_module);
     streaming_integration_tests.linkLibC();
     streaming_integration_tests.linkSystemLibrary("pq");
 
@@ -276,6 +290,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    kafka_integration_tests.root_module.addImport("constants", constants_module);
     kafka_integration_tests.linkLibC();
     kafka_integration_tests.linkSystemLibrary("rdkafka");
 
