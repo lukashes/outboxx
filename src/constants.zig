@@ -15,7 +15,7 @@ pub const CDC = struct {
 
     // Kafka settings
     pub const KAFKA_FLUSH_TIMEOUT_MS: i32 = 5000; // Flush timeout
-    pub const KAFKA_LINGER_MS = "50"; // Minimal wait - application already batches
+    pub const KAFKA_LINGER_MS = "50"; // Optimal for throughput (balance batching vs latency)
     pub const KAFKA_BATCH_SIZE = "262144"; // 256KB batches for better network utilization
     pub const KAFKA_POLL_INTERVAL: u32 = 100; // Poll every N messages (reduces syscall overhead)
 };
