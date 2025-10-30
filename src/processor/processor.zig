@@ -12,12 +12,7 @@ const domain = @import("domain");
 const ChangeEvent = domain.ChangeEvent;
 const json_serializer = @import("json_serialization");
 const JsonSerializer = json_serializer.JsonSerializer;
-
-// Kafka flush timeout: 5 seconds is a balance between:
-// - Allowing enough time for Kafka brokers to acknowledge messages
-// - Not blocking CDC processing for too long on Kafka issues
-// - Keeping replication lag low for real-time CDC
-const KAFKA_FLUSH_TIMEOUT_MS: i32 = 5_000;
+const constants = @import("constants");
 
 pub const ProcessorError = error{
     ConnectionFailed,
@@ -117,7 +112,7 @@ pub const Processor = struct {
 
         std.log.debug("Processing {} changes from batch (LSN: {})", .{ batch.changes.len, batch.last_lsn });
 
-        for (batch.changes) |change_event| {
+        for (batch.changes, 0..) |change_event, batch_index| {
             var matched_streams = self.matchStreams(change_event.meta.resource, change_event.op);
             defer matched_streams.deinit(self.allocator);
 
@@ -155,10 +150,18 @@ pub const Processor = struct {
 
                 std.log.debug("Sent {s} message for {s}.{s} to topic '{s}' (partition key: {s})", .{ change_event.op, change_event.meta.schema, change_event.meta.resource, topic_name, partition_key });
             }
+
+            // Poll every N messages to process callbacks and send queued messages
+            if (batch_index > 0 and batch_index % constants.CDC.KAFKA_POLL_INTERVAL == 0) {
+                kafka_producer.poll();
+            }
         }
 
+        // Final poll before flush to process any remaining callbacks
+        kafka_producer.poll();
+
         // CRITICAL: Kafka flush BEFORE LSN feedback (no data loss guarantee)
-        try kafka_producer.flush(KAFKA_FLUSH_TIMEOUT_MS);
+        try kafka_producer.flush(constants.CDC.KAFKA_FLUSH_TIMEOUT_MS);
 
         // Confirm LSN to PostgreSQL ONLY after Kafka flush succeeds
         try self.source.sendFeedback(batch.last_lsn);
@@ -169,7 +172,7 @@ pub const Processor = struct {
     pub fn startStreaming(self: *Self, stop_signal: *std.atomic.Value(bool)) !void {
         while (!stop_signal.load(.monotonic)) {
             // Fail-fast: any error propagates up → app exits → supervisor restarts
-            try self.processChangesToKafka(5000);
+            try self.processChangesToKafka(constants.CDC.BATCH_SIZE);
 
             // No sleep needed - receiveBatchWithTimeout() blocks on poll() when no data
         }

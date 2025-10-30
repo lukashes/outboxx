@@ -586,6 +586,21 @@ zig test src/kafka/producer_test.zig --library c --library rdkafka
 kafka-console-consumer --bootstrap-server localhost:9092 --topic public.users --from-beginning
 ```
 
+**librdkafka Documentation:**
+- **Version used:** `2.12.1` (overridden in flake.nix for performance improvements)
+- Official docs: https://docs.confluent.io/platform/current/clients/librdkafka/html/md_INTRODUCTION.html
+- Configuration reference: https://github.com/confluentinc/librdkafka/blob/master/CONFIGURATION.md
+- Key concepts:
+  - `rd_kafka_produce()` adds messages to internal queue (no immediate syscall)
+  - `rd_kafka_poll()` triggers actual network send + processes callbacks
+  - `rd_kafka_flush()` blocking wait for all queued messages to be sent and acknowledged
+  - Internal batching controlled by `batch.size` and `linger.ms` settings
+- **v2.12.1 improvements over 2.11.0:**
+  - Fixed 1s latency for first message in `producev`/`produceva`
+  - TCP_NODELAY enabled by default (reduced latency for SSL connections)
+  - Removed 500ms latency on partition leader switch
+  - Removed 1s wait after partition fetch restarts
+
 #### E2E Testing
 ```bash
 # Run all E2E tests (requires PostgreSQL + Kafka)
