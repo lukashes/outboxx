@@ -55,7 +55,6 @@
             export C_INCLUDE_PATH="${pkgs.postgresql}/include:${rdkafka-latest}/include:''${C_INCLUDE_PATH:+:$C_INCLUDE_PATH}"
 
             echo "Outboxx development environment ready"
-            echo "librdkafka version: ${rdkafka-latest.version}"
           '';
         };
       });

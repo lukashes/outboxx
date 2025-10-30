@@ -83,8 +83,7 @@ pub const KafkaProducer = struct {
         try setConfig(conf, "acks", "all", &errstr);
         try setConfig(conf, "max.in.flight.requests.per.connection", "5", &errstr);
 
-        // Batching: optimized for CDC workload (balance latency + throughput)
-        // Application sends batches every 500ms, librdkafka further optimizes network utilization
+        // Batching configuration
         try setConfig(conf, "linger.ms", constants.CDC.KAFKA_LINGER_MS, &errstr);
         try setConfig(conf, "batch.size", constants.CDC.KAFKA_BATCH_SIZE, &errstr);
 
@@ -111,7 +110,7 @@ pub const KafkaProducer = struct {
         self.topics.deinit();
 
         if (self.producer) |producer| {
-            _ = c.rd_kafka_flush(producer, 10000);
+            _ = c.rd_kafka_flush(producer, constants.CDC.KAFKA_FLUSH_TIMEOUT_MS);
             c.rd_kafka_destroy(producer);
         }
     }
