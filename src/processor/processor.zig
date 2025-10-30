@@ -127,10 +127,7 @@ pub const Processor = struct {
             }
 
             // Serialize once, send to all matching streams
-            const json_bytes = self.serializer.serialize(change_event, self.allocator) catch |err| {
-                std.log.warn("Failed to serialize message to JSON: {}", .{err});
-                continue;
-            };
+            const json_bytes = try self.serializer.serialize(change_event, self.allocator);
             defer self.allocator.free(json_bytes);
 
             for (matched_streams.items) |stream| {
@@ -148,10 +145,7 @@ pub const Processor = struct {
 
                 const topic_name = stream.sink.destination;
 
-                kafka_producer.sendMessage(topic_name, partition_key, json_bytes) catch |err| {
-                    std.log.warn("Failed to send message to Kafka topic '{s}': {}", .{ topic_name, err });
-                    continue;
-                };
+                try kafka_producer.sendMessage(topic_name, partition_key, json_bytes);
 
                 self.events_processed += 1;
 
@@ -164,7 +158,7 @@ pub const Processor = struct {
         }
 
         // CRITICAL: Kafka flush BEFORE LSN feedback (no data loss guarantee)
-        kafka_producer.flush(KAFKA_FLUSH_TIMEOUT_MS);
+        try kafka_producer.flush(KAFKA_FLUSH_TIMEOUT_MS);
 
         // Confirm LSN to PostgreSQL ONLY after Kafka flush succeeds
         try self.source.sendFeedback(batch.last_lsn);

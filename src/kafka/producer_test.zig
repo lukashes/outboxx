@@ -105,7 +105,7 @@ test "KafkaProducer can send message to topic" {
     try producer.sendMessage(test_topic, test_key, test_message);
 
     // Flush to ensure message is sent
-    producer.flush(5000);
+    try producer.flush(5000);
 
     // Verify the message was actually written to Kafka
     const message_written = verifyMessageWritten(allocator, "localhost:9092", test_topic, test_message) catch false;
@@ -142,7 +142,7 @@ test "KafkaProducer can send messages to multiple topics" {
     }
 
     // Flush all messages
-    producer.flush(5000);
+    try producer.flush(5000);
 
     // Verify at least one message was written
     const first_topic = topics[0];
@@ -208,7 +208,7 @@ test "KafkaProducer memory management" {
 
         try producer.sendMessage(topic, "memory_test", message);
 
-        producer.flush(1000);
+        try producer.flush(1000);
     }
 
     std.debug.print("Memory management test completed successfully\n", .{});

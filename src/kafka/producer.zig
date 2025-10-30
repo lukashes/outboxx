@@ -7,6 +7,7 @@ const KafkaError = error{
     ProducerCreationFailed,
     TopicCreationFailed,
     MessageSendFailed,
+    FlushFailed,
     ConfigurationFailed,
     ConnectionTestFailed,
 };
@@ -124,9 +125,13 @@ pub const KafkaProducer = struct {
         _ = c.rd_kafka_poll(producer, 0);
     }
 
-    pub fn flush(self: *Self, timeout_ms: i32) void {
-        if (self.producer) |producer| {
-            _ = c.rd_kafka_flush(producer, timeout_ms);
+    pub fn flush(self: *Self, timeout_ms: i32) !void {
+        const producer = self.producer orelse return KafkaError.FlushFailed;
+
+        const err = c.rd_kafka_flush(producer, timeout_ms);
+        if (err != c.RD_KAFKA_RESP_ERR_NO_ERROR) {
+            std.log.warn("Kafka flush failed: {s}", .{c.rd_kafka_err2str(err)});
+            return KafkaError.FlushFailed;
         }
     }
 
