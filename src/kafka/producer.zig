@@ -15,6 +15,7 @@ const KafkaError = error{
 pub const KafkaProducer = struct {
     producer: ?*c.rd_kafka_t,
     allocator: std.mem.Allocator,
+    topics: std.StringHashMap(*c.rd_kafka_topic_t),
 
     const Self = @This();
 
@@ -69,23 +70,59 @@ pub const KafkaProducer = struct {
         return Self{
             .producer = producer,
             .allocator = allocator,
+            .topics = std.StringHashMap(*c.rd_kafka_topic_t).init(allocator),
         };
     }
 
     pub fn deinit(self: *Self) void {
+        var it = self.topics.iterator();
+        while (it.next()) |entry| {
+            c.rd_kafka_topic_destroy(entry.value_ptr.*);
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.topics.deinit();
+
         if (self.producer) |producer| {
-            // Flush and wait for outstanding messages
-            _ = c.rd_kafka_flush(producer, 10000); // 10 seconds timeout
+            _ = c.rd_kafka_flush(producer, 10000);
             c.rd_kafka_destroy(producer);
         }
+    }
+
+    fn getOrCreateTopic(self: *Self, topic_name: []const u8) !*c.rd_kafka_topic_t {
+        const producer = self.producer orelse return KafkaError.TopicCreationFailed;
+
+        if (self.topics.get(topic_name)) |topic| {
+            return topic;
+        }
+
+        const topic_name_cstr = try self.allocator.dupeZ(u8, topic_name);
+        defer self.allocator.free(topic_name_cstr);
+
+        const topic_conf = c.rd_kafka_topic_conf_new();
+        const topic_opt = c.rd_kafka_topic_new(producer, topic_name_cstr.ptr, topic_conf);
+        if (topic_opt == null) {
+            std.log.warn("Failed to create topic: {s}", .{topic_name});
+            return KafkaError.TopicCreationFailed;
+        }
+        const topic = topic_opt.?;
+
+        const owned_key = try self.allocator.dupe(u8, topic_name);
+        errdefer {
+            self.allocator.free(owned_key);
+            c.rd_kafka_topic_destroy(topic);
+        }
+
+        try self.topics.put(owned_key, topic);
+
+        std.log.debug("Created topic handle: {s}", .{topic_name});
+
+        return topic;
     }
 
     pub fn sendMessage(self: *Self, topic_name: []const u8, key: ?[]const u8, message: []const u8) !void {
         const producer = self.producer orelse return KafkaError.MessageSendFailed;
 
-        // Create null-terminated topic name
-        const topic_name_cstr = try self.allocator.dupeZ(u8, topic_name);
-        defer self.allocator.free(topic_name_cstr);
+        const topic = try self.getOrCreateTopic(topic_name);
 
         var key_ptr: ?*const anyopaque = null;
         var key_len: usize = 0;
@@ -95,24 +132,15 @@ pub const KafkaProducer = struct {
             key_len = k.len;
         }
 
-        // Create topic handle - we'll create it dynamically for each message
-        const topic_conf = c.rd_kafka_topic_conf_new();
-        const topic = c.rd_kafka_topic_new(producer, topic_name_cstr.ptr, topic_conf);
-        if (topic == null) {
-            std.log.warn("Failed to create topic: {s}", .{topic_name});
-            return KafkaError.TopicCreationFailed;
-        }
-        defer c.rd_kafka_topic_destroy(topic);
-
         const result = c.rd_kafka_produce(
             topic,
-            c.RD_KAFKA_PARTITION_UA, // Auto-assign partition
-            c.RD_KAFKA_MSG_F_COPY, // Copy message payload
+            c.RD_KAFKA_PARTITION_UA,
+            c.RD_KAFKA_MSG_F_COPY,
             @constCast(message.ptr),
             message.len,
             key_ptr,
             key_len,
-            null, // No delivery report callback for now
+            null,
         );
 
         if (result == -1) {
@@ -121,7 +149,6 @@ pub const KafkaProducer = struct {
             return KafkaError.MessageSendFailed;
         }
 
-        // Poll for events to trigger message delivery
         _ = c.rd_kafka_poll(producer, 0);
     }
 
