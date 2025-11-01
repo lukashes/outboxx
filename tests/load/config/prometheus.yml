@@ -1,0 +1,19 @@
+global:
+  scrape_interval: 1s
+  evaluation_interval: 1s
+
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Kafka CDC Exporter - real CDC metrics from Kafka
+  - job_name: 'kafka_exporter'
+    static_configs:
+      - targets: ['kafka-exporter:8000']
+
+  # cAdvisor - container metrics
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']

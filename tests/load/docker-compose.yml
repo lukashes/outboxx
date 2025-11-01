@@ -1,0 +1,177 @@
+services:
+  # PostgreSQL configured for high load CDC
+  postgres:
+    image: postgres:16
+    container_name: load_postgres
+    environment:
+      POSTGRES_DB: outboxx_load
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./config/postgres.conf:/etc/postgresql/postgresql.conf
+      - ./config/init.sql:/docker-entrypoint-initdb.d/init.sql
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Kafka with KRaft mode (no ZooKeeper needed)
+  kafka:
+    image: bitnamilegacy/kafka:latest
+    container_name: load_kafka
+    environment:
+      # KRaft mode configuration
+      KAFKA_CFG_NODE_ID: 1
+      KAFKA_CFG_PROCESS_ROLES: broker,controller
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:19093
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:19093
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_KRAFT_CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+      # Auto-create topics for CDC
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_CFG_NUM_PARTITIONS: 3
+      KAFKA_CFG_DEFAULT_REPLICATION_FACTOR: 1
+    healthcheck:
+      test: ["CMD", "kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - kafka_data:/bitnami/kafka
+
+  # Outboxx CDC service
+  outboxx:
+    build:
+      context: ../..
+      dockerfile: tests/load/Dockerfile.outboxx
+    container_name: load_outboxx
+    environment:
+      POSTGRES_PASSWORD: "postgres"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./config/outboxx.toml:/app/config.toml
+    command: ["/app/outboxx", "--config", "/app/config.toml"]
+    mem_limit: 500m
+    cpus: 1
+    restart: unless-stopped
+    # Enable perf profiling (Linux only)
+    cap_add:
+      - SYS_ADMIN
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+
+  # Debezium Kafka Connect service
+  debezium:
+    image: debezium/connect:2.7.3.Final
+    container_name: load_debezium
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8083:8083"
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: debezium-load
+      CONFIG_STORAGE_TOPIC: debezium_configs
+      OFFSET_STORAGE_TOPIC: debezium_offsets
+      STATUS_STORAGE_TOPIC: debezium_statuses
+      CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      STATUS_STORAGE_REPLICATION_FACTOR: 1
+      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      # JVM memory optimization for 500MB container
+      KAFKA_HEAP_OPTS: "-Xms256m -Xmx256m"
+      KAFKA_JVM_PERFORMANCE_OPTS: "-XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+UseStringDeduplication -XX:+ParallelRefProcEnabled"
+      CONNECT_PRODUCER_MAX_REQUEST_SIZE: 1048576
+      CONNECT_CONSUMER_MAX_PARTITION_FETCH_BYTES: 1048576
+    mem_limit: 500m
+    cpus: 1
+    restart: unless-stopped
+
+  # Kafka CDC Metrics Exporter
+  kafka-exporter:
+    build:
+      context: exporter
+      dockerfile: Dockerfile
+    container_name: load_kafka_exporter
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKERS: kafka:9092
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  # Prometheus - metrics collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: load_prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+
+  # cAdvisor - container metrics
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: load_cadvisor
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    privileged: true
+    devices:
+      - /dev/kmsg
+
+  # Grafana - visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: load_grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/dashboard.json:/etc/grafana/provisioning/dashboards/outboxx.json
+      - ./grafana/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml
+      - ./grafana/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml
+
+networks:
+  default:
+    name: outboxx-load-network
+    driver: bridge
+
+volumes:
+  postgres_data:
+  kafka_data:
+  prometheus_data:
+  grafana_data:
