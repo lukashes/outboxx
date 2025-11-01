@@ -1,4 +1,4 @@
-.PHONY: help build run test test-integration test-unit clean fmt lint dev install-deps check-deps env-up env-down env-restart env-logs env-status coverage
+.PHONY: help build run test test-integration test-unit clean fmt lint dev install-deps check-deps env-up env-down env-restart env-logs env-status coverage load-up load-down load-test bench
 
 # Use direnv to auto-load Nix environment for local development
 # This allows commands to work without 'nix develop' wrapper
@@ -48,6 +48,14 @@ help:
 	@echo "  make env-restart   - Restart development environment"
 	@echo "  make env-logs      - Show PostgreSQL logs"
 	@echo "  make env-status    - Show environment status"
+	@echo ""
+	@echo "Load Testing:"
+	@echo "  make load-up       - Start load testing infrastructure (Grafana + Prometheus)"
+	@echo "  make load-down     - Stop load testing infrastructure"
+	@echo "  make load-test     - Run load test scenario (SCENARIO=steady|burst|mixed|ramp)"
+	@echo ""
+	@echo "Component Benchmarks:"
+	@echo "  make bench         - Run component benchmarks (decoder, serializer, kafka)"
 	@echo ""
 	@echo "Dependencies:"
 	@echo "  make check-deps    - Check system dependencies"
@@ -156,3 +164,42 @@ env-logs:
 env-status:
 	@echo "Development environment status:"
 	docker-compose ps
+
+# Load Testing (Grafana + Prometheus stack)
+load-up:
+	@echo "Starting load testing infrastructure..."
+	@cd tests/load && docker compose up -d
+	@echo "Load testing environment is ready!"
+	@echo ""
+	@echo "Services:"
+	@echo "  • Grafana:    http://localhost:3000 (admin/admin)"
+	@echo "  • Prometheus: http://localhost:9090"
+	@echo "  • cAdvisor:   http://localhost:8080"
+	@echo "  • PostgreSQL: localhost:5433"
+	@echo ""
+	@echo "Run load tests:"
+	@echo "  make load-test SCENARIO=steady"
+	@echo "  make load-test SCENARIO=burst"
+
+load-down:
+	@echo "Stopping load testing infrastructure..."
+	@cd tests/load && docker compose down -v
+
+load-test:
+	@if [ -z "$(SCENARIO)" ]; then \
+		echo "Usage: make load-test SCENARIO=<scenario>"; \
+		echo ""; \
+		echo "Available scenarios:"; \
+		echo "  steady - 1000 evt/s for 60 seconds"; \
+		echo "  burst  - 10K events as fast as possible"; \
+		echo "  mixed  - 60% INSERT, 30% UPDATE, 10% DELETE"; \
+		echo "  ramp   - Gradual 100→5000 evt/s"; \
+		exit 1; \
+	fi
+	@echo "Running load test: $(SCENARIO)"
+	@tests/load/load/run-load.sh $(SCENARIO)
+
+# Component Benchmarks (zbench)
+bench:
+	@echo "Running component benchmarks..."
+	@zig build bench

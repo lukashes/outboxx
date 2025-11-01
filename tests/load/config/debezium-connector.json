@@ -1,0 +1,27 @@
+{
+  "name": "load-postgres-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "database.hostname": "postgres",
+    "database.port": "5432",
+    "database.user": "postgres",
+    "database.password": "postgres",
+    "database.dbname": "outboxx_load",
+    "database.server.name": "debezium",
+    "topic.prefix": "debezium",
+    "table.include.list": "public.load_events",
+    "plugin.name": "pgoutput",
+    "publication.name": "debezium_load_pub",
+    "slot.name": "debezium_load_slot",
+    "snapshot.mode": "never",
+    "transforms": "unwrap",
+    "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
+    "transforms.unwrap.drop.tombstones": "false",
+    "transforms.unwrap.delete.handling.mode": "rewrite",
+    "transforms.unwrap.add.fields": "op,source.ts_ms,source.lsn",
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "false",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "false"
+  }
+}
