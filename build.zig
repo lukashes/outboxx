@@ -375,8 +375,23 @@ pub fn build(b: *std.Build) void {
     });
     const zbench_module = zbench_dep.module("zbench");
 
+    // PgOutputDecoder module for benchmarks
+    const pg_output_decoder_module = b.createModule(.{
+        .root_source_file = b.path("src/source/postgres/pg_output_decoder.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+
+    // Benchmark helpers module
+    const bench_helpers_module = b.createModule(.{
+        .root_source_file = b.path("tests/benchmarks/bench_helpers.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+
     // JsonSerializer benchmark
     const serializer_bench = b.addTest(.{
+        .name = "serializer_bench",
         .root_module = b.createModule(.{
             .root_source_file = b.path("tests/benchmarks/components/serializer_bench.zig"),
             .target = target,
@@ -386,9 +401,26 @@ pub fn build(b: *std.Build) void {
     serializer_bench.root_module.addImport("zbench", zbench_module);
     serializer_bench.root_module.addImport("domain", domain_module);
     serializer_bench.root_module.addImport("json_serialization", json_serialization_module);
+    serializer_bench.root_module.addImport("bench_helpers", bench_helpers_module);
 
     const install_serializer_bench = b.addInstallArtifact(serializer_bench, .{});
 
+    // PgOutputDecoder benchmark
+    const decoder_bench = b.addTest(.{
+        .name = "decoder_bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/benchmarks/components/decoder_bench.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    decoder_bench.root_module.addImport("zbench", zbench_module);
+    decoder_bench.root_module.addImport("pg_output_decoder", pg_output_decoder_module);
+    decoder_bench.root_module.addImport("bench_helpers", bench_helpers_module);
+
+    const install_decoder_bench = b.addInstallArtifact(decoder_bench, .{});
+
     const bench_step = b.step("bench", "Compile component benchmarks");
     bench_step.dependOn(&install_serializer_bench.step);
+    bench_step.dependOn(&install_decoder_bench.step);
 }

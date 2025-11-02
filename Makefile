@@ -204,4 +204,6 @@ bench:
 	@echo "Compiling component benchmarks..."
 	@zig build bench >/dev/null 2>&1
 	@echo "Running benchmarks..."
-	@./zig-out/bin/test
+	@./zig-out/bin/serializer_bench
+	@echo ""
+	@./zig-out/bin/decoder_bench
