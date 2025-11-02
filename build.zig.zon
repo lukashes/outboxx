@@ -6,6 +6,10 @@
             .url = "git+https://github.com/sam701/zig-toml?ref=zig-0.15#475b03c630c802f8b6bd3e239d8fc2279b4fadb8",
             .hash = "toml-0.3.0-bV14BfV7AQD8DkuQI7skP8ekQTaBYKTO0MY_35Cw_EXo",
         },
+        .zbench = .{
+            .url = "https://github.com/hendriknielaender/zbench/archive/463f8d5349daf72430697c9fe42cfe0a68729859.tar.gz",
+            .hash = "zbench-0.11.1-YTdc7zgmAQDtDcHPFwsLeawui27WjMLWmUwrfz7pIlB2",
+        },
     },
     .paths = .{""},
     .fingerprint = 0xdcb3806ad7417129,
