@@ -53,36 +53,43 @@ tests/
 
 ## Implementation Phases
 
-### Phase 1: Reorganization (High Priority)
+### Phase 1: Reorganization (✅ COMPLETED)
 
-**Goal**: Restructure project to separate benchmarks and load testing
+**Goal**: Add load testing infrastructure and prepare for component benchmarks
 
 **Tasks**:
 
-1. Create new directories:
+1. ✅ Create new directories:
    - `tests/benchmarks/` for component benchmarks
-   - `tests/load/` for load testing
+   - `tests/load/` for load testing infrastructure
 
-2. Move `benchmarks/` → `tests/load/`:
-   - All files: docker-compose.yml, config/, exporter/, grafana/, load/, results/
-   - Preserve git history with `git mv`
+2. ✅ Add load testing infrastructure to `tests/load/`:
+   - Docker Compose stack: PostgreSQL, Kafka, Grafana, Prometheus
+   - Load scenarios: steady, burst, ramp, mixed
+   - Profiling scripts with perf and flamegraphs
+   - Outboxx vs Debezium comparison support
 
-3. Update paths in shell scripts:
-   - `tests/load/*.sh` - update relative paths
-   - Working directory references
+3. ✅ Rename all `bench_*` → `load_*`:
+   - Containers: load_postgres, load_kafka, load_outboxx, load_debezium
+   - Database: outboxx_load, table: load_events
+   - Topics: outboxx.load_events, debezium.load_events
+   - Consistent naming throughout configs and scripts
 
-4. Update `tests/load/docker-compose.yml`:
-   - Volume mount paths
-   - Config file paths
+4. ✅ Update Makefile:
+   - `load-up`, `load-down`, `load-test` commands
+   - Prepare `bench` command for Phase 2
 
-5. Update Makefile:
-   - `load-*` targets for `tests/load/`
-   - Prepare `bench-*` targets for Phase 2
+5. ✅ Documentation:
+   - Save implementation plan to docs/BENCHMARKING_PLAN.md
+   - Add .gitignore for results/
 
 **Deliverables**:
-- ✅ Reorganized directory structure
-- ✅ All load testing scripts working from new location
-- ✅ Updated Makefile
+- ✅ Load testing infrastructure in `tests/load/`
+- ✅ All scripts working with load_* naming
+- ✅ Updated Makefile with load-* commands
+- ✅ Implementation plan documented
+
+**Commit**: `cd813e6 Add load testing infrastructure`
 
 ---
 
@@ -255,10 +262,11 @@ tests/
 
 ## Success Criteria
 
-### Phase 1
-- [ ] All load testing scripts work from `tests/load/`
-- [ ] No broken links in documentation
-- [ ] `make load-up` works
+### Phase 1 (✅ Completed)
+- [x] All load testing scripts work from `tests/load/`
+- [x] Consistent load_* naming throughout
+- [x] `make load-up`, `make load-down`, `make load-test` work
+- [x] Implementation plan documented
 
 ### Phase 2
 - [ ] `make bench` runs successfully
@@ -285,19 +293,20 @@ tests/
 
 ## Timeline
 
-**Phase 1**: ~2-3 hours (reorganization)
-**Phase 2**: ~4-6 hours (benchmark framework)
+**Phase 1**: ✅ Completed
+**Phase 2**: ~4-6 hours (benchmark framework) - **NEXT**
 **Phase 3**: ~2-3 hours (polish)
 **Phase 4**: ~1-2 hours (documentation)
 **Phase 5**: ~2-3 hours (CI/CD)
 
-**Total**: ~11-17 hours
+**Remaining**: ~9-14 hours
 
 ---
 
 ## Notes
 
-- Phases 1 and 2 are **critical** - provide immediate value
+- **Phase 1**: ✅ Completed - load testing infrastructure ready
+- **Phase 2**: Critical next step - component benchmarks for optimization
 - Phase 3 improves existing infrastructure
 - Phases 4 and 5 can be done incrementally
 - Each phase is independently deployable

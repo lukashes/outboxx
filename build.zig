@@ -367,4 +367,28 @@ pub fn build(b: *std.Build) void {
     dev_step.dependOn(&fmt.step);
     dev_step.dependOn(&run_config_tests.step);
     dev_step.dependOn(b.getInstallStep());
+
+    // Benchmarks with zbench
+    const zbench_dep = b.dependency("zbench", .{
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    const zbench_module = zbench_dep.module("zbench");
+
+    // JsonSerializer benchmark
+    const serializer_bench = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/benchmarks/components/serializer_bench.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    serializer_bench.root_module.addImport("zbench", zbench_module);
+    serializer_bench.root_module.addImport("domain", domain_module);
+    serializer_bench.root_module.addImport("json_serialization", json_serialization_module);
+
+    const install_serializer_bench = b.addInstallArtifact(serializer_bench, .{});
+
+    const bench_step = b.step("bench", "Compile component benchmarks");
+    bench_step.dependOn(&install_serializer_bench.step);
 }

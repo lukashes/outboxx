@@ -201,5 +201,7 @@ load-test:
 
 # Component Benchmarks (zbench)
 bench:
-	@echo "Running component benchmarks..."
-	@zig build bench
+	@echo "Compiling component benchmarks..."
+	@zig build bench >/dev/null 2>&1
+	@echo "Running benchmarks..."
+	@./zig-out/bin/test
