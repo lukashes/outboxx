@@ -435,8 +435,24 @@ pub fn build(b: *std.Build) void {
 
     const install_match_streams_bench = b.addInstallArtifact(match_streams_bench, .{});
 
+    // getPartitionKeyValue benchmark
+    const partition_key_bench = b.addTest(.{
+        .name = "partition_key_bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/benchmarks/components/partition_key_bench.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    partition_key_bench.root_module.addImport("zbench", zbench_module);
+    partition_key_bench.root_module.addImport("domain", domain_module);
+    partition_key_bench.root_module.addImport("bench_helpers", bench_helpers_module);
+
+    const install_partition_key_bench = b.addInstallArtifact(partition_key_bench, .{});
+
     const bench_step = b.step("bench", "Compile component benchmarks");
     bench_step.dependOn(&install_serializer_bench.step);
     bench_step.dependOn(&install_decoder_bench.step);
     bench_step.dependOn(&install_match_streams_bench.step);
+    bench_step.dependOn(&install_partition_key_bench.step);
 }
