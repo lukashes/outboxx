@@ -450,9 +450,27 @@ pub fn build(b: *std.Build) void {
 
     const install_partition_key_bench = b.addInstallArtifact(partition_key_bench, .{});
 
+    // KafkaProducer benchmark (with mock cluster)
+    const kafka_bench = b.addTest(.{
+        .name = "kafka_bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/benchmarks/components/kafka_bench.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    kafka_bench.root_module.addImport("zbench", zbench_module);
+    kafka_bench.root_module.addImport("kafka_producer", kafka_producer_module);
+    kafka_bench.root_module.addImport("bench_helpers", bench_helpers_module);
+    kafka_bench.linkLibC();
+    kafka_bench.linkSystemLibrary("rdkafka");
+
+    const install_kafka_bench = b.addInstallArtifact(kafka_bench, .{});
+
     const bench_step = b.step("bench", "Compile component benchmarks");
     bench_step.dependOn(&install_serializer_bench.step);
     bench_step.dependOn(&install_decoder_bench.step);
     bench_step.dependOn(&install_match_streams_bench.step);
     bench_step.dependOn(&install_partition_key_bench.step);
+    bench_step.dependOn(&install_kafka_bench.step);
 }
