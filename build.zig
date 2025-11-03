@@ -420,7 +420,23 @@ pub fn build(b: *std.Build) void {
 
     const install_decoder_bench = b.addInstallArtifact(decoder_bench, .{});
 
+    // matchStreams benchmark
+    const match_streams_bench = b.addTest(.{
+        .name = "match_streams_bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/benchmarks/components/match_streams_bench.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    match_streams_bench.root_module.addImport("zbench", zbench_module);
+    match_streams_bench.root_module.addImport("config", config_module);
+    match_streams_bench.root_module.addImport("bench_helpers", bench_helpers_module);
+
+    const install_match_streams_bench = b.addInstallArtifact(match_streams_bench, .{});
+
     const bench_step = b.step("bench", "Compile component benchmarks");
     bench_step.dependOn(&install_serializer_bench.step);
     bench_step.dependOn(&install_decoder_bench.step);
+    bench_step.dependOn(&install_match_streams_bench.step);
 }

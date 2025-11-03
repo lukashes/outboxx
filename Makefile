@@ -207,3 +207,5 @@ bench:
 	@./zig-out/bin/serializer_bench
 	@echo ""
 	@./zig-out/bin/decoder_bench
+	@echo ""
+	@./zig-out/bin/match_streams_bench
