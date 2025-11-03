@@ -1,0 +1,134 @@
+const std = @import("std");
+const zbench = @import("zbench");
+const domain = @import("domain");
+const bench_helpers = @import("bench_helpers");
+
+const ChangeEvent = domain.ChangeEvent;
+const ChangeOperation = domain.ChangeOperation;
+const Metadata = domain.Metadata;
+const FieldValueHelpers = domain.FieldValueHelpers;
+const RowDataHelpers = domain.RowDataHelpers;
+const CountingAllocator = bench_helpers.CountingAllocator;
+
+fn createEventWithIntegerKey(allocator: std.mem.Allocator) !ChangeEvent {
+    var row_builder = RowDataHelpers.createBuilder(allocator);
+    try RowDataHelpers.put(&row_builder, allocator, "id", FieldValueHelpers.integer(12345));
+    try RowDataHelpers.put(&row_builder, allocator, "name", try FieldValueHelpers.text(allocator, "Alice"));
+    try RowDataHelpers.put(&row_builder, allocator, "email", try FieldValueHelpers.text(allocator, "alice@example.com"));
+    try RowDataHelpers.put(&row_builder, allocator, "active", FieldValueHelpers.boolean(true));
+
+    const row = try RowDataHelpers.finalize(&row_builder, allocator);
+
+    const metadata = Metadata{
+        .source = try allocator.dupe(u8, "postgres"),
+        .resource = try allocator.dupe(u8, "users"),
+        .schema = try allocator.dupe(u8, "public"),
+        .timestamp = 1234567890,
+        .lsn = null,
+    };
+
+    var event = ChangeEvent.init(ChangeOperation.INSERT, metadata);
+    event.setInsertData(row);
+    return event;
+}
+
+fn createEventWithStringKey(allocator: std.mem.Allocator) !ChangeEvent {
+    var row_builder = RowDataHelpers.createBuilder(allocator);
+    try RowDataHelpers.put(&row_builder, allocator, "uuid", try FieldValueHelpers.text(allocator, "550e8400-e29b-41d4-a716-446655440000"));
+    try RowDataHelpers.put(&row_builder, allocator, "name", try FieldValueHelpers.text(allocator, "Bob"));
+    try RowDataHelpers.put(&row_builder, allocator, "email", try FieldValueHelpers.text(allocator, "bob@example.com"));
+
+    const row = try RowDataHelpers.finalize(&row_builder, allocator);
+
+    const metadata = Metadata{
+        .source = try allocator.dupe(u8, "postgres"),
+        .resource = try allocator.dupe(u8, "orders"),
+        .schema = try allocator.dupe(u8, "public"),
+        .timestamp = 1234567890,
+        .lsn = null,
+    };
+
+    var event = ChangeEvent.init(ChangeOperation.INSERT, metadata);
+    event.setInsertData(row);
+    return event;
+}
+
+fn benchmarkPartitionKeyInteger(allocator: std.mem.Allocator) void {
+    var event = createEventWithIntegerKey(allocator) catch unreachable;
+    defer event.deinit(allocator);
+
+    const key = event.getPartitionKeyValue(allocator, "id") catch unreachable;
+    if (key) |k| {
+        allocator.free(k);
+    }
+}
+
+fn benchmarkPartitionKeyString(allocator: std.mem.Allocator) void {
+    var event = createEventWithStringKey(allocator) catch unreachable;
+    defer event.deinit(allocator);
+
+    const key = event.getPartitionKeyValue(allocator, "uuid") catch unreachable;
+    if (key) |k| {
+        allocator.free(k);
+    }
+}
+
+fn benchmarkPartitionKeyBoolean(allocator: std.mem.Allocator) void {
+    var event = createEventWithIntegerKey(allocator) catch unreachable;
+    defer event.deinit(allocator);
+
+    const key = event.getPartitionKeyValue(allocator, "active") catch unreachable;
+    if (key) |k| {
+        allocator.free(k);
+    }
+}
+
+fn benchmarkPartitionKeyNotFound(allocator: std.mem.Allocator) void {
+    var event = createEventWithIntegerKey(allocator) catch unreachable;
+    defer event.deinit(allocator);
+
+    const key = event.getPartitionKeyValue(allocator, "nonexistent_field") catch unreachable;
+    if (key) |k| {
+        allocator.free(k);
+    }
+}
+
+test "benchmark getPartitionKeyValue" {
+    var alloc_count: usize = 0;
+    var counting_alloc = CountingAllocator{
+        .parent_allocator = std.testing.allocator,
+        .allocation_count = &alloc_count,
+    };
+
+    var bench = zbench.Benchmark.init(counting_alloc.allocator(), .{});
+    defer bench.deinit();
+
+    try bench.add("getPartitionKeyValue (integer)", benchmarkPartitionKeyInteger, .{
+        .iterations = 1000,
+        .track_allocations = true,
+    });
+
+    try bench.add("getPartitionKeyValue (string)", benchmarkPartitionKeyString, .{
+        .iterations = 1000,
+        .track_allocations = true,
+    });
+
+    try bench.add("getPartitionKeyValue (boolean)", benchmarkPartitionKeyBoolean, .{
+        .iterations = 1000,
+        .track_allocations = true,
+    });
+
+    try bench.add("getPartitionKeyValue (not found)", benchmarkPartitionKeyNotFound, .{
+        .iterations = 1000,
+        .track_allocations = true,
+    });
+
+    var buf: [4096]u8 = undefined;
+    var stdout = std.fs.File.stdout().writer(&buf);
+    const writer = &stdout.interface;
+    try bench.run(writer);
+    try writer.flush();
+
+    const allocations_per_iter = alloc_count / 4000;
+    std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
+}
