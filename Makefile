@@ -211,3 +211,5 @@ bench:
 	@./zig-out/bin/match_streams_bench
 	@echo ""
 	@./zig-out/bin/partition_key_bench
+	@echo ""
+	@./zig-out/bin/kafka_bench
