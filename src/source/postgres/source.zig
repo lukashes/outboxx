@@ -15,12 +15,158 @@ const StandbyStatusUpdate = replication_protocol.StandbyStatusUpdate;
 
 const pg_output_decoder = @import("pg_output_decoder.zig");
 const PgOutputDecoder = pg_output_decoder.PgOutputDecoder;
-const PgOutputMessage = pg_output_decoder.PgOutputMessage;
 const DecoderError = pg_output_decoder.DecoderError;
 
 const relation_registry = @import("relation_registry.zig");
-const RelationRegistry = relation_registry.RelationRegistry;
 const RelationRegistryError = relation_registry.RelationRegistryError;
+
+// Re-export types for benchmarks (public API)
+pub const PgOutputMessage = pg_output_decoder.PgOutputMessage;
+pub const InsertMessage = pg_output_decoder.InsertMessage;
+pub const UpdateMessage = pg_output_decoder.UpdateMessage;
+pub const DeleteMessage = pg_output_decoder.DeleteMessage;
+pub const TupleMessage = pg_output_decoder.TupleMessage;
+pub const TupleData = pg_output_decoder.TupleData;
+pub const RelationMessage = pg_output_decoder.RelationMessage;
+pub const RelationMessageColumn = pg_output_decoder.RelationMessageColumn;
+pub const RelationRegistry = relation_registry.RelationRegistry;
+
+/// Message processor - converts PgOutputMessage to ChangeEvent
+/// Separated from PostgresSource for testability (no I/O dependency)
+pub const MessageProcessor = struct {
+    allocator: std.mem.Allocator,
+
+    const Self = @This();
+
+    pub fn init(allocator: std.mem.Allocator) Self {
+        return Self{
+            .allocator = allocator,
+        };
+    }
+
+    /// Process PgOutputMessage and convert to ChangeEvent
+    /// Returns null for messages that don't produce ChangeEvents (BEGIN, COMMIT, RELATION)
+    pub fn processMessage(self: *Self, pg_msg: PgOutputMessage, registry: *RelationRegistry) PostgresSourceError!?ChangeEvent {
+        switch (pg_msg) {
+            .begin, .commit => {
+                return null;
+            },
+            .relation => |rel| {
+                registry.register(rel) catch |err| {
+                    std.log.warn("Failed to register relation: {}", .{err});
+                    return PostgresSourceError.ConversionFailed;
+                };
+                return null;
+            },
+            .insert => |ins| {
+                return self.convertInsert(ins, registry) catch |err| {
+                    std.log.warn("Failed to convert INSERT: {}", .{err});
+                    return PostgresSourceError.ConversionFailed;
+                };
+            },
+            .update => |upd| {
+                return self.convertUpdate(upd, registry) catch |err| {
+                    std.log.warn("Failed to convert UPDATE: {}", .{err});
+                    return PostgresSourceError.ConversionFailed;
+                };
+            },
+            .delete => |del| {
+                return self.convertDelete(del, registry) catch |err| {
+                    std.log.warn("Failed to convert DELETE: {}", .{err});
+                    return PostgresSourceError.ConversionFailed;
+                };
+            },
+        }
+    }
+
+    fn convertInsert(self: *Self, insert_msg: anytype, registry: *RelationRegistry) !ChangeEvent {
+        const rel_info = try registry.get(insert_msg.relation_id);
+
+        const metadata = Metadata{
+            .source = try self.allocator.dupe(u8, "postgres"),
+            .resource = try self.allocator.dupe(u8, rel_info.relation_name),
+            .schema = try self.allocator.dupe(u8, rel_info.namespace),
+            .timestamp = std.time.timestamp(),
+            .lsn = null,
+        };
+
+        var event = ChangeEvent.init(ChangeOperation.INSERT, metadata);
+
+        const row_data = try self.tupleToRowData(insert_msg.new_tuple, rel_info);
+        event.setInsertData(row_data);
+
+        return event;
+    }
+
+    fn convertUpdate(self: *Self, update_msg: anytype, registry: *RelationRegistry) !ChangeEvent {
+        const rel_info = try registry.get(update_msg.relation_id);
+
+        const metadata = Metadata{
+            .source = try self.allocator.dupe(u8, "postgres"),
+            .resource = try self.allocator.dupe(u8, rel_info.relation_name),
+            .schema = try self.allocator.dupe(u8, rel_info.namespace),
+            .timestamp = std.time.timestamp(),
+            .lsn = null,
+        };
+
+        var event = ChangeEvent.init(ChangeOperation.UPDATE, metadata);
+
+        const new_row = try self.tupleToRowData(update_msg.new_tuple, rel_info);
+        const old_row = if (update_msg.old_tuple) |old_tuple|
+            try self.tupleToRowData(old_tuple, rel_info)
+        else
+            try self.allocator.alloc(domain.FieldData, 0);
+
+        event.setUpdateData(new_row, old_row);
+
+        return event;
+    }
+
+    fn convertDelete(self: *Self, delete_msg: anytype, registry: *RelationRegistry) !ChangeEvent {
+        const rel_info = try registry.get(delete_msg.relation_id);
+
+        const metadata = Metadata{
+            .source = try self.allocator.dupe(u8, "postgres"),
+            .resource = try self.allocator.dupe(u8, rel_info.relation_name),
+            .schema = try self.allocator.dupe(u8, rel_info.namespace),
+            .timestamp = std.time.timestamp(),
+            .lsn = null,
+        };
+
+        var event = ChangeEvent.init(ChangeOperation.DELETE, metadata);
+
+        const row_data = try self.tupleToRowData(delete_msg.old_tuple, rel_info);
+        event.setDeleteData(row_data);
+
+        return event;
+    }
+
+    fn tupleToRowData(self: *Self, tuple: anytype, rel_info: anytype) !RowData {
+        var builder = RowDataHelpers.createBuilder(self.allocator);
+        errdefer {
+            for (builder.items) |field| {
+                self.allocator.free(field.name);
+                if (field.value == .string) {
+                    self.allocator.free(field.value.string);
+                }
+            }
+            builder.deinit(self.allocator);
+        }
+
+        for (tuple.columns, 0..) |col, i| {
+            const col_name = rel_info.columns[i].name;
+
+            if (col.value) |val| {
+                const field_value = try FieldValueHelpers.text(self.allocator, val);
+                try RowDataHelpers.put(&builder, self.allocator, col_name, field_value);
+            } else {
+                try RowDataHelpers.put(&builder, self.allocator, col_name, FieldValueHelpers.null_value());
+            }
+        }
+
+        return try RowDataHelpers.finalize(&builder, self.allocator);
+    }
+};
 
 /// Batch of changes from PostgreSQL (streaming source)
 pub const Batch = struct {
@@ -60,6 +206,7 @@ pub const PostgresSource = struct {
     protocol: ReplicationProtocol,
     decoder: PgOutputDecoder,
     registry: RelationRegistry,
+    message_processor: MessageProcessor,
     last_lsn: u64, // Last confirmed LSN (starting point for next batch)
 
     const Self = @This();
@@ -75,6 +222,7 @@ pub const PostgresSource = struct {
             .protocol = ReplicationProtocol.init(allocator, slot_name, publication_name),
             .decoder = PgOutputDecoder.init(allocator),
             .registry = RelationRegistry.init(allocator),
+            .message_processor = MessageProcessor.init(allocator),
             .last_lsn = 0,
         };
     }
@@ -207,7 +355,7 @@ pub const PostgresSource = struct {
                 defer pg_msg.deinit(self.allocator);
 
                 // Convert to ChangeEvent
-                const change_opt = self.convertToChangeEvent(pg_msg) catch |err| {
+                const change_opt = self.message_processor.processMessage(pg_msg, &self.registry) catch |err| {
                     std.log.warn("Failed to convert message to ChangeEvent at LSN {}: {}", .{ xlog.server_wal_end, err });
                     return PostgresSourceError.ConversionFailed; // Propagate error up
                 };
@@ -250,139 +398,6 @@ pub const PostgresSource = struct {
             std.log.warn("Failed to send feedback: {}", .{err});
             return PostgresSourceError.ReplicationFailed;
         };
-    }
-
-    /// Convert PgOutputMessage to ChangeEvent
-    /// Returns null for messages that don't produce ChangeEvents (BEGIN, COMMIT, RELATION)
-    fn convertToChangeEvent(self: *Self, pg_msg: PgOutputMessage) PostgresSourceError!?ChangeEvent {
-        switch (pg_msg) {
-            .begin, .commit => {
-                // Transaction markers - don't produce ChangeEvents yet
-                return null;
-            },
-            .relation => |rel| {
-                // Register relation metadata
-                self.registry.register(rel) catch |err| {
-                    std.log.warn("Failed to register relation: {}", .{err});
-                    return PostgresSourceError.ConversionFailed;
-                };
-                return null;
-            },
-            .insert => |ins| {
-                return self.convertInsert(ins) catch |err| {
-                    std.log.warn("Failed to convert INSERT: {}", .{err});
-                    return PostgresSourceError.ConversionFailed;
-                };
-            },
-            .update => |upd| {
-                return self.convertUpdate(upd) catch |err| {
-                    std.log.warn("Failed to convert UPDATE: {}", .{err});
-                    return PostgresSourceError.ConversionFailed;
-                };
-            },
-            .delete => |del| {
-                return self.convertDelete(del) catch |err| {
-                    std.log.warn("Failed to convert DELETE: {}", .{err});
-                    return PostgresSourceError.ConversionFailed;
-                };
-            },
-        }
-    }
-
-    fn convertInsert(self: *Self, insert_msg: anytype) !ChangeEvent {
-        const rel_info = try self.registry.get(insert_msg.relation_id);
-
-        // Build metadata
-        const metadata = Metadata{
-            .source = try self.allocator.dupe(u8, "postgres"),
-            .resource = try self.allocator.dupe(u8, rel_info.relation_name),
-            .schema = try self.allocator.dupe(u8, rel_info.namespace),
-            .timestamp = std.time.timestamp(),
-            .lsn = null,
-        };
-
-        var event = ChangeEvent.init(ChangeOperation.INSERT, metadata);
-
-        // Convert tuple to RowData
-        const row_data = try self.tupleToRowData(insert_msg.new_tuple, rel_info);
-        event.setInsertData(row_data);
-
-        return event;
-    }
-
-    fn convertUpdate(self: *Self, update_msg: anytype) !ChangeEvent {
-        const rel_info = try self.registry.get(update_msg.relation_id);
-
-        const metadata = Metadata{
-            .source = try self.allocator.dupe(u8, "postgres"),
-            .resource = try self.allocator.dupe(u8, rel_info.relation_name),
-            .schema = try self.allocator.dupe(u8, rel_info.namespace),
-            .timestamp = std.time.timestamp(),
-            .lsn = null,
-        };
-
-        var event = ChangeEvent.init(ChangeOperation.UPDATE, metadata);
-
-        // Convert new and old tuples
-        const new_row = try self.tupleToRowData(update_msg.new_tuple, rel_info);
-        const old_row = if (update_msg.old_tuple) |old_tuple|
-            try self.tupleToRowData(old_tuple, rel_info)
-        else
-            try self.allocator.alloc(domain.FieldData, 0); // Empty old data if not available
-
-        event.setUpdateData(new_row, old_row);
-
-        return event;
-    }
-
-    fn convertDelete(self: *Self, delete_msg: anytype) !ChangeEvent {
-        const rel_info = try self.registry.get(delete_msg.relation_id);
-
-        const metadata = Metadata{
-            .source = try self.allocator.dupe(u8, "postgres"),
-            .resource = try self.allocator.dupe(u8, rel_info.relation_name),
-            .schema = try self.allocator.dupe(u8, rel_info.namespace),
-            .timestamp = std.time.timestamp(),
-            .lsn = null,
-        };
-
-        var event = ChangeEvent.init(ChangeOperation.DELETE, metadata);
-
-        // Convert old tuple (key or full replica identity)
-        const row_data = try self.tupleToRowData(delete_msg.old_tuple, rel_info);
-        event.setDeleteData(row_data);
-
-        return event;
-    }
-
-    /// Convert TupleData to RowData using relation metadata
-    fn tupleToRowData(self: *Self, tuple: anytype, rel_info: anytype) !RowData {
-        var builder = RowDataHelpers.createBuilder(self.allocator);
-        errdefer {
-            for (builder.items) |field| {
-                self.allocator.free(field.name);
-                if (field.value == .string) {
-                    self.allocator.free(field.value.string);
-                }
-            }
-            builder.deinit(self.allocator);
-        }
-
-        for (tuple.columns, 0..) |col, i| {
-            const col_name = rel_info.columns[i].name;
-
-            if (col.value) |val| {
-                // Column has value - convert to FieldValue
-                // For now, treat all values as text (pgoutput sends text format)
-                const field_value = try FieldValueHelpers.text(self.allocator, val);
-                try RowDataHelpers.put(&builder, self.allocator, col_name, field_value);
-            } else {
-                // Column is NULL
-                try RowDataHelpers.put(&builder, self.allocator, col_name, FieldValueHelpers.null_value());
-            }
-        }
-
-        return try RowDataHelpers.finalize(&builder, self.allocator);
     }
 };
 
@@ -438,8 +453,8 @@ test "convertInsert: basic INSERT message to ChangeEvent" {
     };
     defer insert_msg.new_tuple.deinit(allocator);
 
-    // Call convertInsert
-    var event = try source.convertInsert(insert_msg);
+    // Call convertInsert via MessageProcessor
+    var event = try source.message_processor.convertInsert(insert_msg, &source.registry);
     defer event.deinit(allocator);
 
     // Verify: operation type
@@ -530,8 +545,8 @@ test "convertUpdate: UPDATE message with old and new tuples" {
         .value = try allocator.dupe(u8, "Bob"),
     };
 
-    // Call convertUpdate
-    var event = try source.convertUpdate(update_msg);
+    // Call convertUpdate via MessageProcessor
+    var event = try source.message_processor.convertUpdate(update_msg, &source.registry);
     defer event.deinit(allocator);
 
     // Verify: operation type
@@ -613,8 +628,8 @@ test "convertDelete: DELETE message to ChangeEvent" {
         .value = try allocator.dupe(u8, "Alice"),
     };
 
-    // Call convertDelete
-    var event = try source.convertDelete(delete_msg);
+    // Call convertDelete via MessageProcessor
+    var event = try source.message_processor.convertDelete(delete_msg, &source.registry);
     defer event.deinit(allocator);
 
     // Verify: operation type
@@ -695,8 +710,8 @@ test "tupleToRowData: convert tuple with text values to RowData" {
     // Get relation info
     const rel_info = try source.registry.get(200);
 
-    // Call tupleToRowData
-    const row_data = try source.tupleToRowData(tuple, rel_info);
+    // Call tupleToRowData via MessageProcessor
+    const row_data = try source.message_processor.tupleToRowData(tuple, rel_info);
     defer {
         for (row_data) |field| {
             allocator.free(field.name);
@@ -786,8 +801,8 @@ test "tupleToRowData: handle NULL values in tuple" {
     // Get relation info
     const rel_info = try source.registry.get(300);
 
-    // Call tupleToRowData
-    const row_data = try source.tupleToRowData(tuple, rel_info);
+    // Call tupleToRowData via MessageProcessor
+    const row_data = try source.message_processor.tupleToRowData(tuple, rel_info);
     defer {
         for (row_data) |field| {
             allocator.free(field.name);
@@ -837,8 +852,8 @@ test "convertInsert: error when relation not found in registry" {
         .value = try allocator.dupe(u8, "test"),
     };
 
-    // Call convertInsert - should return RelationNotFound error
-    const result = source.convertInsert(insert_msg);
+    // Call convertInsert via MessageProcessor - should return RelationNotFound error
+    const result = source.message_processor.convertInsert(insert_msg, &source.registry);
 
     // Verify: error is RelationNotFound
     try testing.expectError(RelationRegistryError.RelationNotFound, result);

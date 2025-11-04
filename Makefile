@@ -213,3 +213,5 @@ bench:
 	@./zig-out/bin/partition_key_bench
 	@echo ""
 	@./zig-out/bin/kafka_bench
+	@echo ""
+	@./zig-out/bin/message_processor_bench
