@@ -467,10 +467,27 @@ pub fn build(b: *std.Build) void {
 
     const install_kafka_bench = b.addInstallArtifact(kafka_bench, .{});
 
+    // MessageProcessor benchmark (pgoutput → ChangeEvent conversion)
+    const message_processor_bench = b.addTest(.{
+        .name = "message_processor_bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/benchmarks/components/message_processor_bench.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    message_processor_bench.root_module.addImport("zbench", zbench_module);
+    message_processor_bench.root_module.addImport("postgres_source", postgres_source_module);
+    message_processor_bench.root_module.addImport("domain", domain_module);
+    message_processor_bench.root_module.addImport("bench_helpers", bench_helpers_module);
+
+    const install_message_processor_bench = b.addInstallArtifact(message_processor_bench, .{});
+
     const bench_step = b.step("bench", "Compile component benchmarks");
     bench_step.dependOn(&install_serializer_bench.step);
     bench_step.dependOn(&install_decoder_bench.step);
     bench_step.dependOn(&install_match_streams_bench.step);
     bench_step.dependOn(&install_partition_key_bench.step);
     bench_step.dependOn(&install_kafka_bench.step);
+    bench_step.dependOn(&install_message_processor_bench.step);
 }
