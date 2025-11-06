@@ -1,0 +1,6 @@
+# Ignore temporary benchmark results
+results/*.json
+results/*.txt
+
+# Keep baseline in Git
+!baseline/
