@@ -56,6 +56,9 @@ help:
 	@echo ""
 	@echo "Component Benchmarks:"
 	@echo "  make bench         - Run component benchmarks (decoder, serializer, kafka)"
+	@echo "  make bench-ci      - Collect benchmark results to JSON (for CI)"
+	@echo "  make bench-compare - Compare current results with baseline"
+	@echo "  make bench-baseline - Update baseline from current results"
 	@echo ""
 	@echo "Dependencies:"
 	@echo "  make check-deps    - Check system dependencies"
@@ -215,3 +218,25 @@ bench:
 	@./zig-out/bin/kafka_bench
 	@echo ""
 	@./zig-out/bin/message_processor_bench
+
+# Benchmark CI commands (baseline tracking)
+bench-ci:
+	@echo "Building benchmarks..."
+	@zig build bench >/dev/null 2>&1
+	@echo "Collecting benchmark results..."
+	@tests/benchmarks/scripts/collect_results.sh
+
+bench-compare:
+	@tests/benchmarks/scripts/compare_results.sh
+
+bench-baseline:
+	@echo "Updating baseline from current results..."
+	@if [ ! -f tests/benchmarks/results/current.json ]; then \
+		echo "ERROR: No current results found. Run 'make bench-ci' first."; \
+		exit 1; \
+	fi
+	@cp tests/benchmarks/results/current.json tests/benchmarks/baseline/components.json
+	@echo "Baseline updated: tests/benchmarks/baseline/components.json"
+	@echo ""
+	@echo "Current metrics are now the new baseline:"
+	@jq '.benchmarks | to_entries[] | "\(.key): \(.value.time_avg_us)μs, \(.value.allocations) allocs"' -r tests/benchmarks/baseline/components.json
