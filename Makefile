@@ -1,4 +1,4 @@
-.PHONY: help build run test test-integration test-unit clean fmt lint dev install-deps check-deps env-up env-down env-restart env-logs env-status coverage load-up load-down load-test bench
+.PHONY: help build run test test-integration test-unit clean fmt lint dev install-deps check-deps env-up env-down env-restart env-logs env-status coverage load-up load-down load-switch load-test-steady load-test-burst load-test-ramp load-test-mixed load-status bench
 
 # Use direnv to auto-load Nix environment for local development
 # This allows commands to work without 'nix develop' wrapper
@@ -49,10 +49,15 @@ help:
 	@echo "  make env-logs      - Show PostgreSQL logs"
 	@echo "  make env-status    - Show environment status"
 	@echo ""
-	@echo "Load Testing:"
-	@echo "  make load-up       - Start load testing infrastructure (Grafana + Prometheus)"
-	@echo "  make load-down     - Stop load testing infrastructure"
-	@echo "  make load-test     - Run load test scenario (SCENARIO=steady|burst|mixed|ramp)"
+	@echo "Load Testing (baseline: ~60k evt/s):"
+	@echo "  make load-up CDC=<cdc>     - Start infrastructure with CDC (outboxx|debezium)"
+	@echo "  make load-switch CDC=<cdc> - Switch to different CDC solution"
+	@echo "  make load-test-steady      - Steady load (30k evt/s × 120s = 3.6M events)"
+	@echo "  make load-test-burst       - Burst load (10M events max speed)"
+	@echo "  make load-test-ramp        - Ramp load (10k→200k evt/s, find limit)"
+	@echo "  make load-test-mixed       - Mixed ops (1M: 60% INS, 30% UPD, 10% DEL)"
+	@echo "  make load-status           - Show infrastructure status"
+	@echo "  make load-down             - Stop load testing infrastructure"
 	@echo ""
 	@echo "Component Benchmarks:"
 	@echo "  make bench         - Run component benchmarks (decoder, serializer, kafka)"
@@ -168,39 +173,37 @@ env-status:
 	@echo "Development environment status:"
 	docker-compose ps
 
-# Load Testing (Grafana + Prometheus stack)
+# Load Testing (Plugin-based CDC comparison)
+CDC ?= outboxx
+
 load-up:
-	@echo "Starting load testing infrastructure..."
-	@cd tests/load && docker compose up -d
-	@echo "Load testing environment is ready!"
-	@echo ""
-	@echo "Services:"
-	@echo "  • Grafana:    http://localhost:3000 (admin/admin)"
-	@echo "  • Prometheus: http://localhost:9090"
-	@echo "  • cAdvisor:   http://localhost:8080"
-	@echo "  • PostgreSQL: localhost:5433"
-	@echo ""
-	@echo "Run load tests:"
-	@echo "  make load-test SCENARIO=steady"
-	@echo "  make load-test SCENARIO=burst"
+	@tests/load/scripts/start.sh $(CDC)
 
-load-down:
-	@echo "Stopping load testing infrastructure..."
-	@cd tests/load && docker compose down -v
-
-load-test:
-	@if [ -z "$(SCENARIO)" ]; then \
-		echo "Usage: make load-test SCENARIO=<scenario>"; \
-		echo ""; \
-		echo "Available scenarios:"; \
-		echo "  steady - 1000 evt/s for 60 seconds"; \
-		echo "  burst  - 10K events as fast as possible"; \
-		echo "  mixed  - 60% INSERT, 30% UPDATE, 10% DELETE"; \
-		echo "  ramp   - Gradual 100→5000 evt/s"; \
+load-switch:
+	@if [ -z "$(CDC)" ]; then \
+		echo "Usage: make load-switch CDC=<cdc-name>"; \
+		echo "Available: outboxx, debezium"; \
 		exit 1; \
 	fi
-	@echo "Running load test: $(SCENARIO)"
-	@tests/load/load/run-load.sh $(SCENARIO)
+	@tests/load/scripts/switch.sh $(CDC)
+
+load-test-steady:
+	@tests/load/scripts/run-scenario.sh steady
+
+load-test-burst:
+	@tests/load/scripts/run-scenario.sh burst
+
+load-test-ramp:
+	@tests/load/scripts/run-scenario.sh ramp
+
+load-test-mixed:
+	@tests/load/scripts/run-scenario.sh mixed
+
+load-status:
+	@tests/load/scripts/status.sh
+
+load-down:
+	@tests/load/scripts/stop.sh
 
 # Component Benchmarks (zbench)
 bench:

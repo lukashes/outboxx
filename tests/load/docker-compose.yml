@@ -1,4 +1,6 @@
 services:
+  # Core Infrastructure (always running)
+
   # PostgreSQL configured for high load CDC
   postgres:
     image: postgres:16
@@ -20,7 +22,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # Kafka with KRaft mode (no ZooKeeper needed)
+  # Kafka with KRaft mode (no ZooKeeper)
   kafka:
     image: bitnamilegacy/kafka:latest
     container_name: load_kafka
@@ -46,66 +48,7 @@ services:
     volumes:
       - kafka_data:/bitnami/kafka
 
-  # Outboxx CDC service
-  outboxx:
-    build:
-      context: ../..
-      dockerfile: tests/load/Dockerfile.outboxx
-    container_name: load_outboxx
-    environment:
-      POSTGRES_PASSWORD: "postgres"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      kafka:
-        condition: service_healthy
-    volumes:
-      - ./config/outboxx.toml:/app/config.toml
-    command: ["/app/outboxx", "--config", "/app/config.toml"]
-    mem_limit: 500m
-    cpus: 1
-    restart: unless-stopped
-    # Enable perf profiling (Linux only)
-    cap_add:
-      - SYS_ADMIN
-      - SYS_PTRACE
-    security_opt:
-      - seccomp=unconfined
-
-  # Debezium Kafka Connect service
-  debezium:
-    image: debezium/connect:2.7.3.Final
-    container_name: load_debezium
-    depends_on:
-      postgres:
-        condition: service_healthy
-      kafka:
-        condition: service_healthy
-    ports:
-      - "8083:8083"
-    environment:
-      BOOTSTRAP_SERVERS: kafka:9092
-      GROUP_ID: debezium-load
-      CONFIG_STORAGE_TOPIC: debezium_configs
-      OFFSET_STORAGE_TOPIC: debezium_offsets
-      STATUS_STORAGE_TOPIC: debezium_statuses
-      CONFIG_STORAGE_REPLICATION_FACTOR: 1
-      OFFSET_STORAGE_REPLICATION_FACTOR: 1
-      STATUS_STORAGE_REPLICATION_FACTOR: 1
-      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
-      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
-      KEY_CONVERTER_SCHEMAS_ENABLE: "false"
-      VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
-      # JVM memory optimization for 500MB container
-      KAFKA_HEAP_OPTS: "-Xms256m -Xmx256m"
-      KAFKA_JVM_PERFORMANCE_OPTS: "-XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+UseStringDeduplication -XX:+ParallelRefProcEnabled"
-      CONNECT_PRODUCER_MAX_REQUEST_SIZE: 1048576
-      CONNECT_CONSUMER_MAX_PARTITION_FETCH_BYTES: 1048576
-    mem_limit: 500m
-    cpus: 1
-    restart: unless-stopped
-
-  # Kafka CDC Metrics Exporter
+  # Kafka CDC Metrics Exporter (universal for all CDC solutions)
   kafka-exporter:
     build:
       context: exporter
@@ -164,6 +107,70 @@ services:
       - ./grafana/dashboard.json:/etc/grafana/provisioning/dashboards/outboxx.json
       - ./grafana/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml
       - ./grafana/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml
+
+  # CDC Solutions (use profiles to switch between them)
+
+  # Outboxx CDC service
+  outboxx:
+    profiles: ["outboxx"]
+    build:
+      context: ../..
+      dockerfile: tests/load/cdc/outboxx/Dockerfile
+    container_name: load_outboxx
+    environment:
+      POSTGRES_PASSWORD: "postgres"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./cdc/outboxx/config.toml:/app/config.toml
+    command: ["/app/outboxx", "--config", "/app/config.toml"]
+    mem_limit: 500m
+    cpus: 1
+    restart: unless-stopped
+    cap_add:
+      - SYS_ADMIN
+      - SYS_PTRACE
+    security_opt:
+      - seccomp=unconfined
+
+  # Debezium Kafka Connect service
+  debezium:
+    profiles: ["debezium"]
+    build:
+      context: cdc/debezium
+      dockerfile: Dockerfile
+    container_name: load_debezium
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8083:8083"
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: debezium-load
+      CONFIG_STORAGE_TOPIC: debezium_configs
+      OFFSET_STORAGE_TOPIC: debezium_offsets
+      STATUS_STORAGE_TOPIC: debezium_statuses
+      CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      STATUS_STORAGE_REPLICATION_FACTOR: 1
+      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      # JVM memory optimization for 500MB container
+      KAFKA_HEAP_OPTS: "-Xms256m -Xmx256m"
+      KAFKA_JVM_PERFORMANCE_OPTS: "-XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+UseStringDeduplication -XX:+ParallelRefProcEnabled"
+      CONNECT_PRODUCER_MAX_REQUEST_SIZE: 1048576
+      CONNECT_CONSUMER_MAX_PARTITION_FETCH_BYTES: 1048576
+    mem_limit: 500m
+    cpus: 1
+    restart: unless-stopped
 
 networks:
   default:
