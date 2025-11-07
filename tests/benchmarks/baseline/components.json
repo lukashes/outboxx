@@ -1,0 +1,47 @@
+{
+  "timestamp": "2025-11-05T08:40:29Z",
+  "benchmarks": {
+    "JsonSerializer.serialize": {
+      "time_avg_us": 96.812,
+      "time_stddev_us": 13.491,
+      "memory_bytes": 848,
+      "allocations": 16
+    }
+,
+    "PgOutputDecoder.decode": {
+      "time_avg_us": 50.903,
+      "time_stddev_us": 5.347,
+      "memory_bytes": 298,
+      "allocations": 8
+    }
+,
+    "matchStreams": {
+      "time_avg_us": 16.634,
+      "time_stddev_us": 2.844,
+      "memory_bytes": 0,
+      "allocations": 1
+    }
+,
+    "getPartitionKeyValue": {
+      "time_avg_us": 94.449,
+      "time_stddev_us": 6.102,
+      "memory_bytes": 615,
+      "allocations": 14
+    }
+,
+    "KafkaProducer.sendMessage": {
+      "time_avg_us": 291.244,
+      "time_stddev_us": 512,
+      "memory_bytes": 0,
+      "allocations": 0
+    }
+,
+    "MessageProcessor.processMessage": {
+      "time_avg_us": 102.171,
+      "time_stddev_us": 8.891,
+      "memory_bytes": 127,
+      "allocations": 25
+    }
+
+  }
+}

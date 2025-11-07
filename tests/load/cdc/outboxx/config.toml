@@ -1,0 +1,36 @@
+# Outboxx load testing configuration
+[metadata]
+version = "v0"
+
+[source]
+type = "postgres"
+
+[source.postgres]
+host = "postgres"
+port = 5432
+database = "outboxx_load"
+user = "postgres"
+password = "POSTGRES_PASSWORD"
+slot_name = "load_slot"
+publication_name = "outboxx_load_pub"
+engine = "streaming"
+
+[sink]
+type = "kafka"
+
+[sink.kafka]
+brokers = ["kafka:9092"]
+
+[[streams]]
+name = "load_stream"
+
+[streams.source]
+resource = "load_events"
+operations = ["insert", "update", "delete"]
+
+[streams.flow]
+format = "json"
+
+[streams.sink]
+destination = "outboxx.load_events"
+routing_key = "id"

@@ -41,6 +41,9 @@ test_results/
 docs/build/
 site/
 
+# Internal workflow documentation
+docs/BENCHMARKING_PLAN.md
+
 # Claude Code assistant files
 CLAUDE.local.md
 .claude/

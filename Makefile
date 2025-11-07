@@ -1,4 +1,4 @@
-.PHONY: help build run test test-integration test-unit clean fmt lint dev install-deps check-deps env-up env-down env-restart env-logs env-status coverage
+.PHONY: help build run test test-integration test-unit clean fmt lint dev install-deps check-deps env-up env-down env-restart env-logs env-status coverage load-up load-down load-switch load-test-steady load-test-burst load-test-ramp load-test-mixed load-status bench
 
 # Use direnv to auto-load Nix environment for local development
 # This allows commands to work without 'nix develop' wrapper
@@ -48,6 +48,22 @@ help:
 	@echo "  make env-restart   - Restart development environment"
 	@echo "  make env-logs      - Show PostgreSQL logs"
 	@echo "  make env-status    - Show environment status"
+	@echo ""
+	@echo "Load Testing (baseline: ~60k evt/s):"
+	@echo "  make load-up CDC=<cdc>     - Start infrastructure with CDC (outboxx|debezium)"
+	@echo "  make load-switch CDC=<cdc> - Switch to different CDC solution"
+	@echo "  make load-test-steady      - Steady load (30k evt/s × 120s = 3.6M events)"
+	@echo "  make load-test-burst       - Burst load (10M events max speed)"
+	@echo "  make load-test-ramp        - Ramp load (10k→200k evt/s, find limit)"
+	@echo "  make load-test-mixed       - Mixed ops (1M: 60% INS, 30% UPD, 10% DEL)"
+	@echo "  make load-status           - Show infrastructure status"
+	@echo "  make load-down             - Stop load testing infrastructure"
+	@echo ""
+	@echo "Component Benchmarks:"
+	@echo "  make bench         - Run component benchmarks (decoder, serializer, kafka)"
+	@echo "  make bench-ci      - Collect benchmark results to JSON (for CI)"
+	@echo "  make bench-compare - Compare current results with baseline"
+	@echo "  make bench-baseline - Update baseline from current results"
 	@echo ""
 	@echo "Dependencies:"
 	@echo "  make check-deps    - Check system dependencies"
@@ -156,3 +172,74 @@ env-logs:
 env-status:
 	@echo "Development environment status:"
 	docker-compose ps
+
+# Load Testing (Plugin-based CDC comparison)
+CDC ?= outboxx
+
+load-up:
+	@tests/load/scripts/start.sh $(CDC)
+
+load-switch:
+	@if [ -z "$(CDC)" ]; then \
+		echo "Usage: make load-switch CDC=<cdc-name>"; \
+		echo "Available: outboxx, debezium"; \
+		exit 1; \
+	fi
+	@tests/load/scripts/switch.sh $(CDC)
+
+load-test-steady:
+	@tests/load/scripts/run-scenario.sh steady
+
+load-test-burst:
+	@tests/load/scripts/run-scenario.sh burst
+
+load-test-ramp:
+	@tests/load/scripts/run-scenario.sh ramp
+
+load-test-mixed:
+	@tests/load/scripts/run-scenario.sh mixed
+
+load-status:
+	@tests/load/scripts/status.sh
+
+load-down:
+	@tests/load/scripts/stop.sh
+
+# Component Benchmarks (zbench)
+bench:
+	@echo "Compiling component benchmarks..."
+	@zig build bench >/dev/null 2>&1
+	@echo "Running benchmarks..."
+	@./zig-out/bin/serializer_bench
+	@echo ""
+	@./zig-out/bin/decoder_bench
+	@echo ""
+	@./zig-out/bin/match_streams_bench
+	@echo ""
+	@./zig-out/bin/partition_key_bench
+	@echo ""
+	@./zig-out/bin/kafka_bench
+	@echo ""
+	@./zig-out/bin/message_processor_bench
+
+# Benchmark CI commands (baseline tracking)
+bench-ci:
+	@echo "Building benchmarks..."
+	@zig build bench >/dev/null 2>&1
+	@echo "Collecting benchmark results..."
+	@tests/benchmarks/scripts/collect_results.sh
+
+bench-compare:
+	@tests/benchmarks/scripts/compare_results.sh
+
+bench-baseline:
+	@echo "Updating baseline from current results..."
+	@if [ ! -f tests/benchmarks/results/current.json ]; then \
+		echo "ERROR: No current results found. Run 'make bench-ci' first."; \
+		exit 1; \
+	fi
+	@cp tests/benchmarks/results/current.json tests/benchmarks/baseline/components.json
+	@echo "Baseline updated: tests/benchmarks/baseline/components.json"
+	@echo ""
+	@echo "Current metrics are now the new baseline:"
+	@jq '.benchmarks | to_entries[] | "\(.key): \(.value.time_avg_us)μs, \(.value.allocations) allocs"' -r tests/benchmarks/baseline/components.json

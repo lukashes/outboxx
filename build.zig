@@ -367,4 +367,127 @@ pub fn build(b: *std.Build) void {
     dev_step.dependOn(&fmt.step);
     dev_step.dependOn(&run_config_tests.step);
     dev_step.dependOn(b.getInstallStep());
+
+    // Benchmarks with zbench
+    const zbench_dep = b.dependency("zbench", .{
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    const zbench_module = zbench_dep.module("zbench");
+
+    // PgOutputDecoder module for benchmarks
+    const pg_output_decoder_module = b.createModule(.{
+        .root_source_file = b.path("src/source/postgres/pg_output_decoder.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+
+    // Benchmark helpers module
+    const bench_helpers_module = b.createModule(.{
+        .root_source_file = b.path("tests/benchmarks/bench_helpers.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+
+    // JsonSerializer benchmark
+    const serializer_bench = b.addTest(.{
+        .name = "serializer_bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/benchmarks/components/serializer_bench.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    serializer_bench.root_module.addImport("zbench", zbench_module);
+    serializer_bench.root_module.addImport("domain", domain_module);
+    serializer_bench.root_module.addImport("json_serialization", json_serialization_module);
+    serializer_bench.root_module.addImport("bench_helpers", bench_helpers_module);
+
+    const install_serializer_bench = b.addInstallArtifact(serializer_bench, .{});
+
+    // PgOutputDecoder benchmark
+    const decoder_bench = b.addTest(.{
+        .name = "decoder_bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/benchmarks/components/decoder_bench.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    decoder_bench.root_module.addImport("zbench", zbench_module);
+    decoder_bench.root_module.addImport("pg_output_decoder", pg_output_decoder_module);
+    decoder_bench.root_module.addImport("bench_helpers", bench_helpers_module);
+
+    const install_decoder_bench = b.addInstallArtifact(decoder_bench, .{});
+
+    // matchStreams benchmark
+    const match_streams_bench = b.addTest(.{
+        .name = "match_streams_bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/benchmarks/components/match_streams_bench.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    match_streams_bench.root_module.addImport("zbench", zbench_module);
+    match_streams_bench.root_module.addImport("config", config_module);
+    match_streams_bench.root_module.addImport("bench_helpers", bench_helpers_module);
+
+    const install_match_streams_bench = b.addInstallArtifact(match_streams_bench, .{});
+
+    // getPartitionKeyValue benchmark
+    const partition_key_bench = b.addTest(.{
+        .name = "partition_key_bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/benchmarks/components/partition_key_bench.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    partition_key_bench.root_module.addImport("zbench", zbench_module);
+    partition_key_bench.root_module.addImport("domain", domain_module);
+    partition_key_bench.root_module.addImport("bench_helpers", bench_helpers_module);
+
+    const install_partition_key_bench = b.addInstallArtifact(partition_key_bench, .{});
+
+    // KafkaProducer benchmark (with mock cluster)
+    const kafka_bench = b.addTest(.{
+        .name = "kafka_bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/benchmarks/components/kafka_bench.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    kafka_bench.root_module.addImport("zbench", zbench_module);
+    kafka_bench.root_module.addImport("kafka_producer", kafka_producer_module);
+    kafka_bench.root_module.addImport("bench_helpers", bench_helpers_module);
+    kafka_bench.linkLibC();
+    kafka_bench.linkSystemLibrary("rdkafka");
+
+    const install_kafka_bench = b.addInstallArtifact(kafka_bench, .{});
+
+    // MessageProcessor benchmark (pgoutput → ChangeEvent conversion)
+    const message_processor_bench = b.addTest(.{
+        .name = "message_processor_bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/benchmarks/components/message_processor_bench.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    message_processor_bench.root_module.addImport("zbench", zbench_module);
+    message_processor_bench.root_module.addImport("postgres_source", postgres_source_module);
+    message_processor_bench.root_module.addImport("domain", domain_module);
+    message_processor_bench.root_module.addImport("bench_helpers", bench_helpers_module);
+
+    const install_message_processor_bench = b.addInstallArtifact(message_processor_bench, .{});
+
+    const bench_step = b.step("bench", "Compile component benchmarks");
+    bench_step.dependOn(&install_serializer_bench.step);
+    bench_step.dependOn(&install_decoder_bench.step);
+    bench_step.dependOn(&install_match_streams_bench.step);
+    bench_step.dependOn(&install_partition_key_bench.step);
+    bench_step.dependOn(&install_kafka_bench.step);
+    bench_step.dependOn(&install_message_processor_bench.step);
 }
