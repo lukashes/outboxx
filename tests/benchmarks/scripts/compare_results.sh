@@ -5,13 +5,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BENCH_DIR="$(dirname "$SCRIPT_DIR")"
 BASELINE_FILE="$BENCH_DIR/baseline/components.json"
 CURRENT_FILE="$BENCH_DIR/results/current.json"
+MARKDOWN_OUTPUT="${1:-}"
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-NC='\033[0m'
+# Colors (disabled for markdown output)
+if [ "$MARKDOWN_OUTPUT" = "--markdown" ]; then
+    RED=''
+    GREEN=''
+    YELLOW=''
+    CYAN=''
+    NC=''
+else
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[1;33m'
+    CYAN='\033[0;36m'
+    NC='\033[0m'
+fi
 
 # Check if files exist
 if [ ! -f "$BASELINE_FILE" ]; then
@@ -33,12 +42,20 @@ if ! command -v jq &> /dev/null; then
     exit 1
 fi
 
-echo -e "${CYAN}Benchmark Comparison Report${NC}"
-echo "=================================="
-echo ""
-echo -e "Baseline: $(jq -r '.timestamp' "$BASELINE_FILE")"
-echo -e "Current:  $(jq -r '.timestamp' "$CURRENT_FILE")"
-echo ""
+# Print header
+if [ "$MARKDOWN_OUTPUT" = "--markdown" ]; then
+    echo "## 📊 Benchmark Comparison"
+    echo ""
+    echo "| Benchmark | Baseline | Current | Change | Status |"
+    echo "|-----------|----------|---------|--------|--------|"
+else
+    echo -e "${CYAN}Benchmark Comparison Report${NC}"
+    echo "=================================="
+    echo ""
+    echo -e "Baseline: $(jq -r '.timestamp' "$BASELINE_FILE")"
+    echo -e "Current:  $(jq -r '.timestamp' "$CURRENT_FILE")"
+    echo ""
+fi
 
 # Counters
 improved=0
@@ -47,6 +64,12 @@ neutral=0
 
 # Threshold for considering change significant (5%)
 THRESHOLD=5
+
+# Temporary file for table rows (markdown mode)
+if [ "$MARKDOWN_OUTPUT" = "--markdown" ]; then
+    TABLE_ROWS=$(mktemp)
+    trap "rm -f $TABLE_ROWS" EXIT
+fi
 
 # Compare each benchmark (use process substitution to preserve variables)
 while read -r bench_name; do
@@ -90,24 +113,58 @@ while read -r bench_name; do
     fi
 
     # Format output
-    printf "${status_color}%-40s${NC} " "$bench_name"
-    printf "Time: %8.2fμs → %8.2fμs (%+6.1f%%) %s\n" "$baseline_time" "$current_time" "$time_change" "$status_icon"
-    printf "                                         Allocs: %5d → %5d (%+6.1f%%)\n" "$baseline_allocs" "$current_allocs" "$alloc_change"
-    echo ""
+    if [ "$MARKDOWN_OUTPUT" = "--markdown" ]; then
+        # Markdown table row with status emoji
+        if [ "$status" = "improved" ]; then
+            status_emoji="✅ Improved"
+        elif [ "$status" = "regressed" ]; then
+            status_emoji="⚠️ Regressed"
+        else
+            status_emoji="➡️ Neutral"
+        fi
+        printf "| %s | %.2f μs | %.2f μs | %+.1f%% | %s |\n" \
+            "$bench_name" "$baseline_time" "$current_time" "$time_change" "$status_emoji" >> "$TABLE_ROWS"
+    else
+        # Terminal colored output
+        printf "${status_color}%-40s${NC} " "$bench_name"
+        printf "Time: %8.2fμs → %8.2fμs (%+6.1f%%) %s\n" "$baseline_time" "$current_time" "$time_change" "$status_icon"
+        printf "                                         Allocs: %5d → %5d (%+6.1f%%)\n" "$baseline_allocs" "$current_allocs" "$alloc_change"
+        echo ""
+    fi
 done < <(jq -r '.benchmarks | keys[]' "$BASELINE_FILE")
 
+# Print table rows (markdown mode)
+if [ "$MARKDOWN_OUTPUT" = "--markdown" ]; then
+    cat "$TABLE_ROWS"
+fi
+
 # Summary
-echo "=================================="
-echo -e "${GREEN}✓ Improved:  $improved${NC}"
-echo -e "${YELLOW}→ Neutral:   $neutral${NC}"
-echo -e "${RED}✗ Regressed: $regressed${NC}"
-echo ""
+if [ "$MARKDOWN_OUTPUT" = "--markdown" ]; then
+    echo ""
+    echo "**Summary:** $improved improved, $regressed regressed, $neutral neutral (threshold: ${THRESHOLD}%)"
+    echo ""
+    if [ "$regressed" -gt 0 ]; then
+        echo "⚠️ **Warning:** Performance regressions detected!"
+    else
+        echo "✅ **All benchmarks within acceptable range**"
+    fi
+else
+    echo "=================================="
+    echo -e "${GREEN}✓ Improved:  $improved${NC}"
+    echo -e "${YELLOW}→ Neutral:   $neutral${NC}"
+    echo -e "${RED}✗ Regressed: $regressed${NC}"
+    echo ""
+fi
 
 # Exit with error if regressions found
 if [ "$regressed" -gt 0 ]; then
-    echo -e "${RED}Warning: Performance regressions detected!${NC}"
+    if [ "$MARKDOWN_OUTPUT" != "--markdown" ]; then
+        echo -e "${RED}Warning: Performance regressions detected!${NC}"
+    fi
     exit 1
 else
-    echo -e "${GREEN}All benchmarks within acceptable range${NC}"
+    if [ "$MARKDOWN_OUTPUT" != "--markdown" ]; then
+        echo -e "${GREEN}All benchmarks within acceptable range${NC}"
+    fi
     exit 0
 fi
