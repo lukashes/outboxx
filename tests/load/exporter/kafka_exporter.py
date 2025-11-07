@@ -58,7 +58,7 @@ kafka_messages_total = PromCounter(
 
 # Configuration
 KAFKA_BROKERS = os.getenv('KAFKA_BROKERS', 'kafka:9092').split(',')
-KAFKA_TOPICS = ['outboxx.bench_events', 'debezium.public.bench_events']
+KAFKA_TOPICS = ['outboxx.load_events', 'debezium.public.load_events']
 METRICS_PORT = 8000
 
 # Stats per CDC solution
@@ -106,6 +106,10 @@ def detect_cdc_solution(topic):
 def process_message(msg):
     """Process Kafka message and update metrics"""
     try:
+        # Skip tombstone messages (DELETE markers with null value)
+        if msg.value is None:
+            return False
+
         data = json.loads(msg.value.decode('utf-8'))
 
         # Detect CDC solution from topic
