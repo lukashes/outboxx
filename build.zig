@@ -375,21 +375,19 @@ pub fn build(b: *std.Build) void {
     });
     const zbench_module = zbench_dep.module("zbench");
 
-    // PgOutputDecoder module for benchmarks
     const pg_output_decoder_module = b.createModule(.{
         .root_source_file = b.path("src/source/postgres/pg_output_decoder.zig"),
         .target = target,
         .optimize = .ReleaseFast,
     });
 
-    // Benchmark helpers module
     const bench_helpers_module = b.createModule(.{
         .root_source_file = b.path("tests/benchmarks/bench_helpers.zig"),
         .target = target,
         .optimize = .ReleaseFast,
     });
 
-    // JsonSerializer benchmark
+
     const serializer_bench = b.addTest(.{
         .name = "serializer_bench",
         .root_module = b.createModule(.{
@@ -405,7 +403,6 @@ pub fn build(b: *std.Build) void {
 
     const install_serializer_bench = b.addInstallArtifact(serializer_bench, .{});
 
-    // PgOutputDecoder benchmark
     const decoder_bench = b.addTest(.{
         .name = "decoder_bench",
         .root_module = b.createModule(.{
@@ -420,7 +417,6 @@ pub fn build(b: *std.Build) void {
 
     const install_decoder_bench = b.addInstallArtifact(decoder_bench, .{});
 
-    // matchStreams benchmark
     const match_streams_bench = b.addTest(.{
         .name = "match_streams_bench",
         .root_module = b.createModule(.{
@@ -432,10 +428,10 @@ pub fn build(b: *std.Build) void {
     match_streams_bench.root_module.addImport("zbench", zbench_module);
     match_streams_bench.root_module.addImport("config", config_module);
     match_streams_bench.root_module.addImport("bench_helpers", bench_helpers_module);
+    match_streams_bench.root_module.addImport("processor", cdc_processor_module);
 
     const install_match_streams_bench = b.addInstallArtifact(match_streams_bench, .{});
 
-    // getPartitionKeyValue benchmark
     const partition_key_bench = b.addTest(.{
         .name = "partition_key_bench",
         .root_module = b.createModule(.{
@@ -450,7 +446,6 @@ pub fn build(b: *std.Build) void {
 
     const install_partition_key_bench = b.addInstallArtifact(partition_key_bench, .{});
 
-    // KafkaProducer benchmark (with mock cluster)
     const kafka_bench = b.addTest(.{
         .name = "kafka_bench",
         .root_module = b.createModule(.{
@@ -467,7 +462,6 @@ pub fn build(b: *std.Build) void {
 
     const install_kafka_bench = b.addInstallArtifact(kafka_bench, .{});
 
-    // MessageProcessor benchmark (pgoutput → ChangeEvent conversion)
     const message_processor_bench = b.addTest(.{
         .name = "message_processor_bench",
         .root_module = b.createModule(.{

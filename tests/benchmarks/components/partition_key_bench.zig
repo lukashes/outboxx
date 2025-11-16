@@ -53,47 +53,55 @@ fn createEventWithStringKey(allocator: std.mem.Allocator) !ChangeEvent {
     return event;
 }
 
-fn benchmarkPartitionKeyInteger(allocator: std.mem.Allocator) void {
-    var event = createEventWithIntegerKey(allocator) catch unreachable;
-    defer event.deinit(allocator);
+// ChangeEvent setup is heavy (row data, metadata), prepared outside to track getPartitionKeyValue() allocations only
+const BenchPartitionKeyInteger = struct {
+    event: ChangeEvent,
 
-    const key = event.getPartitionKeyValue(allocator, "id") catch unreachable;
-    if (key) |k| {
-        allocator.free(k);
+    pub fn run(self: BenchPartitionKeyInteger, allocator: std.mem.Allocator) void {
+        const key = self.event.getPartitionKeyValue(allocator, "id") catch unreachable;
+        if (key) |k| {
+            allocator.free(k);
+        }
     }
-}
+};
 
-fn benchmarkPartitionKeyString(allocator: std.mem.Allocator) void {
-    var event = createEventWithStringKey(allocator) catch unreachable;
-    defer event.deinit(allocator);
+const BenchPartitionKeyString = struct {
+    event: ChangeEvent,
 
-    const key = event.getPartitionKeyValue(allocator, "uuid") catch unreachable;
-    if (key) |k| {
-        allocator.free(k);
+    pub fn run(self: BenchPartitionKeyString, allocator: std.mem.Allocator) void {
+        const key = self.event.getPartitionKeyValue(allocator, "uuid") catch unreachable;
+        if (key) |k| {
+            allocator.free(k);
+        }
     }
-}
+};
 
-fn benchmarkPartitionKeyBoolean(allocator: std.mem.Allocator) void {
-    var event = createEventWithIntegerKey(allocator) catch unreachable;
-    defer event.deinit(allocator);
+const BenchPartitionKeyBoolean = struct {
+    event: ChangeEvent,
 
-    const key = event.getPartitionKeyValue(allocator, "active") catch unreachable;
-    if (key) |k| {
-        allocator.free(k);
+    pub fn run(self: BenchPartitionKeyBoolean, allocator: std.mem.Allocator) void {
+        const key = self.event.getPartitionKeyValue(allocator, "active") catch unreachable;
+        if (key) |k| {
+            allocator.free(k);
+        }
     }
-}
+};
 
-fn benchmarkPartitionKeyNotFound(allocator: std.mem.Allocator) void {
-    var event = createEventWithIntegerKey(allocator) catch unreachable;
-    defer event.deinit(allocator);
+const BenchPartitionKeyNotFound = struct {
+    event: ChangeEvent,
 
-    const key = event.getPartitionKeyValue(allocator, "nonexistent_field") catch unreachable;
-    if (key) |k| {
-        allocator.free(k);
+    pub fn run(self: BenchPartitionKeyNotFound, allocator: std.mem.Allocator) void {
+        const key = self.event.getPartitionKeyValue(allocator, "nonexistent_field") catch unreachable;
+        if (key) |k| {
+            allocator.free(k);
+        }
     }
-}
+};
 
-test "benchmark getPartitionKeyValue" {
+test "benchmark getPartitionKeyValue integer" {
+    var event_int = try createEventWithIntegerKey(std.testing.allocator);
+    defer event_int.deinit(std.testing.allocator);
+
     var alloc_count: usize = 0;
     var counting_alloc = CountingAllocator{
         .parent_allocator = std.testing.allocator,
@@ -103,22 +111,11 @@ test "benchmark getPartitionKeyValue" {
     var bench = zbench.Benchmark.init(counting_alloc.allocator(), .{});
     defer bench.deinit();
 
-    try bench.add("getPartitionKeyValue (integer)", benchmarkPartitionKeyInteger, .{
-        .iterations = 1000,
-        .track_allocations = true,
-    });
+    alloc_count = 0;
 
-    try bench.add("getPartitionKeyValue (string)", benchmarkPartitionKeyString, .{
-        .iterations = 1000,
-        .track_allocations = true,
-    });
+    const bench_integer = BenchPartitionKeyInteger{ .event = event_int };
 
-    try bench.add("getPartitionKeyValue (boolean)", benchmarkPartitionKeyBoolean, .{
-        .iterations = 1000,
-        .track_allocations = true,
-    });
-
-    try bench.add("getPartitionKeyValue (not found)", benchmarkPartitionKeyNotFound, .{
+    try bench.addParam("getPartitionKeyValue (integer)", &bench_integer, .{
         .iterations = 1000,
         .track_allocations = true,
     });
@@ -129,6 +126,102 @@ test "benchmark getPartitionKeyValue" {
     try bench.run(writer);
     try writer.flush();
 
-    const allocations_per_iter = alloc_count / 4000;
+    const allocations_per_iter = alloc_count / 1000;
+    std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
+}
+
+test "benchmark getPartitionKeyValue string" {
+    var event_str = try createEventWithStringKey(std.testing.allocator);
+    defer event_str.deinit(std.testing.allocator);
+
+    var alloc_count: usize = 0;
+    var counting_alloc = CountingAllocator{
+        .parent_allocator = std.testing.allocator,
+        .allocation_count = &alloc_count,
+    };
+
+    var bench = zbench.Benchmark.init(counting_alloc.allocator(), .{});
+    defer bench.deinit();
+
+    alloc_count = 0;
+
+    const bench_string = BenchPartitionKeyString{ .event = event_str };
+
+    try bench.addParam("getPartitionKeyValue (string)", &bench_string, .{
+        .iterations = 1000,
+        .track_allocations = true,
+    });
+
+    var buf: [4096]u8 = undefined;
+    var stdout = std.fs.File.stdout().writer(&buf);
+    const writer = &stdout.interface;
+    try bench.run(writer);
+    try writer.flush();
+
+    const allocations_per_iter = alloc_count / 1000;
+    std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
+}
+
+test "benchmark getPartitionKeyValue boolean" {
+    var event_int = try createEventWithIntegerKey(std.testing.allocator);
+    defer event_int.deinit(std.testing.allocator);
+
+    var alloc_count: usize = 0;
+    var counting_alloc = CountingAllocator{
+        .parent_allocator = std.testing.allocator,
+        .allocation_count = &alloc_count,
+    };
+
+    var bench = zbench.Benchmark.init(counting_alloc.allocator(), .{});
+    defer bench.deinit();
+
+    alloc_count = 0;
+
+    const bench_boolean = BenchPartitionKeyBoolean{ .event = event_int };
+
+    try bench.addParam("getPartitionKeyValue (boolean)", &bench_boolean, .{
+        .iterations = 1000,
+        .track_allocations = true,
+    });
+
+    var buf: [4096]u8 = undefined;
+    var stdout = std.fs.File.stdout().writer(&buf);
+    const writer = &stdout.interface;
+    try bench.run(writer);
+    try writer.flush();
+
+    const allocations_per_iter = alloc_count / 1000;
+    std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
+}
+
+test "benchmark getPartitionKeyValue not found" {
+    var event_int = try createEventWithIntegerKey(std.testing.allocator);
+    defer event_int.deinit(std.testing.allocator);
+
+    var alloc_count: usize = 0;
+    var counting_alloc = CountingAllocator{
+        .parent_allocator = std.testing.allocator,
+        .allocation_count = &alloc_count,
+    };
+
+    var bench = zbench.Benchmark.init(counting_alloc.allocator(), .{});
+    defer bench.deinit();
+
+    alloc_count = 0;
+
+    const bench_not_found = BenchPartitionKeyNotFound{ .event = event_int };
+
+    try bench.addParam("getPartitionKeyValue (not found)", &bench_not_found, .{
+        .iterations = 1000,
+        .track_allocations = true,
+    });
+
+    var buf: [4096]u8 = undefined;
+    var stdout = std.fs.File.stdout().writer(&buf);
+    const writer = &stdout.interface;
+    try bench.run(writer);
+    try writer.flush();
+
+    const allocations_per_iter = alloc_count / 1000;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
 }

@@ -3,7 +3,6 @@ const zbench = @import("zbench");
 const postgres_source = @import("postgres_source");
 const bench_helpers = @import("bench_helpers");
 
-// Import all types from postgres_source (re-exported)
 const MessageProcessor = postgres_source.MessageProcessor;
 const PgOutputMessage = postgres_source.PgOutputMessage;
 const InsertMessage = postgres_source.InsertMessage;
@@ -16,11 +15,8 @@ const RelationMessageColumn = postgres_source.RelationMessageColumn;
 const RelationRegistry = postgres_source.RelationRegistry;
 const CountingAllocator = bench_helpers.CountingAllocator;
 
-var global_registry: ?RelationRegistry = null;
-var global_processor: ?MessageProcessor = null;
-
-fn setupRegistry(allocator: std.mem.Allocator) !void {
-    global_registry = RelationRegistry.init(allocator);
+fn setupRegistry(allocator: std.mem.Allocator) !RelationRegistry {
+    var registry = RelationRegistry.init(allocator);
 
     // Register test relation (id=100, public.users, columns: id, name, email, active)
     var rel_msg = RelationMessage{
@@ -56,167 +52,181 @@ fn setupRegistry(allocator: std.mem.Allocator) !void {
         .type_modifier = -1,
     };
 
-    try global_registry.?.register(rel_msg);
+    try registry.register(rel_msg);
+    return registry;
 }
 
-fn benchmarkInsertMessage(allocator: std.mem.Allocator) void {
+fn buildInsertMessage(allocator: std.mem.Allocator) !InsertMessage {
     var insert_msg = InsertMessage{
         .relation_id = 100,
         .new_tuple = TupleMessage{
-            .columns = allocator.alloc(TupleData, 4) catch unreachable,
+            .columns = try allocator.alloc(TupleData, 4),
         },
     };
-    defer insert_msg.new_tuple.deinit(allocator);
 
     insert_msg.new_tuple.columns[0] = TupleData{
         .column_type = .text,
-        .value = allocator.dupe(u8, "12345") catch unreachable,
+        .value = try allocator.dupe(u8, "12345"),
     };
     insert_msg.new_tuple.columns[1] = TupleData{
         .column_type = .text,
-        .value = allocator.dupe(u8, "Alice") catch unreachable,
+        .value = try allocator.dupe(u8, "Alice"),
     };
     insert_msg.new_tuple.columns[2] = TupleData{
         .column_type = .text,
-        .value = allocator.dupe(u8, "alice@example.com") catch unreachable,
+        .value = try allocator.dupe(u8, "alice@example.com"),
     };
     insert_msg.new_tuple.columns[3] = TupleData{
         .column_type = .text,
-        .value = allocator.dupe(u8, "true") catch unreachable,
+        .value = try allocator.dupe(u8, "true"),
     };
 
-    const pg_msg = PgOutputMessage{ .insert = insert_msg };
-
-    var event = global_processor.?.processMessage(pg_msg, &global_registry.?) catch unreachable;
-    if (event) |*e| {
-        e.deinit(allocator);
-    }
+    return insert_msg;
 }
 
-fn benchmarkUpdateMessage(allocator: std.mem.Allocator) void {
+// MessageProcessor.init() is lightweight (no allocations), created inside to track processMessage() allocations.
+// RelationRegistry setup is heavy (table registration), prepared outside
+const BenchProcessInsert = struct {
+    registry: *RelationRegistry,
+    message: PgOutputMessage,
+
+    pub fn run(self: BenchProcessInsert, allocator: std.mem.Allocator) void {
+        var processor = MessageProcessor.init(allocator);
+        var event = processor.processMessage(self.message, self.registry) catch unreachable;
+        if (event) |*e| {
+            e.deinit(allocator);
+        }
+    }
+};
+
+fn buildUpdateMessage(allocator: std.mem.Allocator) !UpdateMessage {
     var update_msg = UpdateMessage{
         .relation_id = 100,
         .old_tuple = TupleMessage{
-            .columns = allocator.alloc(TupleData, 4) catch unreachable,
+            .columns = try allocator.alloc(TupleData, 4),
         },
         .new_tuple = TupleMessage{
-            .columns = allocator.alloc(TupleData, 4) catch unreachable,
+            .columns = try allocator.alloc(TupleData, 4),
         },
     };
-    defer update_msg.deinit(allocator);
 
-    // Old tuple
     update_msg.old_tuple.?.columns[0] = TupleData{
         .column_type = .text,
-        .value = allocator.dupe(u8, "12345") catch unreachable,
+        .value = try allocator.dupe(u8, "12345"),
     };
     update_msg.old_tuple.?.columns[1] = TupleData{
         .column_type = .text,
-        .value = allocator.dupe(u8, "Alice") catch unreachable,
+        .value = try allocator.dupe(u8, "Alice"),
     };
     update_msg.old_tuple.?.columns[2] = TupleData{
         .column_type = .text,
-        .value = allocator.dupe(u8, "alice@example.com") catch unreachable,
+        .value = try allocator.dupe(u8, "alice@example.com"),
     };
     update_msg.old_tuple.?.columns[3] = TupleData{
         .column_type = .text,
-        .value = allocator.dupe(u8, "true") catch unreachable,
+        .value = try allocator.dupe(u8, "true"),
     };
 
-    // New tuple
     update_msg.new_tuple.columns[0] = TupleData{
         .column_type = .text,
-        .value = allocator.dupe(u8, "12345") catch unreachable,
+        .value = try allocator.dupe(u8, "12345"),
     };
     update_msg.new_tuple.columns[1] = TupleData{
         .column_type = .text,
-        .value = allocator.dupe(u8, "Bob") catch unreachable,
+        .value = try allocator.dupe(u8, "Bob"),
     };
     update_msg.new_tuple.columns[2] = TupleData{
         .column_type = .text,
-        .value = allocator.dupe(u8, "bob@example.com") catch unreachable,
+        .value = try allocator.dupe(u8, "bob@example.com"),
     };
     update_msg.new_tuple.columns[3] = TupleData{
         .column_type = .text,
-        .value = allocator.dupe(u8, "false") catch unreachable,
+        .value = try allocator.dupe(u8, "false"),
     };
 
-    const pg_msg = PgOutputMessage{ .update = update_msg };
-
-    var event = global_processor.?.processMessage(pg_msg, &global_registry.?) catch unreachable;
-    if (event) |*e| {
-        e.deinit(allocator);
-    }
+    return update_msg;
 }
 
-fn benchmarkDeleteMessage(allocator: std.mem.Allocator) void {
+const BenchProcessUpdate = struct {
+    registry: *RelationRegistry,
+    message: PgOutputMessage,
+
+    pub fn run(self: BenchProcessUpdate, allocator: std.mem.Allocator) void {
+        var processor = MessageProcessor.init(allocator);
+        var event = processor.processMessage(self.message, self.registry) catch unreachable;
+        if (event) |*e| {
+            e.deinit(allocator);
+        }
+    }
+};
+
+fn buildDeleteMessage(allocator: std.mem.Allocator) !DeleteMessage {
     var delete_msg = DeleteMessage{
         .relation_id = 100,
         .old_tuple = TupleMessage{
-            .columns = allocator.alloc(TupleData, 4) catch unreachable,
+            .columns = try allocator.alloc(TupleData, 4),
         },
     };
-    defer delete_msg.old_tuple.deinit(allocator);
 
     delete_msg.old_tuple.columns[0] = TupleData{
         .column_type = .text,
-        .value = allocator.dupe(u8, "12345") catch unreachable,
+        .value = try allocator.dupe(u8, "12345"),
     };
     delete_msg.old_tuple.columns[1] = TupleData{
         .column_type = .text,
-        .value = allocator.dupe(u8, "Alice") catch unreachable,
+        .value = try allocator.dupe(u8, "Alice"),
     };
     delete_msg.old_tuple.columns[2] = TupleData{
         .column_type = .text,
-        .value = allocator.dupe(u8, "alice@example.com") catch unreachable,
+        .value = try allocator.dupe(u8, "alice@example.com"),
     };
     delete_msg.old_tuple.columns[3] = TupleData{
         .column_type = .text,
-        .value = allocator.dupe(u8, "true") catch unreachable,
+        .value = try allocator.dupe(u8, "true"),
     };
 
-    const pg_msg = PgOutputMessage{ .delete = delete_msg };
-
-    var event = global_processor.?.processMessage(pg_msg, &global_registry.?) catch unreachable;
-    if (event) |*e| {
-        e.deinit(allocator);
-    }
+    return delete_msg;
 }
 
-test "benchmark MessageProcessor" {
+const BenchProcessDelete = struct {
+    registry: *RelationRegistry,
+    message: PgOutputMessage,
+
+    pub fn run(self: BenchProcessDelete, allocator: std.mem.Allocator) void {
+        var processor = MessageProcessor.init(allocator);
+        var event = processor.processMessage(self.message, self.registry) catch unreachable;
+        if (event) |*e| {
+            e.deinit(allocator);
+        }
+    }
+};
+
+test "benchmark MessageProcessor INSERT" {
+    var insert_msg = try buildInsertMessage(std.testing.allocator);
+    defer insert_msg.deinit(std.testing.allocator);
+
+    var registry = try setupRegistry(std.testing.allocator);
+    defer registry.deinit();
+
     var alloc_count: usize = 0;
     var counting_alloc = CountingAllocator{
         .parent_allocator = std.testing.allocator,
         .allocation_count = &alloc_count,
     };
 
-    // Setup: create registry and processor once
-    try setupRegistry(counting_alloc.allocator());
-    defer {
-        if (global_registry) |*registry| {
-            registry.deinit();
-        }
-    }
-
-    global_processor = MessageProcessor.init(counting_alloc.allocator());
-
     var bench = zbench.Benchmark.init(counting_alloc.allocator(), .{});
     defer bench.deinit();
 
-    // Reset allocation counter after all setup
     alloc_count = 0;
 
-    try bench.add("MessageProcessor.processMessage (INSERT)", benchmarkInsertMessage, .{
-        .iterations = 1000,
-        .track_allocations = true,
-    });
+    const insert_pg_msg = PgOutputMessage{ .insert = insert_msg };
 
-    try bench.add("MessageProcessor.processMessage (UPDATE)", benchmarkUpdateMessage, .{
-        .iterations = 1000,
-        .track_allocations = true,
-    });
+    const bench_insert = BenchProcessInsert{
+        .registry = &registry,
+        .message = insert_pg_msg,
+    };
 
-    try bench.add("MessageProcessor.processMessage (DELETE)", benchmarkDeleteMessage, .{
+    try bench.addParam("MessageProcessor.processMessage (INSERT)", &bench_insert, .{
         .iterations = 1000,
         .track_allocations = true,
     });
@@ -227,6 +237,86 @@ test "benchmark MessageProcessor" {
     try bench.run(writer);
     try writer.flush();
 
-    const allocations_per_iter = alloc_count / 3000;
+    const allocations_per_iter = alloc_count / 1000;
+    std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
+}
+
+test "benchmark MessageProcessor UPDATE" {
+    var update_msg = try buildUpdateMessage(std.testing.allocator);
+    defer update_msg.deinit(std.testing.allocator);
+
+    var registry = try setupRegistry(std.testing.allocator);
+    defer registry.deinit();
+
+    var alloc_count: usize = 0;
+    var counting_alloc = CountingAllocator{
+        .parent_allocator = std.testing.allocator,
+        .allocation_count = &alloc_count,
+    };
+
+    var bench = zbench.Benchmark.init(counting_alloc.allocator(), .{});
+    defer bench.deinit();
+
+    alloc_count = 0;
+
+    const update_pg_msg = PgOutputMessage{ .update = update_msg };
+
+    const bench_update = BenchProcessUpdate{
+        .registry = &registry,
+        .message = update_pg_msg,
+    };
+
+    try bench.addParam("MessageProcessor.processMessage (UPDATE)", &bench_update, .{
+        .iterations = 1000,
+        .track_allocations = true,
+    });
+
+    var buf: [4096]u8 = undefined;
+    var stdout = std.fs.File.stdout().writer(&buf);
+    const writer = &stdout.interface;
+    try bench.run(writer);
+    try writer.flush();
+
+    const allocations_per_iter = alloc_count / 1000;
+    std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
+}
+
+test "benchmark MessageProcessor DELETE" {
+    var delete_msg = try buildDeleteMessage(std.testing.allocator);
+    defer delete_msg.old_tuple.deinit(std.testing.allocator);
+
+    var registry = try setupRegistry(std.testing.allocator);
+    defer registry.deinit();
+
+    var alloc_count: usize = 0;
+    var counting_alloc = CountingAllocator{
+        .parent_allocator = std.testing.allocator,
+        .allocation_count = &alloc_count,
+    };
+
+    var bench = zbench.Benchmark.init(counting_alloc.allocator(), .{});
+    defer bench.deinit();
+
+    alloc_count = 0;
+
+    const delete_pg_msg = PgOutputMessage{ .delete = delete_msg };
+
+    const bench_delete = BenchProcessDelete{
+        .registry = &registry,
+        .message = delete_pg_msg,
+    };
+
+    try bench.addParam("MessageProcessor.processMessage (DELETE)", &bench_delete, .{
+        .iterations = 1000,
+        .track_allocations = true,
+    });
+
+    var buf: [4096]u8 = undefined;
+    var stdout = std.fs.File.stdout().writer(&buf);
+    const writer = &stdout.interface;
+    try bench.run(writer);
+    try writer.flush();
+
+    const allocations_per_iter = alloc_count / 1000;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
 }

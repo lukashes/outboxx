@@ -59,60 +59,88 @@ const MockCluster = struct {
     }
 };
 
-var global_mock: ?MockCluster = null;
-var global_producer: ?KafkaProducer = null;
+// KafkaProducer setup is heavy (rd_kafka initialization, mock cluster), prepared outside benchmark
+const BenchKafkaSend = struct {
+    producer: *KafkaProducer,
 
-fn benchmarkKafkaProducerSend(allocator: std.mem.Allocator) void {
-    _ = allocator;
-    var producer = &global_producer.?;
-    const payload = "{\"id\":123,\"name\":\"Alice\",\"email\":\"alice@example.com\"}";
-    producer.sendMessage("bench_topic", "key_123", payload) catch unreachable;
-}
+    pub fn run(self: BenchKafkaSend, allocator: std.mem.Allocator) void {
+        _ = allocator;
+        const payload = "{\"id\":123,\"name\":\"Alice\",\"email\":\"alice@example.com\"}";
+        self.producer.sendMessage("bench_topic", "key_123", payload) catch unreachable;
+    }
+};
 
-fn benchmarkKafkaProducerFlush(allocator: std.mem.Allocator) void {
-    _ = allocator;
-    var producer = &global_producer.?;
-    producer.flush(5000) catch unreachable;
-}
+const BenchKafkaFlush = struct {
+    producer: *KafkaProducer,
 
-test "benchmark KafkaProducer" {
+    pub fn run(self: BenchKafkaFlush, allocator: std.mem.Allocator) void {
+        _ = allocator;
+        self.producer.flush(5000) catch unreachable;
+    }
+};
+
+test "benchmark KafkaProducer sendMessage" {
+    var mock = try MockCluster.init();
+    defer mock.deinit();
+
     var alloc_count: usize = 0;
     var counting_alloc = CountingAllocator{
         .parent_allocator = std.testing.allocator,
         .allocation_count = &alloc_count,
     };
 
-    // Setup: create mock cluster and producer once
-    global_mock = try MockCluster.init();
-    defer {
-        if (global_mock) |*mock| {
-            mock.deinit();
-        }
-    }
-
-    global_producer = try KafkaProducer.init(counting_alloc.allocator(), global_mock.?.bootstraps);
-    defer {
-        if (global_producer) |*producer| {
-            producer.deinit();
-        }
-    }
+    var producer = try KafkaProducer.init(counting_alloc.allocator(), mock.bootstraps);
+    defer producer.deinit();
 
     var bench = zbench.Benchmark.init(counting_alloc.allocator(), .{});
     defer bench.deinit();
 
-    // Pre-create topic to exclude lazy initialization from benchmark
-    _ = try global_producer.?.sendMessage("bench_topic", "warmup", "warmup");
-    try global_producer.?.flush(5000);
+    _ = try producer.sendMessage("bench_topic", "warmup", "warmup");
+    try producer.flush(5000);
 
-    // Reset allocation counter after all setup (including bench.init)
     alloc_count = 0;
 
-    try bench.add("KafkaProducer.sendMessage", benchmarkKafkaProducerSend, .{
+    const bench_send = BenchKafkaSend{ .producer = &producer };
+
+    try bench.addParam("KafkaProducer.sendMessage", &bench_send, .{
         .iterations = 1000,
         .track_allocations = true,
     });
 
-    try bench.add("KafkaProducer.flush", benchmarkKafkaProducerFlush, .{
+    var buf: [4096]u8 = undefined;
+    var stdout = std.fs.File.stdout().writer(&buf);
+    const writer = &stdout.interface;
+    try bench.run(writer);
+    try writer.flush();
+
+    const allocations_per_iter = alloc_count / 1000;
+    std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
+}
+
+test "benchmark KafkaProducer flush" {
+    var mock = try MockCluster.init();
+    defer mock.deinit();
+
+    var alloc_count: usize = 0;
+    var counting_alloc = CountingAllocator{
+        .parent_allocator = std.testing.allocator,
+        .allocation_count = &alloc_count,
+    };
+
+    var producer = try KafkaProducer.init(counting_alloc.allocator(), mock.bootstraps);
+    defer producer.deinit();
+
+    var bench = zbench.Benchmark.init(counting_alloc.allocator(), .{});
+    defer bench.deinit();
+
+    _ = try producer.sendMessage("bench_topic", "warmup", "warmup");
+    try producer.flush(5000);
+
+    alloc_count = 0;
+
+    const bench_flush = BenchKafkaFlush{ .producer = &producer };
+
+    try bench.addParam("KafkaProducer.flush", &bench_flush, .{
         .iterations = 100,
         .track_allocations = true,
     });
@@ -123,6 +151,6 @@ test "benchmark KafkaProducer" {
     try bench.run(writer);
     try writer.flush();
 
-    const allocations_per_iter = alloc_count / 1100;
+    const allocations_per_iter = alloc_count / 100;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
 }

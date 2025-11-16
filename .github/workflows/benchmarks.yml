@@ -1,12 +1,8 @@
 name: Benchmarks
 
 on:
-  workflow_dispatch:
-    inputs:
-      pr_number:
-        description: 'PR number to comment on (optional)'
-        required: false
-        type: string
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
 
@@ -14,6 +10,10 @@ jobs:
   benchmark:
     name: Run Component Benchmarks
     runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false || github.event_name == 'push'
+    permissions:
+      contents: write
+      pull-requests: write
 
     steps:
       - name: Checkout code
@@ -35,19 +35,27 @@ jobs:
         run: make bench-ci
 
       - name: Fetch baseline from main branch
-        if: github.ref != 'refs/heads/main'
+        if: github.event_name == 'pull_request'
+        id: fetch_baseline
         run: |
           echo "Fetching baseline from main branch..."
           if git show origin/main:tests/benchmarks/baseline/components.json > /tmp/baseline.json 2>/dev/null; then
             cp /tmp/baseline.json tests/benchmarks/baseline/components.json
             echo "Baseline fetched successfully"
+            echo "baseline_found=true" >> $GITHUB_OUTPUT
           else
-            echo "Warning: No baseline found in main branch, skipping comparison"
-            exit 0
+            echo "Warning: No baseline found in main branch"
+            echo "baseline_found=false" >> $GITHUB_OUTPUT
+            # Create fallback comment file immediately
+            echo "## 📊 Benchmark Results" > /tmp/benchmark-comment.md
+            echo "" >> /tmp/benchmark-comment.md
+            echo "✅ Benchmarks completed successfully!" >> /tmp/benchmark-comment.md
+            echo "" >> /tmp/benchmark-comment.md
+            echo "**Note:** No baseline available yet. Baseline will be established when this PR is merged to main." >> /tmp/benchmark-comment.md
           fi
 
       - name: Compare with baseline
-        if: github.ref != 'refs/heads/main'
+        if: github.event_name == 'pull_request' && steps.fetch_baseline.outputs.baseline_found == 'true'
         id: compare
         continue-on-error: true
         run: |
@@ -55,6 +63,15 @@ jobs:
             # Generate markdown comparison
             OUTPUT=$(tests/benchmarks/scripts/compare_results.sh --markdown 2>&1)
             echo "$OUTPUT" > /tmp/benchmark-comment.md
+
+            # Check if file is empty or contains only whitespace
+            if [ ! -s /tmp/benchmark-comment.md ] || ! grep -q '[^[:space:]]' /tmp/benchmark-comment.md; then
+              echo "## 📊 Benchmark Comparison" > /tmp/benchmark-comment.md
+              echo "" >> /tmp/benchmark-comment.md
+              echo "⚠️ No matching benchmarks found between baseline and current results." >> /tmp/benchmark-comment.md
+              echo "This may indicate benchmark names have changed." >> /tmp/benchmark-comment.md
+            fi
+
             cat /tmp/benchmark-comment.md
 
             # Check exit code (will fail if regressions detected)
@@ -65,26 +82,82 @@ jobs:
           fi
 
       - name: Post benchmark comment on PR
-        if: github.event.inputs.pr_number != ''
+        if: github.event_name == 'pull_request'
         uses: marocchino/sticky-pull-request-comment@v2
         with:
-          number: ${{ github.event.inputs.pr_number }}
+          number: ${{ github.event.pull_request.number }}
           path: /tmp/benchmark-comment.md
           header: benchmark-results
 
-      - name: Update baseline on main
+      - name: Check if baseline needs update
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        id: check_baseline
         run: |
-          make bench-baseline
+          # Update baseline file with current results
+          cp tests/benchmarks/results/current.json tests/benchmarks/baseline/components.json.new
+
+          # Compare with existing baseline (if exists)
+          if [ ! -f tests/benchmarks/baseline/components.json ]; then
+            echo "No baseline exists, creating initial baseline"
+            echo "needs_update=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Run comparison to check if any benchmark changed > 5%
+          # Temporarily swap files for comparison
+          mv tests/benchmarks/baseline/components.json tests/benchmarks/baseline/components.json.old
+          mv tests/benchmarks/baseline/components.json.new tests/benchmarks/baseline/components.json
+          mv tests/benchmarks/results/current.json tests/benchmarks/results/current.json.backup
+          cp tests/benchmarks/baseline/components.json.old tests/benchmarks/results/current.json
+
+          # Run comparison (exit code 1 if any change > threshold)
+          if tests/benchmarks/scripts/compare_results.sh > /tmp/comparison.log 2>&1; then
+            echo "No significant changes (within 5% threshold), skipping baseline update"
+            echo "needs_update=false" >> $GITHUB_OUTPUT
+            # Restore original baseline
+            mv tests/benchmarks/baseline/components.json.old tests/benchmarks/baseline/components.json
+          else
+            echo "Significant changes detected (> 5% threshold), will create PR"
+            cat /tmp/comparison.log
+            echo "needs_update=true" >> $GITHUB_OUTPUT
+            # Keep new baseline
+            rm tests/benchmarks/baseline/components.json.old
+          fi
+
+          # Restore current results
+          mv tests/benchmarks/results/current.json.backup tests/benchmarks/results/current.json
+
+      - name: Create PR for baseline update
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.check_baseline.outputs.needs_update == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Create branch for baseline update
+          BRANCH_NAME="update-baseline-$(date +%s)"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH_NAME"
           git add tests/benchmarks/baseline/components.json
-          if git diff --staged --quiet; then
-            echo "No changes to baseline"
-          else
-            git commit -m "Update benchmark baseline from CI"
-            git push
-          fi
+          git commit -m "Update benchmark baseline
+
+          Significant performance changes detected (> 5% threshold).
+          Automated baseline update after merge to main."
+          git push origin "$BRANCH_NAME"
+
+          # Create PR
+          gh pr create \
+            --title "Update benchmark baseline" \
+            --body "Automated baseline update after merge to main.
+
+          Significant performance changes detected (> 5% threshold).
+
+          **Review checklist:**
+          - [ ] Check that performance changes are expected
+          - [ ] No unexpected regressions
+
+          Auto-generated by benchmark workflow." \
+            --base main \
+            --head "$BRANCH_NAME"
 
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
