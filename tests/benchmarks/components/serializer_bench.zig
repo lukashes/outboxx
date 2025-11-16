@@ -12,21 +12,19 @@ const RowDataHelpers = domain.RowDataHelpers;
 const JsonSerializer = json_serialization.JsonSerializer;
 const CountingAllocator = bench_helpers.CountingAllocator;
 
-fn benchmarkJsonSerializerInsert(allocator: std.mem.Allocator) void {
-    const serializer = JsonSerializer.init();
-
+fn buildChangeEvent(allocator: std.mem.Allocator) !ChangeEvent {
     var row_builder = RowDataHelpers.createBuilder(allocator);
-    RowDataHelpers.put(&row_builder, allocator, "id", FieldValueHelpers.integer(123)) catch unreachable;
-    RowDataHelpers.put(&row_builder, allocator, "name", FieldValueHelpers.text(allocator, "Alice") catch unreachable) catch unreachable;
-    RowDataHelpers.put(&row_builder, allocator, "email", FieldValueHelpers.text(allocator, "alice@example.com") catch unreachable) catch unreachable;
-    RowDataHelpers.put(&row_builder, allocator, "age", FieldValueHelpers.integer(30)) catch unreachable;
+    try RowDataHelpers.put(&row_builder, allocator, "id", FieldValueHelpers.integer(123));
+    try RowDataHelpers.put(&row_builder, allocator, "name", try FieldValueHelpers.text(allocator, "Alice"));
+    try RowDataHelpers.put(&row_builder, allocator, "email", try FieldValueHelpers.text(allocator, "alice@example.com"));
+    try RowDataHelpers.put(&row_builder, allocator, "age", FieldValueHelpers.integer(30));
 
-    const row = RowDataHelpers.finalize(&row_builder, allocator) catch unreachable;
+    const row = try RowDataHelpers.finalize(&row_builder, allocator);
 
     const metadata = Metadata{
-        .source = allocator.dupe(u8, "postgres") catch unreachable,
-        .resource = allocator.dupe(u8, "users") catch unreachable,
-        .schema = allocator.dupe(u8, "public") catch unreachable,
+        .source = try allocator.dupe(u8, "postgres"),
+        .resource = try allocator.dupe(u8, "users"),
+        .schema = try allocator.dupe(u8, "public"),
         .timestamp = 1234567890,
         .lsn = null,
     };
@@ -34,13 +32,25 @@ fn benchmarkJsonSerializerInsert(allocator: std.mem.Allocator) void {
     var event = ChangeEvent.init(ChangeOperation.INSERT, metadata);
     event.setInsertData(row);
 
-    const json = serializer.serialize(event, allocator) catch unreachable;
-    defer allocator.free(json);
-
-    event.deinit(allocator);
+    return event;
 }
 
+// JsonSerializer.init() is lightweight (no allocations), created inside to track serialize() allocations.
+// ChangeEvent setup is heavy (row data, metadata), prepared outside
+const BenchSerializeInsert = struct {
+    event: ChangeEvent,
+
+    pub fn run(self: BenchSerializeInsert, allocator: std.mem.Allocator) void {
+        const serializer = JsonSerializer.init();
+        const json = serializer.serialize(self.event, allocator) catch unreachable;
+        allocator.free(json);
+    }
+};
+
 test "benchmark JsonSerializer" {
+    var event = try buildChangeEvent(std.testing.allocator);
+    defer event.deinit(std.testing.allocator);
+
     var alloc_count: usize = 0;
     var counting_alloc = CountingAllocator{
         .parent_allocator = std.testing.allocator,
@@ -50,7 +60,11 @@ test "benchmark JsonSerializer" {
     var bench = zbench.Benchmark.init(counting_alloc.allocator(), .{});
     defer bench.deinit();
 
-    try bench.add("JsonSerializer.serialize INSERT", benchmarkJsonSerializerInsert, .{
+    alloc_count = 0;
+
+    const bench_serialize = BenchSerializeInsert{ .event = event };
+
+    try bench.addParam("JsonSerializer.serialize INSERT", &bench_serialize, .{
         .iterations = 1000,
         .track_allocations = true,
     });

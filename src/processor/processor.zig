@@ -20,6 +20,30 @@ pub const ProcessorError = error{
     OutOfMemory,
 };
 
+pub fn matchStreams(allocator: std.mem.Allocator, streams: []const Stream, table_name: []const u8, operation: []const u8) std.ArrayList(Stream) {
+    var matched = std.ArrayList(Stream).empty;
+
+    for (streams) |stream| {
+        if (!std.mem.eql(u8, stream.source.resource, table_name)) {
+            continue;
+        }
+
+        var operation_matched = false;
+        for (stream.source.operations) |op| {
+            if (std.ascii.eqlIgnoreCase(op, operation)) {
+                operation_matched = true;
+                break;
+            }
+        }
+
+        if (operation_matched) {
+            matched.append(allocator, stream) catch continue;
+        }
+    }
+
+    return matched;
+}
+
 /// CDC Processor that works with PostgreSQL streaming replication
 pub const Processor = struct {
     allocator: std.mem.Allocator,
@@ -71,29 +95,8 @@ pub const Processor = struct {
         std.log.info("Processor initialized successfully", .{});
     }
 
-    // Match streams that should process this event based on table and operation
-    fn matchStreams(self: *Self, table_name: []const u8, operation: []const u8) std.ArrayList(Stream) {
-        var matched = std.ArrayList(Stream).empty;
-
-        for (self.streams) |stream| {
-            if (!std.mem.eql(u8, stream.source.resource, table_name)) {
-                continue;
-            }
-
-            var operation_matched = false;
-            for (stream.source.operations) |op| {
-                if (std.ascii.eqlIgnoreCase(op, operation)) {
-                    operation_matched = true;
-                    break;
-                }
-            }
-
-            if (operation_matched) {
-                matched.append(self.allocator, stream) catch continue;
-            }
-        }
-
-        return matched;
+    fn matchStreamsInternal(self: *Self, table_name: []const u8, operation: []const u8) std.ArrayList(Stream) {
+        return matchStreams(self.allocator, self.streams, table_name, operation);
     }
 
     pub fn processChangesToKafka(self: *Self, limit: u32) anyerror!void {
@@ -113,7 +116,7 @@ pub const Processor = struct {
         std.log.debug("Processing {} changes from batch (LSN: {})", .{ batch.changes.len, batch.last_lsn });
 
         for (batch.changes, 0..) |change_event, batch_index| {
-            var matched_streams = self.matchStreams(change_event.meta.resource, change_event.op);
+            var matched_streams = self.matchStreamsInternal(change_event.meta.resource, change_event.op);
             defer matched_streams.deinit(self.allocator);
 
             if (matched_streams.items.len == 0) {

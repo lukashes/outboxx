@@ -28,12 +28,12 @@ make load-down
 
 ```
 PostgreSQL (source) ─→ CDC Solution ─→ Kafka (sink)
-                            ↓
-                    Kafka Exporter (metrics)
-                            ↓
-                       Prometheus
-                            ↓
-                         Grafana
+                                          ↓
+                                  Kafka Exporter (metrics)
+                                          ↓
+                                     Prometheus
+                                          ↓
+                                       Grafana
 ```
 
 **Core infrastructure** (always running):
@@ -122,10 +122,10 @@ make load-down                # Stop everything
 
 ### Running Tests
 ```bash
-make load-test-steady   # 1000 evt/s × 60s
-make load-test-burst    # 10K events max speed
-make load-test-ramp     # 100→5000 evt/s
-make load-test-mixed    # Mixed operations
+make load-test-steady   # 30k evt/s × 120s (3.6M events)
+make load-test-burst    # 10M events max speed
+make load-test-ramp     # 10k→200k evt/s (30s steps)
+make load-test-mixed    # 1M mixed ops (60% INSERT, 30% UPDATE, 10% DELETE)
 ```
 
 ### Monitoring
@@ -176,128 +176,27 @@ make load-test-steady
 
 ## Troubleshooting
 
-### Metrics not showing in Grafana
-
-Check Kafka Exporter:
 ```bash
-curl http://localhost:8000/metrics
-```
-
-View exporter logs:
-```bash
-docker logs load_kafka_exporter
-```
-
-### CDC container failing
-
-Check logs:
-```bash
+# Check CDC logs
 docker logs load_outboxx
 docker logs load_debezium
+
+# Infrastructure status
+make load-status
 ```
 
-### Debezium connector issues
+**Note**: Load testing uses different ports: PostgreSQL 5433, Grafana 3000, Prometheus 9090
 
-Check connector status:
-```bash
-curl http://localhost:8083/connectors/load-postgres-connector/status | jq
-```
+## Performance Targets
 
-Delete and recreate:
-```bash
-curl -X DELETE http://localhost:8083/connectors/load-postgres-connector
-make load-switch CDC=debezium
-```
+**Baseline: ~60k events/sec**
 
-### PostgreSQL connection issues
+- **Replication Lag**: < 1s (good), < 5s (acceptable)
+- **Throughput**: > 30k evt/s sustained, > 100k evt/s burst
+- **Memory**: < 256 MB (good), < 512 MB (limit)
+- **CPU**: < 50% sustained, < 80% bursts
 
-Check PostgreSQL:
-```bash
-docker exec load_postgres pg_isready -U postgres
-docker logs load_postgres
-```
+## Extending
 
-Test connection:
-```bash
-psql -h localhost -p 5433 -U postgres -d outboxx_load
-```
-
-### Port conflicts
-
-Load testing uses different ports from dev environment:
-- PostgreSQL: 5433 (dev uses 5432)
-- Grafana: 3000
-- Prometheus: 9090
-
-## Adding New CDC Solutions
-
-See `cdc/README.md` for plugin specification.
-
-TL;DR: Create `cdc/<name>/` directory with:
-- `Dockerfile` - CDC container build
-- `config.*` - CDC configuration
-- Update `scripts/start.sh` to support new CDC
-
-## Advanced Features
-
-See `advanced/` directory:
-- **PROFILING.md** - Performance profiling with Linux perf
-- **REBUILD.md** - Rebuilding Outboxx Docker image after code changes
-
-## Project Structure
-
-```
-tests/load/
-├── README.md              # This file
-├── docker-compose.yml     # Core infrastructure + CDC profiles
-│
-├── cdc/                   # CDC plugins
-│   ├── outboxx/
-│   ├── debezium/
-│   └── README.md          # Plugin specification
-│
-├── config/                # Infrastructure config
-│   ├── init.sql
-│   ├── postgres.conf
-│   └── prometheus.yml
-│
-├── grafana/               # Monitoring dashboards
-├── exporter/              # Universal metrics exporter
-│
-├── scenarios/             # Load scenarios (SQL)
-│   ├── steady.sql
-│   ├── burst.sql
-│   ├── ramp.sql
-│   └── mixed.sql
-│
-├── scripts/               # Unified scripts
-│   ├── start.sh
-│   ├── stop.sh
-│   ├── switch.sh
-│   ├── run-scenario.sh
-│   └── status.sh
-│
-└── advanced/              # Optional features
-    ├── PROFILING.md
-    ├── REBUILD.md
-    └── profile-run.sh
-```
-
-## Performance Expectations
-
-**Based on ~60k evt/s baseline**
-
-| Metric | Excellent | Good | Needs Tuning |
-|--------|-----------|------|--------------|
-| Replication Lag | < 100ms | < 1s | > 5s |
-| Throughput | > 60k evt/s | > 30k evt/s | < 20k evt/s |
-| Memory (RSS) | < 256 MB | < 512 MB | > 512 MB |
-| CPU Usage | < 50% | < 80% | > 80% |
-
-## Next Steps
-
-1. Run all scenarios to establish baseline
-2. Identify bottlenecks using Grafana
-3. Compare different CDC solutions
-4. Profile hot paths (see `advanced/PROFILING.md`)
-5. Tune configuration based on metrics
+- **Add CDC solutions**: See `cdc/README.md` for plugin spec
+- **Advanced profiling**: See `advanced/PROFILING.md` and `REBUILD.md`

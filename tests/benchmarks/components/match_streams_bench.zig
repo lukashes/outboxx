@@ -2,36 +2,13 @@ const std = @import("std");
 const zbench = @import("zbench");
 const config_module = @import("config");
 const bench_helpers = @import("bench_helpers");
+const processor_mod = @import("processor");
 
 const Stream = config_module.Stream;
 const StreamSource = config_module.StreamSource;
 const StreamFlow = config_module.StreamFlow;
 const StreamSink = config_module.StreamSink;
 const CountingAllocator = bench_helpers.CountingAllocator;
-
-fn matchStreams(allocator: std.mem.Allocator, streams: []const Stream, table_name: []const u8, operation: []const u8) std.ArrayList(Stream) {
-    var matched = std.ArrayList(Stream).empty;
-
-    for (streams) |stream| {
-        if (!std.mem.eql(u8, stream.source.resource, table_name)) {
-            continue;
-        }
-
-        var operation_matched = false;
-        for (stream.source.operations) |op| {
-            if (std.ascii.eqlIgnoreCase(op, operation)) {
-                operation_matched = true;
-                break;
-            }
-        }
-
-        if (operation_matched) {
-            matched.append(allocator, stream) catch continue;
-        }
-    }
-
-    return matched;
-}
 
 fn createTestStreams(allocator: std.mem.Allocator) ![]Stream {
     const streams = try allocator.alloc(Stream, 10);
@@ -139,23 +116,29 @@ fn createTestStreams(allocator: std.mem.Allocator) ![]Stream {
     return streams;
 }
 
-fn benchmarkMatchStreamsFound(allocator: std.mem.Allocator) void {
-    const streams = createTestStreams(allocator) catch unreachable;
-    defer allocator.free(streams);
+// Stream array creation is heavy (10 stream objects with metadata), prepared outside to track matchStreams() allocations only
+const BenchMatchFound = struct {
+    streams: []const Stream,
 
-    var matched = matchStreams(allocator, streams, "users", "INSERT");
-    defer matched.deinit(allocator);
-}
+    pub fn run(self: BenchMatchFound, allocator: std.mem.Allocator) void {
+        var matched = processor_mod.matchStreams(allocator, self.streams, "users", "INSERT");
+        matched.deinit(allocator);
+    }
+};
 
-fn benchmarkMatchStreamsNotFound(allocator: std.mem.Allocator) void {
-    const streams = createTestStreams(allocator) catch unreachable;
-    defer allocator.free(streams);
+const BenchMatchNotFound = struct {
+    streams: []const Stream,
 
-    var matched = matchStreams(allocator, streams, "nonexistent_table", "INSERT");
-    defer matched.deinit(allocator);
-}
+    pub fn run(self: BenchMatchNotFound, allocator: std.mem.Allocator) void {
+        var matched = processor_mod.matchStreams(allocator, self.streams, "nonexistent_table", "INSERT");
+        matched.deinit(allocator);
+    }
+};
 
-test "benchmark matchStreams" {
+test "benchmark matchStreams found" {
+    const streams = try createTestStreams(std.testing.allocator);
+    defer std.testing.allocator.free(streams);
+
     var alloc_count: usize = 0;
     var counting_alloc = CountingAllocator{
         .parent_allocator = std.testing.allocator,
@@ -165,12 +148,11 @@ test "benchmark matchStreams" {
     var bench = zbench.Benchmark.init(counting_alloc.allocator(), .{});
     defer bench.deinit();
 
-    try bench.add("matchStreams (found)", benchmarkMatchStreamsFound, .{
-        .iterations = 1000,
-        .track_allocations = true,
-    });
+    alloc_count = 0;
 
-    try bench.add("matchStreams (not found)", benchmarkMatchStreamsNotFound, .{
+    const bench_found = BenchMatchFound{ .streams = streams };
+
+    try bench.addParam("matchStreams (found)", &bench_found, .{
         .iterations = 1000,
         .track_allocations = true,
     });
@@ -181,6 +163,38 @@ test "benchmark matchStreams" {
     try bench.run(writer);
     try writer.flush();
 
-    const allocations_per_iter = alloc_count / 2000;
+    const allocations_per_iter = alloc_count / 1000;
+    std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
+}
+
+test "benchmark matchStreams not found" {
+    const streams = try createTestStreams(std.testing.allocator);
+    defer std.testing.allocator.free(streams);
+
+    var alloc_count: usize = 0;
+    var counting_alloc = CountingAllocator{
+        .parent_allocator = std.testing.allocator,
+        .allocation_count = &alloc_count,
+    };
+
+    var bench = zbench.Benchmark.init(counting_alloc.allocator(), .{});
+    defer bench.deinit();
+
+    alloc_count = 0;
+
+    const bench_not_found = BenchMatchNotFound{ .streams = streams };
+
+    try bench.addParam("matchStreams (not found)", &bench_not_found, .{
+        .iterations = 1000,
+        .track_allocations = true,
+    });
+
+    var buf: [4096]u8 = undefined;
+    var stdout = std.fs.File.stdout().writer(&buf);
+    const writer = &stdout.interface;
+    try bench.run(writer);
+    try writer.flush();
+
+    const allocations_per_iter = alloc_count / 1000;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
 }

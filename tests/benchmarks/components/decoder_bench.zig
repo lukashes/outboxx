@@ -57,17 +57,21 @@ fn buildInsertMessage(allocator: std.mem.Allocator) ![]u8 {
     return data.toOwnedSlice(allocator);
 }
 
-fn benchmarkPgOutputDecoderInsert(allocator: std.mem.Allocator) void {
-    const insert_data = buildInsertMessage(allocator) catch unreachable;
-    defer allocator.free(insert_data);
+// PgOutputDecoder.init() is lightweight (no allocations), created inside to track decode() allocations only
+const BenchDecoderInsert = struct {
+    golden_data: []const u8,
 
-    var decoder = PgOutputDecoder.init(allocator);
-
-    var msg = decoder.decode(insert_data) catch unreachable;
-    defer msg.deinit(allocator);
-}
+    pub fn run(self: BenchDecoderInsert, allocator: std.mem.Allocator) void {
+        var decoder = PgOutputDecoder.init(allocator);
+        var msg = decoder.decode(self.golden_data) catch unreachable;
+        defer msg.deinit(allocator);
+    }
+};
 
 test "benchmark PgOutputDecoder" {
+    const insert_data = try buildInsertMessage(std.testing.allocator);
+    defer std.testing.allocator.free(insert_data);
+
     var alloc_count: usize = 0;
     var counting_alloc = CountingAllocator{
         .parent_allocator = std.testing.allocator,
@@ -77,7 +81,9 @@ test "benchmark PgOutputDecoder" {
     var bench = zbench.Benchmark.init(counting_alloc.allocator(), .{});
     defer bench.deinit();
 
-    try bench.add("PgOutputDecoder.decode INSERT", benchmarkPgOutputDecoderInsert, .{
+    const bench_insert = BenchDecoderInsert{ .golden_data = insert_data };
+
+    try bench.addParam("PgOutputDecoder.decode INSERT", &bench_insert, .{
         .iterations = 1000,
         .track_allocations = true,
     });

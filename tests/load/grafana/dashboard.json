@@ -14,6 +14,7 @@
   },
   "editable": true,
   "gnetId": null,
+  "refresh": "5s",
   "graphTooltip": 1,
   "id": null,
   "links": [],
