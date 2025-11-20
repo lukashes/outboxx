@@ -1,6 +1,14 @@
-# Outboxx - PostgreSQL Change Data Capture in Zig
+# Outboxx
 
-Lightweight PostgreSQL CDC tool that streams WAL changes to Kafka. Built in Zig for minimal resource consumption.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="logo/dark/logo-animated-icon-only.svg">
+  <source media="(prefers-color-scheme: light)" srcset="logo/light/logo-animated-icon-only.svg">
+  <img alt="Outboxx" src="logo/light/logo-animated-icon-only.svg" width="160" align="left" style="margin-right: 20px; margin-bottom: 10px;">
+</picture>
+
+**PostgreSQL Change Data Capture in Zig**
+
+Lightweight tool that streams WAL changes to Kafka. Built in Zig for minimal resource consumption.
 
 **🚀 Development Status**: Core CDC pipeline implemented with streaming replication. Under active optimization, approaching alpha release.
 

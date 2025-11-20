@@ -1,0 +1,47 @@
+<svg width="220" height="220" viewBox="0 0 220 220" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background circle -->
+  <circle cx="110" cy="110" r="85" fill="none" stroke="#16c79a" stroke-width="3"/>
+  
+  <!-- Central source (hexagon) -->
+  <g id="source">
+    <polygon points="50,110 62,88 88,88 100,110 88,132 62,132" 
+             fill="#1a1a2e" stroke="#16c79a" stroke-width="3.5"/>
+    <circle cx="75" cy="110" r="10" fill="#16c79a"/>
+  </g>
+  
+  <!-- Destination nodes -->
+  <!-- Top destination -->
+  <g id="dest-top">
+    <rect x="135" y="60" width="26" height="26" rx="4" 
+          fill="#1a1a2e" stroke="#19d3da" stroke-width="2.5"/>
+    <circle cx="148" cy="73" r="5" fill="#19d3da" opacity="0.6"/>
+  </g>
+  
+  <!-- Middle destination -->
+  <g id="dest-middle">
+    <circle cx="155" cy="110" r="15" 
+            fill="#1a1a2e" stroke="#19d3da" stroke-width="2.5"/>
+    <circle cx="155" cy="110" r="6" fill="#19d3da" opacity="0.6"/>
+  </g>
+  
+  <!-- Bottom destination -->
+  <g id="dest-bottom">
+    <rect x="135" y="134" width="26" height="26" rx="4" 
+          fill="#1a1a2e" stroke="#19d3da" stroke-width="2.5"/>
+    <circle cx="148" cy="147" r="5" fill="#19d3da" opacity="0.6"/>
+  </g>
+  
+  <!-- Connection lines -->
+  <g id="connections" stroke="#f5f5f5" stroke-width="2" opacity="0.3">
+    <line x1="100" y1="100" x2="135" y2="73"/>
+    <line x1="100" y1="110" x2="140" y2="110"/>
+    <line x1="100" y1="120" x2="135" y2="147"/>
+  </g>
+  
+  <!-- Static data flow (dots without animation) -->
+  <g id="data-flow">
+    <circle cx="115" cy="88" r="3.5" fill="#16c79a"/>
+    <circle cx="120" cy="110" r="3.5" fill="#16c79a"/>
+    <circle cx="115" cy="132" r="3.5" fill="#16c79a"/>
+  </g>
+</svg>
