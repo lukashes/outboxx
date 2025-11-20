@@ -1,93 +1,93 @@
 {
-  "timestamp": "2025-11-17T08:15:13Z",
+  "timestamp": "2025-11-20T22:08:30Z",
   "benchmarks": {
     "JsonSerializer": {
-      "time_avg_us": 132.203,
-      "time_stddev_us": 22.503,
+      "time_avg_us": 63.49,
+      "time_stddev_us": 20.008,
       "memory_bytes": 505,
       "allocations": 3
     }
 ,
     "PgOutputDecoder": {
-      "time_avg_us": 270.744,
-      "time_stddev_us": 42.509,
+      "time_avg_us": 134.455,
+      "time_stddev_us": 73.308,
       "memory_bytes": 243,
       "allocations": 6
     }
 ,
     "matchStreams found": {
-      "time_avg_us": 41.826,
-      "time_stddev_us": 8.349,
+      "time_avg_us": 19.486,
+      "time_stddev_us": 4.465,
       "memory_bytes": 96,
       "allocations": 1
     }
 ,
     "matchStreams not found": {
-      "time_avg_us": 39.923,
-      "time_stddev_us": .006,
+      "time_avg_us": 29.652,
+      "time_stddev_us": .004,
       "memory_bytes": 0,
       "allocations": 0
     }
 ,
     "getPartitionKeyValue integer": {
-      "time_avg_us": 144.508,
-      "time_stddev_us": 21.004,
+      "time_avg_us": 65.426,
+      "time_stddev_us": 14.355,
       "memory_bytes": 137,
       "allocations": 3
     }
 ,
     "getPartitionKeyValue string": {
-      "time_avg_us": 41.197,
-      "time_stddev_us": 10.37,
+      "time_avg_us": 19.451,
+      "time_stddev_us": 11.896,
       "memory_bytes": 36,
       "allocations": 1
     }
 ,
     "getPartitionKeyValue boolean": {
-      "time_avg_us": 37.512,
-      "time_stddev_us": 11.557,
+      "time_avg_us": 16.697,
+      "time_stddev_us": 11.046,
       "memory_bytes": 4,
       "allocations": 1
     }
 ,
     "getPartitionKeyValue not found": {
-      "time_avg_us": 29.887,
-      "time_stddev_us": .006,
+      "time_avg_us": 19.038,
+      "time_stddev_us": .002,
       "memory_bytes": 0,
       "allocations": 0
     }
 ,
     "KafkaProducer sendMessage": {
-      "time_avg_us": 238.14,
-      "time_stddev_us": .641,
+      "time_avg_us": 396.586,
+      "time_stddev_us": .799,
       "memory_bytes": 0,
       "allocations": 0
     }
 ,
     "KafkaProducer flush": {
-      "time_avg_us": 63.962,
-      "time_stddev_us": 1.61,
+      "time_avg_us": 201.162,
+      "time_stddev_us": 2.839,
       "memory_bytes": 0,
       "allocations": 0
     }
 ,
     "MessageProcessor INSERT": {
-      "time_avg_us": 704.02,
-      "time_stddev_us": 42.214,
+      "time_avg_us": 312.431,
+      "time_stddev_us": 35.794,
       "memory_bytes": 643,
       "allocations": 15
     }
 ,
     "MessageProcessor UPDATE": {
-      "time_avg_us": 44.397,
-      "time_stddev_us": 44.397,
+      "time_avg_us": 547.863,
+      "time_stddev_us": 46.983,
       "memory_bytes": 976,
       "allocations": 27
     }
 ,
     "MessageProcessor DELETE": {
-      "time_avg_us": 697.872,
-      "time_stddev_us": 33.546,
+      "time_avg_us": 304.627,
+      "time_stddev_us": 31.537,
       "memory_bytes": 643,
       "allocations": 15
     }
