@@ -1,0 +1,78 @@
+<svg width="240" height="260" viewBox="0 0 240 260" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background circle -->
+  <circle cx="120" cy="110" r="85" fill="#1a1a2e" stroke="#16c79a" stroke-width="3"/>
+  
+  <!-- Central source (hexagon) -->
+  <g id="source">
+    <polygon points="60,110 72,88 98,88 110,110 98,132 72,132" 
+             fill="#1a1a2e" stroke="#16c79a" stroke-width="3.5"/>
+    <circle cx="85" cy="110" r="10" fill="#16c79a"/>
+  </g>
+  
+  <!-- Destination nodes -->
+  <!-- Top destination -->
+  <g id="dest-top">
+    <rect x="145" y="60" width="26" height="26" rx="4" 
+          fill="#1a1a2e" stroke="#19d3da" stroke-width="2.5"/>
+    <circle cx="158" cy="73" r="5" fill="#19d3da" opacity="0.6"/>
+  </g>
+  
+  <!-- Middle destination -->
+  <g id="dest-middle">
+    <circle cx="165" cy="110" r="15" 
+            fill="#1a1a2e" stroke="#19d3da" stroke-width="2.5"/>
+    <circle cx="165" cy="110" r="6" fill="#19d3da" opacity="0.6"/>
+  </g>
+  
+  <!-- Bottom destination -->
+  <g id="dest-bottom">
+    <rect x="145" y="134" width="26" height="26" rx="4" 
+          fill="#1a1a2e" stroke="#19d3da" stroke-width="2.5"/>
+    <circle cx="158" cy="147" r="5" fill="#19d3da" opacity="0.6"/>
+  </g>
+  
+  <!-- Connection lines -->
+  <g id="connections" stroke="#f5f5f5" stroke-width="2" opacity="0.3">
+    <line x1="110" y1="100" x2="145" y2="73"/>
+    <line x1="110" y1="110" x2="150" y2="110"/>
+    <line x1="110" y1="120" x2="145" y2="147"/>
+  </g>
+  
+  <!-- Animated data flow -->
+  <g id="data-flow">
+    <!-- To top -->
+    <circle r="3.5" fill="#16c79a">
+      <animateMotion dur="2s" repeatCount="indefinite">
+        <mpath href="#path-top"/>
+      </animateMotion>
+      <animate attributeName="opacity" values="1;1;0" keyTimes="0;0.8;1" dur="2s" repeatCount="indefinite"/>
+    </circle>
+    
+    <!-- To middle -->
+    <circle r="3.5" fill="#16c79a">
+      <animateMotion dur="1.8s" repeatCount="indefinite" begin="0.4s">
+        <mpath href="#path-middle"/>
+      </animateMotion>
+      <animate attributeName="opacity" values="1;1;0" keyTimes="0;0.8;1" dur="1.8s" begin="0.4s" repeatCount="indefinite"/>
+    </circle>
+    
+    <!-- To bottom -->
+    <circle r="3.5" fill="#16c79a">
+      <animateMotion dur="2s" repeatCount="indefinite" begin="0.8s">
+        <mpath href="#path-bottom"/>
+      </animateMotion>
+      <animate attributeName="opacity" values="1;1;0" keyTimes="0;0.8;1" dur="2s" begin="0.8s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+  
+  <!-- Invisible paths for animation -->
+  <defs>
+    <path id="path-top" d="M 110 100 L 145 73"/>
+    <path id="path-middle" d="M 110 110 L 150 110"/>
+    <path id="path-bottom" d="M 110 120 L 145 147"/>
+  </defs>
+  
+  <!-- Project name outside circle -->
+  <text x="120" y="230" font-family="Arial, sans-serif" font-size="32" font-weight="bold" fill="#f5f5f5" text-anchor="middle">outboxx</text>
+  <text x="120" y="250" font-family="Arial, sans-serif" font-size="11" fill="#16c79a" text-anchor="middle" letter-spacing="3">CDC SOLUTION</text>
+</svg>

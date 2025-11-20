@@ -1,0 +1,74 @@
+<svg width="220" height="220" viewBox="0 0 220 220" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background circle -->
+  <circle cx="110" cy="110" r="85" fill="#f8f9fa" stroke="#0d7377" stroke-width="3"/>
+  
+  <!-- Central source (hexagon) -->
+  <g id="source">
+    <polygon points="50,110 62,88 88,88 100,110 88,132 62,132" 
+             fill="#f8f9fa" stroke="#0d7377" stroke-width="3.5"/>
+    <circle cx="75" cy="110" r="10" fill="#0d7377"/>
+  </g>
+  
+  <!-- Destination nodes -->
+  <!-- Top destination -->
+  <g id="dest-top">
+    <rect x="135" y="60" width="26" height="26" rx="4" 
+          fill="#f8f9fa" stroke="#14a085" stroke-width="2.5"/>
+    <circle cx="148" cy="73" r="5" fill="#14a085" opacity="0.7"/>
+  </g>
+  
+  <!-- Middle destination -->
+  <g id="dest-middle">
+    <circle cx="155" cy="110" r="15" 
+            fill="#f8f9fa" stroke="#14a085" stroke-width="2.5"/>
+    <circle cx="155" cy="110" r="6" fill="#14a085" opacity="0.7"/>
+  </g>
+  
+  <!-- Bottom destination -->
+  <g id="dest-bottom">
+    <rect x="135" y="134" width="26" height="26" rx="4" 
+          fill="#f8f9fa" stroke="#14a085" stroke-width="2.5"/>
+    <circle cx="148" cy="147" r="5" fill="#14a085" opacity="0.7"/>
+  </g>
+  
+  <!-- Connection lines -->
+  <g id="connections" stroke="#495057" stroke-width="2" opacity="0.3">
+    <line x1="100" y1="100" x2="135" y2="73"/>
+    <line x1="100" y1="110" x2="140" y2="110"/>
+    <line x1="100" y1="120" x2="135" y2="147"/>
+  </g>
+  
+  <!-- Animated data flow -->
+  <g id="data-flow">
+    <!-- To top -->
+    <circle r="3.5" fill="#0d7377">
+      <animateMotion dur="2s" repeatCount="indefinite">
+        <mpath href="#path-top"/>
+      </animateMotion>
+      <animate attributeName="opacity" values="1;1;0" keyTimes="0;0.8;1" dur="2s" repeatCount="indefinite"/>
+    </circle>
+    
+    <!-- To middle -->
+    <circle r="3.5" fill="#0d7377">
+      <animateMotion dur="1.8s" repeatCount="indefinite" begin="0.4s">
+        <mpath href="#path-middle"/>
+      </animateMotion>
+      <animate attributeName="opacity" values="1;1;0" keyTimes="0;0.8;1" dur="1.8s" begin="0.4s" repeatCount="indefinite"/>
+    </circle>
+    
+    <!-- To bottom -->
+    <circle r="3.5" fill="#0d7377">
+      <animateMotion dur="2s" repeatCount="indefinite" begin="0.8s">
+        <mpath href="#path-bottom"/>
+      </animateMotion>
+      <animate attributeName="opacity" values="1;1;0" keyTimes="0;0.8;1" dur="2s" begin="0.8s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+  
+  <!-- Invisible paths for animation -->
+  <defs>
+    <path id="path-top" d="M 100 100 L 135 73"/>
+    <path id="path-middle" d="M 100 110 L 140 110"/>
+    <path id="path-bottom" d="M 100 120 L 135 147"/>
+  </defs>
+</svg>
