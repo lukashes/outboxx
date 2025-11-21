@@ -15,6 +15,8 @@ const RelationMessageColumn = postgres_source.RelationMessageColumn;
 const RelationRegistry = postgres_source.RelationRegistry;
 const CountingAllocator = bench_helpers.CountingAllocator;
 
+const iterations = 100000;
+
 fn setupRegistry(allocator: std.mem.Allocator) !RelationRegistry {
     var registry = RelationRegistry.init(allocator);
 
@@ -227,7 +229,7 @@ test "benchmark MessageProcessor INSERT" {
     };
 
     try bench.addParam("MessageProcessor.processMessage (INSERT)", &bench_insert, .{
-        .iterations = 1000,
+        .iterations = iterations,
         .track_allocations = true,
     });
 
@@ -237,7 +239,7 @@ test "benchmark MessageProcessor INSERT" {
     try bench.run(writer);
     try writer.flush();
 
-    const allocations_per_iter = alloc_count / 1000;
+    const allocations_per_iter = alloc_count / iterations;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
 }
 
@@ -267,7 +269,7 @@ test "benchmark MessageProcessor UPDATE" {
     };
 
     try bench.addParam("MessageProcessor.processMessage (UPDATE)", &bench_update, .{
-        .iterations = 1000,
+        .iterations = iterations,
         .track_allocations = true,
     });
 
@@ -277,7 +279,7 @@ test "benchmark MessageProcessor UPDATE" {
     try bench.run(writer);
     try writer.flush();
 
-    const allocations_per_iter = alloc_count / 1000;
+    const allocations_per_iter = alloc_count / iterations;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
 }
 
@@ -307,7 +309,7 @@ test "benchmark MessageProcessor DELETE" {
     };
 
     try bench.addParam("MessageProcessor.processMessage (DELETE)", &bench_delete, .{
-        .iterations = 1000,
+        .iterations = iterations,
         .track_allocations = true,
     });
 
@@ -317,6 +319,6 @@ test "benchmark MessageProcessor DELETE" {
     try bench.run(writer);
     try writer.flush();
 
-    const allocations_per_iter = alloc_count / 1000;
+    const allocations_per_iter = alloc_count / iterations;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
 }

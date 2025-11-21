@@ -7,6 +7,8 @@ const PgOutputDecoder = decoder_mod.PgOutputDecoder;
 const PgOutputMessage = decoder_mod.PgOutputMessage;
 const CountingAllocator = bench_helpers.CountingAllocator;
 
+const iterations = 100000;
+
 fn writeU32(buffer: []u8, value: u32) void {
     buffer[0] = @intCast((value >> 24) & 0xFF);
     buffer[1] = @intCast((value >> 16) & 0xFF);
@@ -84,7 +86,7 @@ test "benchmark PgOutputDecoder" {
     const bench_insert = BenchDecoderInsert{ .golden_data = insert_data };
 
     try bench.addParam("PgOutputDecoder.decode INSERT", &bench_insert, .{
-        .iterations = 1000,
+        .iterations = iterations,
         .track_allocations = true,
     });
 
@@ -94,6 +96,6 @@ test "benchmark PgOutputDecoder" {
     try bench.run(writer);
     try writer.flush();
 
-    const allocations_per_iter = alloc_count / 1000;
+    const allocations_per_iter = alloc_count / iterations;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
 }

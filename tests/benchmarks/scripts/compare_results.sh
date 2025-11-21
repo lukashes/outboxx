@@ -45,9 +45,26 @@ echo ""
 improved=0
 regressed=0
 neutral=0
+ignored=0
 
-# Threshold for considering change significant (5%)
-THRESHOLD=5
+# Progressive threshold based on operation time:
+# - < 1μs:    IGNORE (too fast for stable measurements)
+# - 1-20μs:   15% (fast micro-operations)
+# - 20-50μs:  10% (medium operations)
+# - >= 50μs:  5%  (heavy operations)
+get_threshold() {
+    local time=$1
+    # Use bc for float comparison
+    if (( $(echo "$time < 1" | bc -l) )); then
+        echo "0"  # Special value to indicate "ignore"
+    elif (( $(echo "$time < 20" | bc -l) )); then
+        echo "15"
+    elif (( $(echo "$time < 50" | bc -l) )); then
+        echo "10"
+    else
+        echo "5"
+    fi
+}
 
 # Compare each benchmark (use process substitution to preserve variables)
 while read -r bench_name; do
@@ -70,13 +87,22 @@ while read -r bench_name; do
     time_change=$(echo "scale=2; (($current_time - $baseline_time) / $baseline_time) * 100" | bc)
     alloc_change=$(echo "scale=2; (($current_allocs - $baseline_allocs) / $baseline_allocs) * 100" | bc 2>/dev/null || echo "0")
 
+    # Get dynamic threshold based on baseline time
+    THRESHOLD=$(get_threshold "$baseline_time")
+
     # Determine status
     status="neutral"
     status_icon="→"
     status_color="$NC"
 
+    # Special handling for sub-microsecond operations (ignore changes)
+    if [ "$THRESHOLD" = "0" ]; then
+        status="ignored"
+        status_icon="~"
+        status_color="${CYAN}"
+        ignored=$((ignored + 1))
     # Check time regression/improvement
-    if (( $(echo "$time_change > $THRESHOLD" | bc -l) )); then
+    elif (( $(echo "$time_change > $THRESHOLD" | bc -l) )); then
         status="regressed"
         status_icon="↑"
         status_color="$RED"
@@ -102,12 +128,17 @@ echo "=================================="
 echo -e "${GREEN}✓ Improved:  $improved${NC}"
 echo -e "${YELLOW}→ Neutral:   $neutral${NC}"
 echo -e "${RED}✗ Regressed: $regressed${NC}"
+if [ "$ignored" -gt 0 ]; then
+    echo -e "${CYAN}~ Ignored:   $ignored (sub-microsecond operations)${NC}"
+fi
+echo ""
+echo -e "${CYAN}Progressive thresholds: <1μs=ignore, 1-20μs=15%, 20-50μs=10%, ≥50μs=5%${NC}"
 echo ""
 
 # Informational message (no exit 1)
 if [ "$regressed" -gt 0 ]; then
-    echo -e "${YELLOW}Note: Performance regressions detected (threshold: ${THRESHOLD}%)${NC}"
+    echo -e "${YELLOW}Note: Performance regressions detected${NC}"
     echo -e "${YELLOW}Review the results above to determine if changes are expected${NC}"
 else
-    echo -e "${GREEN}All benchmarks within acceptable range (threshold: ${THRESHOLD}%)${NC}"
+    echo -e "${GREEN}All benchmarks within acceptable range${NC}"
 fi

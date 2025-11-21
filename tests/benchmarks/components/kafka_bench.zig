@@ -6,6 +6,9 @@ const bench_helpers = @import("bench_helpers");
 const KafkaProducer = kafka_producer.KafkaProducer;
 const CountingAllocator = bench_helpers.CountingAllocator;
 
+const message_iterations = 1000000;
+const flush_iterations = message_iterations / 10;
+
 const c = @cImport({
     @cInclude("librdkafka/rdkafka.h");
     @cInclude("librdkafka/rdkafka_mock.h");
@@ -75,7 +78,7 @@ const BenchKafkaFlush = struct {
 
     pub fn run(self: BenchKafkaFlush, allocator: std.mem.Allocator) void {
         _ = allocator;
-        self.producer.flush(5000) catch unreachable;
+        self.producer.flush(1000) catch unreachable;
     }
 };
 
@@ -96,14 +99,14 @@ test "benchmark KafkaProducer sendMessage" {
     defer bench.deinit();
 
     _ = try producer.sendMessage("bench_topic", "warmup", "warmup");
-    try producer.flush(5000);
+    try producer.flush(1000);
 
     alloc_count = 0;
 
     const bench_send = BenchKafkaSend{ .producer = &producer };
 
     try bench.addParam("KafkaProducer.sendMessage", &bench_send, .{
-        .iterations = 1000,
+        .iterations = message_iterations,
         .track_allocations = true,
     });
 
@@ -113,7 +116,7 @@ test "benchmark KafkaProducer sendMessage" {
     try bench.run(writer);
     try writer.flush();
 
-    const allocations_per_iter = alloc_count / 1000;
+    const allocations_per_iter = alloc_count / message_iterations;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
 }
 
@@ -134,14 +137,14 @@ test "benchmark KafkaProducer flush" {
     defer bench.deinit();
 
     _ = try producer.sendMessage("bench_topic", "warmup", "warmup");
-    try producer.flush(5000);
+    try producer.flush(1000);
 
     alloc_count = 0;
 
     const bench_flush = BenchKafkaFlush{ .producer = &producer };
 
     try bench.addParam("KafkaProducer.flush", &bench_flush, .{
-        .iterations = 100,
+        .iterations = flush_iterations,
         .track_allocations = true,
     });
 
@@ -151,6 +154,6 @@ test "benchmark KafkaProducer flush" {
     try bench.run(writer);
     try writer.flush();
 
-    const allocations_per_iter = alloc_count / 100;
+    const allocations_per_iter = alloc_count / flush_iterations;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
 }
