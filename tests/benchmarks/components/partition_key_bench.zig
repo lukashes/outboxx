@@ -10,6 +10,8 @@ const FieldValueHelpers = domain.FieldValueHelpers;
 const RowDataHelpers = domain.RowDataHelpers;
 const CountingAllocator = bench_helpers.CountingAllocator;
 
+const iterations = 100000;
+
 fn createEventWithIntegerKey(allocator: std.mem.Allocator) !ChangeEvent {
     var row_builder = RowDataHelpers.createBuilder(allocator);
     try RowDataHelpers.put(&row_builder, allocator, "id", FieldValueHelpers.integer(12345));
@@ -116,7 +118,7 @@ test "benchmark getPartitionKeyValue integer" {
     const bench_integer = BenchPartitionKeyInteger{ .event = event_int };
 
     try bench.addParam("getPartitionKeyValue (integer)", &bench_integer, .{
-        .iterations = 1000,
+        .iterations = iterations,
         .track_allocations = true,
     });
 
@@ -126,7 +128,7 @@ test "benchmark getPartitionKeyValue integer" {
     try bench.run(writer);
     try writer.flush();
 
-    const allocations_per_iter = alloc_count / 1000;
+    const allocations_per_iter = alloc_count / iterations;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
 }
 
@@ -148,7 +150,7 @@ test "benchmark getPartitionKeyValue string" {
     const bench_string = BenchPartitionKeyString{ .event = event_str };
 
     try bench.addParam("getPartitionKeyValue (string)", &bench_string, .{
-        .iterations = 1000,
+        .iterations = iterations,
         .track_allocations = true,
     });
 
@@ -158,7 +160,7 @@ test "benchmark getPartitionKeyValue string" {
     try bench.run(writer);
     try writer.flush();
 
-    const allocations_per_iter = alloc_count / 1000;
+    const allocations_per_iter = alloc_count / iterations;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
 }
 
@@ -180,7 +182,7 @@ test "benchmark getPartitionKeyValue boolean" {
     const bench_boolean = BenchPartitionKeyBoolean{ .event = event_int };
 
     try bench.addParam("getPartitionKeyValue (boolean)", &bench_boolean, .{
-        .iterations = 1000,
+        .iterations = iterations,
         .track_allocations = true,
     });
 
@@ -190,7 +192,7 @@ test "benchmark getPartitionKeyValue boolean" {
     try bench.run(writer);
     try writer.flush();
 
-    const allocations_per_iter = alloc_count / 1000;
+    const allocations_per_iter = alloc_count / iterations;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
 }
 
@@ -212,7 +214,7 @@ test "benchmark getPartitionKeyValue not found" {
     const bench_not_found = BenchPartitionKeyNotFound{ .event = event_int };
 
     try bench.addParam("getPartitionKeyValue (not found)", &bench_not_found, .{
-        .iterations = 1000,
+        .iterations = iterations,
         .track_allocations = true,
     });
 
@@ -222,6 +224,6 @@ test "benchmark getPartitionKeyValue not found" {
     try bench.run(writer);
     try writer.flush();
 
-    const allocations_per_iter = alloc_count / 1000;
+    const allocations_per_iter = alloc_count / iterations;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
 }

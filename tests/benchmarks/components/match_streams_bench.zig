@@ -10,6 +10,8 @@ const StreamFlow = config_module.StreamFlow;
 const StreamSink = config_module.StreamSink;
 const CountingAllocator = bench_helpers.CountingAllocator;
 
+const iterations = 100000;
+
 fn createTestStreams(allocator: std.mem.Allocator) ![]Stream {
     const streams = try allocator.alloc(Stream, 10);
 
@@ -153,7 +155,7 @@ test "benchmark matchStreams found" {
     const bench_found = BenchMatchFound{ .streams = streams };
 
     try bench.addParam("matchStreams (found)", &bench_found, .{
-        .iterations = 1000,
+        .iterations = iterations,
         .track_allocations = true,
     });
 
@@ -163,7 +165,7 @@ test "benchmark matchStreams found" {
     try bench.run(writer);
     try writer.flush();
 
-    const allocations_per_iter = alloc_count / 1000;
+    const allocations_per_iter = alloc_count / iterations;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
 }
 
@@ -185,7 +187,7 @@ test "benchmark matchStreams not found" {
     const bench_not_found = BenchMatchNotFound{ .streams = streams };
 
     try bench.addParam("matchStreams (not found)", &bench_not_found, .{
-        .iterations = 1000,
+        .iterations = iterations,
         .track_allocations = true,
     });
 
@@ -195,6 +197,6 @@ test "benchmark matchStreams not found" {
     try bench.run(writer);
     try writer.flush();
 
-    const allocations_per_iter = alloc_count / 1000;
+    const allocations_per_iter = alloc_count / iterations;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
 }
