@@ -93,8 +93,8 @@ const BenchProcessInsert = struct {
     message: PgOutputMessage,
 
     pub fn run(self: BenchProcessInsert, allocator: std.mem.Allocator) void {
-        var processor = MessageProcessor.init(allocator);
-        var event = processor.processMessage(self.message, self.registry) catch unreachable;
+        var processor = MessageProcessor.init();
+        var event = processor.processMessage(allocator, self.message, self.registry) catch unreachable;
         if (event) |*e| {
             e.deinit(allocator);
         }
@@ -154,8 +154,8 @@ const BenchProcessUpdate = struct {
     message: PgOutputMessage,
 
     pub fn run(self: BenchProcessUpdate, allocator: std.mem.Allocator) void {
-        var processor = MessageProcessor.init(allocator);
-        var event = processor.processMessage(self.message, self.registry) catch unreachable;
+        var processor = MessageProcessor.init();
+        var event = processor.processMessage(allocator, self.message, self.registry) catch unreachable;
         if (event) |*e| {
             e.deinit(allocator);
         }
@@ -195,8 +195,8 @@ const BenchProcessDelete = struct {
     message: PgOutputMessage,
 
     pub fn run(self: BenchProcessDelete, allocator: std.mem.Allocator) void {
-        var processor = MessageProcessor.init(allocator);
-        var event = processor.processMessage(self.message, self.registry) catch unreachable;
+        var processor = MessageProcessor.init();
+        var event = processor.processMessage(allocator, self.message, self.registry) catch unreachable;
         if (event) |*e| {
             e.deinit(allocator);
         }

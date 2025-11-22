@@ -95,12 +95,8 @@ pub const Processor = struct {
         std.log.info("Processor initialized successfully", .{});
     }
 
-    fn matchStreamsInternal(self: *Self, table_name: []const u8, operation: []const u8) std.ArrayList(Stream) {
-        return matchStreams(self.allocator, self.streams, table_name, operation);
-    }
-
-    pub fn processChangesToKafka(self: *Self, limit: u32) anyerror!void {
-        var batch = try self.source.receiveBatch(limit);
+    pub fn processChangesToKafka(self: *Self, batch_allocator: std.mem.Allocator, limit: u32) anyerror!void {
+        var batch = try self.source.receiveBatch(batch_allocator, limit);
         defer batch.deinit();
 
         // If no events, confirm last LSN and return (avoid re-reading same events)
@@ -116,8 +112,8 @@ pub const Processor = struct {
         std.log.debug("Processing {} changes from batch (LSN: {})", .{ batch.changes.len, batch.last_lsn });
 
         for (batch.changes, 0..) |change_event, batch_index| {
-            var matched_streams = self.matchStreamsInternal(change_event.meta.resource, change_event.op);
-            defer matched_streams.deinit(self.allocator);
+            var matched_streams = matchStreams(batch_allocator, self.streams, change_event.meta.resource, change_event.op);
+            defer matched_streams.deinit(batch_allocator);
 
             if (matched_streams.items.len == 0) {
                 std.log.debug("No matching streams for {s}.{s} ({s})", .{ change_event.meta.schema, change_event.meta.resource, change_event.op });
@@ -125,21 +121,21 @@ pub const Processor = struct {
             }
 
             // Serialize once, send to all matching streams
-            const json_bytes = try self.serializer.serialize(change_event, self.allocator);
-            defer self.allocator.free(json_bytes);
+            const json_bytes = try self.serializer.serialize(change_event, batch_allocator);
+            defer batch_allocator.free(json_bytes);
 
             for (matched_streams.items) |stream| {
                 const partition_key_field = stream.sink.routing_key orelse "id";
-                const partition_key = if (change_event.getPartitionKeyValue(self.allocator, partition_key_field)) |key_opt| blk: {
+                const partition_key = if (change_event.getPartitionKeyValue(batch_allocator, partition_key_field)) |key_opt| blk: {
                     if (key_opt) |key| {
                         break :blk key;
                     } else {
-                        break :blk try self.allocator.dupe(u8, change_event.meta.resource);
+                        break :blk try batch_allocator.dupe(u8, change_event.meta.resource);
                     }
                 } else |_| blk: {
-                    break :blk try self.allocator.dupe(u8, change_event.meta.resource);
+                    break :blk try batch_allocator.dupe(u8, change_event.meta.resource);
                 };
-                defer self.allocator.free(partition_key);
+                defer batch_allocator.free(partition_key);
 
                 const topic_name = stream.sink.destination;
 
@@ -174,10 +170,17 @@ pub const Processor = struct {
 
     pub fn startStreaming(self: *Self, stop_signal: *std.atomic.Value(bool)) !void {
         while (!stop_signal.load(.monotonic)) {
+            // Create arena for this batch (all temporary allocations freed at end of iteration)
+            var batch_arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer batch_arena.deinit();
+
+            const batch_alloc = batch_arena.allocator();
+
             // Fail-fast: any error propagates up → app exits → supervisor restarts
-            try self.processChangesToKafka(constants.CDC.BATCH_SIZE);
+            try self.processChangesToKafka(batch_alloc, constants.CDC.BATCH_SIZE);
 
             // No sleep needed - receiveBatchWithTimeout() blocks on poll() when no data
+            // batch_arena.deinit() automatically called here - frees ALL batch allocations
         }
 
         std.log.info("Streaming stopped gracefully", .{});
