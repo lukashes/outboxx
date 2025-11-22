@@ -39,6 +39,7 @@ test_results/
 
 # Documentation build artifacts
 docs/build/
+docs/draft/
 
 # Claude Code assistant files
 CLAUDE.local.md
