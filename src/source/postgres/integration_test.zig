@@ -157,7 +157,7 @@ test "Streaming source: receive and convert INSERT messages to ChangeEvents" {
 
     std.log.info("Streaming source connected, receiving batch...", .{});
 
-    const batch = try source.receiveBatch(10);
+    const batch = try source.receiveBatch(allocator, 10);
     defer {
         var mut_batch = batch;
         mut_batch.deinit();
@@ -269,7 +269,7 @@ test "Streaming source: UPDATE operation E2E with old and new tuples" {
 
     try source.connect(conn_str, start_lsn);
 
-    const batch = try source.receiveBatch(10);
+    const batch = try source.receiveBatch(allocator, 10);
     defer {
         var mut_batch = batch;
         mut_batch.deinit();
@@ -411,7 +411,7 @@ test "Streaming source: DELETE operation E2E" {
 
     try source.connect(conn_str, start_lsn);
 
-    const batch = try source.receiveBatch(10);
+    const batch = try source.receiveBatch(allocator, 10);
     defer {
         var mut_batch = batch;
         mut_batch.deinit();
@@ -534,7 +534,7 @@ test "Streaming source: Multiple batches with limit parameter" {
     var last_lsn: u64 = 0;
 
     while (total_changes < 500) {
-        const batch = try source.receiveBatch(100);
+        const batch = try source.receiveBatch(allocator, 100);
         defer {
             var mut_batch = batch;
             mut_batch.deinit();
@@ -628,7 +628,7 @@ test "Streaming source: Timeout behavior with no data" {
 
     const start_time = std.time.milliTimestamp();
 
-    const batch = try source.receiveBatchWithWaitTime(10, 1000);
+    const batch = try source.receiveBatchWithWaitTime(allocator, 10, 1000);
     defer {
         var mut_batch = batch;
         mut_batch.deinit();
