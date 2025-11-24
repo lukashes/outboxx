@@ -109,7 +109,12 @@ test "E2E: INSERT operation - full pipeline verification" {
 
     // Process CDC pipeline
     std.debug.print("Step 2: Process CDC pipeline\n", .{});
-    try processor.processChangesToKafka(allocator, 100);
+
+    // Use arena allocator for batch processing (matches production usage)
+    var batch_arena = std.heap.ArenaAllocator.init(allocator);
+    defer batch_arena.deinit();
+
+    try processor.processChangesToKafka(batch_arena.allocator(), 100);
 
     // Verify: Read ALL messages from Kafka
     std.debug.print("Step 3: Consume and verify messages from Kafka topic '{s}'\n", .{topic_name});
@@ -239,7 +244,11 @@ test "E2E: UPDATE operation - full pipeline verification" {
     std.Thread.sleep(200_000_000); // 200ms
 
     // Process initial INSERT
-    try processor.processChangesToKafka(allocator, 100);
+    {
+        var batch_arena = std.heap.ArenaAllocator.init(allocator);
+        defer batch_arena.deinit();
+        try processor.processChangesToKafka(batch_arena.allocator(), 100);
+    }
 
     // Step 2: Update the record twice
     std.debug.print("Step 2: Update the record twice\n", .{});
@@ -253,7 +262,11 @@ test "E2E: UPDATE operation - full pipeline verification" {
 
     // Process UPDATE operations
     std.debug.print("Step 3: Process UPDATE operations\n", .{});
-    try processor.processChangesToKafka(allocator, 100);
+    {
+        var batch_arena = std.heap.ArenaAllocator.init(allocator);
+        defer batch_arena.deinit();
+        try processor.processChangesToKafka(batch_arena.allocator(), 100);
+    }
 
     // Verify: Read messages from Kafka (1 INSERT + 2 UPDATEs = 3 total)
     std.debug.print("Step 4: Consume and verify messages from Kafka topic '{s}'\n", .{topic_name});
@@ -373,7 +386,11 @@ test "E2E: DELETE operation - full pipeline verification" {
     std.Thread.sleep(200_000_000); // 200ms
 
     // Process initial INSERTs
-    try processor.processChangesToKafka(allocator, 100);
+    {
+        var batch_arena = std.heap.ArenaAllocator.init(allocator);
+        defer batch_arena.deinit();
+        try processor.processChangesToKafka(batch_arena.allocator(), 100);
+    }
 
     // Step 2: Delete the records
     std.debug.print("Step 2: Delete both records\n", .{});
@@ -387,7 +404,11 @@ test "E2E: DELETE operation - full pipeline verification" {
 
     // Process DELETE operations
     std.debug.print("Step 3: Process DELETE operations\n", .{});
-    try processor.processChangesToKafka(allocator, 100);
+    {
+        var batch_arena = std.heap.ArenaAllocator.init(allocator);
+        defer batch_arena.deinit();
+        try processor.processChangesToKafka(batch_arena.allocator(), 100);
+    }
 
     // Verify: Read messages from Kafka (2 INSERTs + 2 DELETEs = 4 total)
     std.debug.print("Step 4: Consume and verify messages from Kafka topic '{s}'\n", .{topic_name});
