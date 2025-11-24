@@ -50,6 +50,8 @@ pub const Processor = struct {
     serializer: JsonSerializer,
 
     events_processed: usize,
+    last_flush_time: i64,
+    pending_lsn: u64,
 
     const Self = @This();
 
@@ -62,6 +64,8 @@ pub const Processor = struct {
             .streams = streams,
             .serializer = JsonSerializer.init(),
             .events_processed = 0,
+            .last_flush_time = std.time.timestamp(),
+            .pending_lsn = 0,
         };
     }
 
@@ -96,9 +100,6 @@ pub const Processor = struct {
         defer batch.deinit();
 
         if (batch.changes.len == 0) {
-            if (batch.last_lsn > 0) {
-                try self.source.sendFeedback(batch.last_lsn);
-            }
             return;
         }
 
@@ -143,10 +144,23 @@ pub const Processor = struct {
         }
 
         producer.poll();
-        try producer.flush(constants.CDC.KAFKA_FLUSH_TIMEOUT_MS);
-        try self.source.sendFeedback(batch.last_lsn);
 
-        std.log.debug("Successfully committed LSN: {}", .{batch.last_lsn});
+        if (batch.last_lsn > 0) {
+            self.pending_lsn = batch.last_lsn;
+        }
+
+        const now = std.time.timestamp();
+        if (now - self.last_flush_time >= constants.CDC.KAFKA_FLUSH_INTERVAL_SEC) {
+            try producer.flush(constants.CDC.KAFKA_FLUSH_TIMEOUT_MS);
+
+            if (self.pending_lsn > 0) {
+                try self.source.sendFeedback(self.pending_lsn);
+                std.log.debug("Successfully committed LSN: {}", .{self.pending_lsn});
+                self.pending_lsn = 0;
+            }
+
+            self.last_flush_time = now;
+        }
     }
 
     fn getPartitionKey(
@@ -176,6 +190,16 @@ pub const Processor = struct {
             const batch_alloc = batch_arena.allocator();
 
             try self.processChangesToKafka(batch_alloc, constants.CDC.BATCH_SIZE);
+        }
+
+        // Final flush on graceful shutdown
+        if (self.kafka_producer) |*producer| {
+            try producer.flush(constants.CDC.KAFKA_FLUSH_TIMEOUT_MS);
+
+            if (self.pending_lsn > 0) {
+                try self.source.sendFeedback(self.pending_lsn);
+                std.log.debug("Final LSN commit: {}", .{self.pending_lsn});
+            }
         }
 
         std.log.info("Streaming stopped gracefully", .{});
