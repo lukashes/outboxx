@@ -3,7 +3,8 @@ const std = @import("std");
 const PostgresSource = @import("postgres_source").PostgresSource;
 const Batch = @import("postgres_source").Batch;
 
-const KafkaProducer = @import("kafka_producer").KafkaProducer;
+const kafka_producer = @import("kafka_producer");
+const KafkaProducer = kafka_producer.KafkaProducer;
 const config_module = @import("config");
 const KafkaConfig = config_module.KafkaSink;
 const Stream = config_module.Stream;
@@ -20,7 +21,7 @@ pub const ProcessorError = error{
     OutOfMemory,
 };
 
-pub fn matchStreams(allocator: std.mem.Allocator, streams: []const Stream, table_name: []const u8, operation: []const u8) std.ArrayList(Stream) {
+pub fn matchStreams(allocator: std.mem.Allocator, streams: []const Stream, table_name: []const u8, operation: []const u8) !std.ArrayList(Stream) {
     var matched = std.ArrayList(Stream).empty;
 
     for (streams) |stream| {
@@ -28,16 +29,11 @@ pub fn matchStreams(allocator: std.mem.Allocator, streams: []const Stream, table
             continue;
         }
 
-        var operation_matched = false;
         for (stream.source.operations) |op| {
             if (std.ascii.eqlIgnoreCase(op, operation)) {
-                operation_matched = true;
+                try matched.append(allocator, stream);
                 break;
             }
-        }
-
-        if (operation_matched) {
-            matched.append(allocator, stream) catch continue;
         }
     }
 
@@ -95,11 +91,10 @@ pub const Processor = struct {
         std.log.info("Processor initialized successfully", .{});
     }
 
-    pub fn processChangesToKafka(self: *Self, batch_allocator: std.mem.Allocator, limit: u32) anyerror!void {
+    pub fn processChangesToKafka(self: *Self, batch_allocator: std.mem.Allocator, limit: u32) !void {
         var batch = try self.source.receiveBatch(batch_allocator, limit);
         defer batch.deinit();
 
-        // If no events, confirm last LSN and return (avoid re-reading same events)
         if (batch.changes.len == 0) {
             if (batch.last_lsn > 0) {
                 try self.source.sendFeedback(batch.last_lsn);
@@ -107,72 +102,79 @@ pub const Processor = struct {
             return;
         }
 
-        var kafka_producer = &(self.kafka_producer orelse return ProcessorError.ConnectionFailed);
+        var producer = &(self.kafka_producer orelse return ProcessorError.ConnectionFailed);
 
         std.log.debug("Processing {} changes from batch (LSN: {})", .{ batch.changes.len, batch.last_lsn });
 
-        for (batch.changes, 0..) |change_event, batch_index| {
-            var matched_streams = matchStreams(batch_allocator, self.streams, change_event.meta.resource, change_event.op);
-            defer matched_streams.deinit(batch_allocator);
+        for (batch.changes) |change_event| {
+            var matched = try matchStreams(batch_allocator, self.streams, change_event.meta.resource, change_event.op);
+            defer matched.deinit(batch_allocator);
 
-            if (matched_streams.items.len == 0) {
-                std.log.debug("No matching streams for {s}.{s} ({s})", .{ change_event.meta.schema, change_event.meta.resource, change_event.op });
+            if (matched.items.len == 0) {
+                std.log.debug("No matching streams for {s}.{s} ({s})", .{
+                    change_event.meta.schema,
+                    change_event.meta.resource,
+                    change_event.op,
+                });
                 continue;
             }
 
-            // Serialize once, send to all matching streams
             const json_bytes = try self.serializer.serialize(change_event, batch_allocator);
-            defer batch_allocator.free(json_bytes);
 
-            for (matched_streams.items) |stream| {
-                const partition_key_field = stream.sink.routing_key orelse "id";
-                const partition_key = if (change_event.getPartitionKeyValue(batch_allocator, partition_key_field)) |key_opt| blk: {
-                    if (key_opt) |key| {
-                        break :blk key;
-                    } else {
-                        break :blk try batch_allocator.dupe(u8, change_event.meta.resource);
-                    }
-                } else |_| blk: {
-                    break :blk try batch_allocator.dupe(u8, change_event.meta.resource);
-                };
-                defer batch_allocator.free(partition_key);
-
+            for (matched.items) |stream| {
                 const topic_name = stream.sink.destination;
+                const partition_key = try self.getPartitionKey(batch_allocator, change_event, stream);
 
-                try kafka_producer.sendMessage(topic_name, partition_key, json_bytes);
+                try producer.sendMessage(topic_name, partition_key, json_bytes);
 
                 self.events_processed += 1;
-
                 if (self.events_processed % 10000 == 0) {
                     std.log.info("Processed {} CDC events", .{self.events_processed});
                 }
 
-                std.log.debug("Sent {s} message for {s}.{s} to topic '{s}' (partition key: {s})", .{ change_event.op, change_event.meta.schema, change_event.meta.resource, topic_name, partition_key });
-            }
-
-            // Poll every N messages to process callbacks and send queued messages
-            if (batch_index > 0 and batch_index % constants.CDC.KAFKA_POLL_INTERVAL == 0) {
-                kafka_producer.poll();
+                std.log.debug("Sent {s} message for {s}.{s} to topic '{s}' (key: {s})", .{
+                    change_event.op,
+                    change_event.meta.schema,
+                    change_event.meta.resource,
+                    topic_name,
+                    partition_key,
+                });
             }
         }
 
-        // Final poll before flush to process any remaining callbacks
-        kafka_producer.poll();
-
-        // CRITICAL: Kafka flush BEFORE LSN feedback (no data loss guarantee)
-        try kafka_producer.flush(constants.CDC.KAFKA_FLUSH_TIMEOUT_MS);
-
-        // Confirm LSN to PostgreSQL ONLY after Kafka flush succeeds
+        producer.poll();
+        try producer.flush(constants.CDC.KAFKA_FLUSH_TIMEOUT_MS);
         try self.source.sendFeedback(batch.last_lsn);
 
         std.log.debug("Successfully committed LSN: {}", .{batch.last_lsn});
+    }
+
+    fn getPartitionKey(
+        self: *Self,
+        allocator: std.mem.Allocator,
+        change_event: ChangeEvent,
+        stream: Stream,
+    ) ![]const u8 {
+        _ = self;
+
+        const key_field = stream.sink.routing_key orelse "id";
+
+        if (change_event.getPartitionKeyValue(allocator, key_field)) |key_opt| {
+            if (key_opt) |key| {
+                return key;
+            }
+        } else |_| {}
+
+        return try allocator.dupe(u8, change_event.meta.resource);
     }
 
     pub fn startStreaming(self: *Self, stop_signal: *std.atomic.Value(bool)) !void {
         while (!stop_signal.load(.monotonic)) {
             // Create arena for this batch (all temporary allocations freed at end of iteration)
             var batch_arena = std.heap.ArenaAllocator.init(self.allocator);
-            defer batch_arena.deinit();
+            defer {
+                _ = batch_arena.reset(.free_all);
+            }
 
             const batch_alloc = batch_arena.allocator();
 

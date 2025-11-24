@@ -13,6 +13,11 @@ const KafkaError = error{
     ConnectionTestFailed,
 };
 
+pub const Message = struct {
+    key: ?[]const u8,
+    payload: []const u8,
+};
+
 pub const KafkaProducer = struct {
     producer: ?*c.rd_kafka_t,
     allocator: std.mem.Allocator,
@@ -144,6 +149,58 @@ pub const KafkaProducer = struct {
         std.log.debug("Created topic handle: {s}", .{topic_name});
 
         return topic;
+    }
+
+    pub fn produce(self: *Self, topic_name: []const u8, messages: []const Message) !void {
+        if (messages.len == 0) return;
+
+        const topic = try self.getOrCreateTopic(topic_name);
+
+        // Prepare rd_kafka_message_t array
+        const rkmessages = try self.allocator.alloc(c.rd_kafka_message_t, messages.len);
+        defer self.allocator.free(rkmessages);
+
+        for (messages, 0..) |msg, i| {
+            rkmessages[i] = c.rd_kafka_message_t{
+                .err = c.RD_KAFKA_RESP_ERR_NO_ERROR,
+                .rkt = topic,
+                .partition = c.RD_KAFKA_PARTITION_UA,
+                .payload = @constCast(msg.payload.ptr),
+                .len = msg.payload.len,
+                .key = if (msg.key) |k| @constCast(k.ptr) else null,
+                .key_len = if (msg.key) |k| k.len else 0,
+                .offset = 0,
+                ._private = null,
+            };
+        }
+
+        // Send batch to Kafka
+        const sent = c.rd_kafka_produce_batch(
+            topic,
+            c.RD_KAFKA_PARTITION_UA,
+            c.RD_KAFKA_MSG_F_COPY,
+            rkmessages.ptr,
+            @intCast(rkmessages.len),
+        );
+
+        if (sent < 0) {
+            std.log.warn("Failed to produce batch to topic {s}", .{topic_name});
+            return KafkaError.MessageSendFailed;
+        }
+
+        // Check if all messages were queued
+        if (sent != rkmessages.len) {
+            // Some messages failed, check individual errors
+            for (rkmessages, 0..) |rkmsg, i| {
+                if (rkmsg.err != c.RD_KAFKA_RESP_ERR_NO_ERROR) {
+                    std.log.warn("Message {d} failed for topic {s}: {s}", .{ i, topic_name, c.rd_kafka_err2str(rkmsg.err) });
+                }
+            }
+            std.log.warn("Only {d}/{d} messages queued for topic {s}", .{ sent, rkmessages.len, topic_name });
+            return KafkaError.MessageSendFailed;
+        }
+
+        std.log.debug("Batch sent: {d} messages to topic {s}", .{ sent, topic_name });
     }
 
     pub fn sendMessage(self: *Self, topic_name: []const u8, key: ?[]const u8, message: []const u8) !void {

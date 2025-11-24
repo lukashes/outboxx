@@ -48,7 +48,7 @@ sleep 5
 
 # Start CDC solution
 echo "Starting $CDC CDC..."
-docker compose --profile "$CDC" up -d "$CDC"
+docker compose --profile "$CDC" up --build -d "$CDC"
 
 # Wait for CDC to be ready
 if [ "$CDC" = "debezium" ]; then
