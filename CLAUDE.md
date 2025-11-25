@@ -164,6 +164,8 @@ The project follows a clean separation of concerns with distinct layers:
 - Multi-stream support with Publications for table filtering
 - **At-least-once delivery**: Confirms LSN to PostgreSQL ONLY after Kafka flush succeeds
 - **Fail-fast error handling**: Errors propagate to supervisor for restart
+- **Arena Allocator**: Each batch uses arena allocator - all temporary allocations (JSON, keys, matched streams) freed automatically at batch end
+- **Simple messaging**: Posts messages one-by-one via `sendMessage()`, librdkafka handles internal batching
 
 #### Sink Layer (`src/kafka/`)
 - **KafkaProducer**: Minimal wrapper around librdkafka
@@ -277,6 +279,8 @@ assert(messages[0].data.name == "Alice"); // ✅ Correct data
 - **Binary protocol**: pgoutput eliminates text parsing overhead entirely
 - **Event-driven I/O**: poll() syscall reduces CPU from 98% to <10%
 - **Message batching**: Drain buffered messages after poll() wakeup for better throughput
+- **Arena Allocator**: Each batch allocates all temporary memory from arena - single `deinit()` frees everything (no individual frees needed)
+- **Simple messaging**: Send messages one-by-one, librdkafka does internal batching via `linger.ms` and `batch.size` settings
 - **LSN feedback timing**: Confirm to PostgreSQL ONLY after Kafka flush (at-least-once guarantee)
 - **Relation registry**: In-memory HashMap, auto-rebuilds on restart (no disk I/O)
 
