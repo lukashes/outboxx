@@ -170,19 +170,12 @@ pub const Processor = struct {
 
     pub fn startStreaming(self: *Self, stop_signal: *std.atomic.Value(bool)) !void {
         while (!stop_signal.load(.monotonic)) {
-            // Create arena for this batch (all temporary allocations freed at end of iteration)
             var batch_arena = std.heap.ArenaAllocator.init(self.allocator);
-            defer {
-                _ = batch_arena.reset(.free_all);
-            }
+            defer batch_arena.deinit();
 
             const batch_alloc = batch_arena.allocator();
 
-            // Fail-fast: any error propagates up → app exits → supervisor restarts
             try self.processChangesToKafka(batch_alloc, constants.CDC.BATCH_SIZE);
-
-            // No sleep needed - receiveBatchWithTimeout() blocks on poll() when no data
-            // batch_arena.deinit() automatically called here - frees ALL batch allocations
         }
 
         std.log.info("Streaming stopped gracefully", .{});
