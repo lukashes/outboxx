@@ -151,6 +151,7 @@ pub const KafkaProducer = struct {
         return topic;
     }
 
+    // Batch produce - reserved for future optimizations
     pub fn produce(self: *Self, topic_name: []const u8, messages: []const Message) !void {
         if (messages.len == 0) return;
 

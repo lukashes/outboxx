@@ -18,10 +18,8 @@ const c = @cImport({
 const payload =
     \\{
     \\    "id": 123,
-    \\    "id":123,
     \\    "name":"Alice",
-    \\    "email":
-    \\    "alice@example.com"
+    \\    "email":"alice@example.com"
     \\}
 ;
 
@@ -94,7 +92,6 @@ const BenchKafkaProduce = struct {
         _ = allocator;
         self.producer.produce("bench_topic", self.messages) catch unreachable;
         self.producer.poll();
-        //self.producer.flush(1000) catch unreachable;
     }
 };
 
