@@ -19,7 +19,7 @@ This ensures we build the right thing before we build it right.
 - ✅ **Comprehensive Testing**: Unit, integration, and E2E tests with real services
 - ✅ **Multi-Stream Configuration**: TOML-based configuration with validation
 - ✅ **Development Environment**: Nix-based isolated setup with Docker Compose
-- ✅ **High Performance**: ~85k events/sec, <10 MB memory (57% of Debezium throughput)
+- ✅ **High Performance**: ~105k events/sec, <10 MB memory (70% of Debezium throughput)
 
 ### Phase 1: Foundation ✅ (COMPLETED)
 - ✅ Project structure and build.zig with Nix environment
@@ -93,7 +93,8 @@ Enterprise-ready capabilities:
 - Binary protocol (pgoutput) eliminates text parsing overhead
 - Event-driven I/O reduces CPU usage from 98% to <10%
 - Arena Allocator for automatic batch memory cleanup
-- **Current throughput: ~85k events/sec** (progress: 60k → 85k, target: 150k to match Debezium)
+- Async flush/commit in background thread reduces blocking operations
+- **Current throughput: ~105k events/sec** (progress: 60k → 85k → 105k, target: 150k to match Debezium)
 - Memory footprint: <10 MB
 - At-least-once delivery with LSN feedback after Kafka flush
 
