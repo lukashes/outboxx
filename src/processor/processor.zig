@@ -40,6 +40,56 @@ pub fn matchStreams(allocator: std.mem.Allocator, streams: []const Stream, table
     return matched;
 }
 
+fn flushCommitWorker(
+    producer: *KafkaProducer,
+    source: *PostgresSource,
+    pending_lsn: *std.atomic.Value(u64),
+    stop_signal: *std.atomic.Value(bool),
+) void {
+    var iterations: u32 = 0;
+    const flush_interval_iterations: u32 = 10;
+    var last_lsn: u64 = 0; // Track LSN changes to avoid log spam
+
+    while (!stop_signal.load(.monotonic)) {
+        std.Thread.sleep(1 * std.time.ns_per_s);
+        iterations += 1;
+
+        if (iterations >= flush_interval_iterations) {
+            iterations = 0;
+
+            producer.flush(constants.CDC.KAFKA_FLUSH_TIMEOUT_MS) catch |err| {
+                std.log.warn("Background flush failed: {}", .{err});
+                continue;
+            };
+
+            const lsn = pending_lsn.load(.acquire);
+            source.sendFeedback(lsn) catch |err| {
+                std.log.warn("Background LSN commit failed: {}", .{err});
+                continue;
+            };
+
+            if (last_lsn != lsn) {
+                last_lsn = lsn;
+                std.log.debug("Background LSN commit: {}", .{lsn});
+            }
+        }
+    }
+
+    producer.flush(constants.CDC.KAFKA_FLUSH_TIMEOUT_MS) catch |err| {
+        std.log.warn("Final background flush failed: {}", .{err});
+    };
+
+    const lsn = pending_lsn.load(.acquire);
+    source.sendFeedback(lsn) catch |err| {
+        std.log.warn("Final background LSN commit failed: {}", .{err});
+    };
+    if (lsn > 0) {
+        std.log.debug("Final background LSN commit: {}", .{lsn});
+    }
+
+    std.log.debug("Flush/commit worker stopped", .{});
+}
+
 /// CDC Processor that works with PostgreSQL streaming replication
 pub const Processor = struct {
     allocator: std.mem.Allocator,
@@ -50,8 +100,7 @@ pub const Processor = struct {
     serializer: JsonSerializer,
 
     events_processed: usize,
-    last_flush_time: i64,
-    pending_lsn: u64,
+    pending_lsn: std.atomic.Value(u64),
 
     const Self = @This();
 
@@ -64,8 +113,7 @@ pub const Processor = struct {
             .streams = streams,
             .serializer = JsonSerializer.init(),
             .events_processed = 0,
-            .last_flush_time = std.time.timestamp(),
-            .pending_lsn = 0,
+            .pending_lsn = std.atomic.Value(u64).init(0),
         };
     }
 
@@ -99,11 +147,12 @@ pub const Processor = struct {
         var batch = try self.source.receiveBatch(batch_allocator, limit);
         defer batch.deinit();
 
+        var producer = &(self.kafka_producer orelse return ProcessorError.ConnectionFailed);
+
         if (batch.changes.len == 0) {
+            self.pending_lsn.store(batch.last_lsn, .release);
             return;
         }
-
-        var producer = &(self.kafka_producer orelse return ProcessorError.ConnectionFailed);
 
         std.log.debug("Processing {} changes from batch (LSN: {})", .{ batch.changes.len, batch.last_lsn });
 
@@ -145,22 +194,7 @@ pub const Processor = struct {
 
         producer.poll();
 
-        if (batch.last_lsn > 0) {
-            self.pending_lsn = batch.last_lsn;
-        }
-
-        const now = std.time.timestamp();
-        if (now - self.last_flush_time >= constants.CDC.KAFKA_FLUSH_INTERVAL_SEC) {
-            try producer.flush(constants.CDC.KAFKA_FLUSH_TIMEOUT_MS);
-
-            if (self.pending_lsn > 0) {
-                try self.source.sendFeedback(self.pending_lsn);
-                std.log.debug("Successfully committed LSN: {}", .{self.pending_lsn});
-                self.pending_lsn = 0;
-            }
-
-            self.last_flush_time = now;
-        }
+        self.pending_lsn.store(batch.last_lsn, .release);
     }
 
     fn getPartitionKey(
@@ -183,6 +217,15 @@ pub const Processor = struct {
     }
 
     pub fn startStreaming(self: *Self, stop_signal: *std.atomic.Value(bool)) !void {
+        const producer = &(self.kafka_producer orelse return ProcessorError.ConnectionFailed);
+
+        const flush_thread = try std.Thread.spawn(.{}, flushCommitWorker, .{
+            producer,
+            &self.source,
+            &self.pending_lsn,
+            stop_signal,
+        });
+
         while (!stop_signal.load(.monotonic)) {
             var batch_arena = std.heap.ArenaAllocator.init(self.allocator);
             defer batch_arena.deinit();
@@ -192,15 +235,7 @@ pub const Processor = struct {
             try self.processChangesToKafka(batch_alloc, constants.CDC.BATCH_SIZE);
         }
 
-        // Final flush on graceful shutdown
-        if (self.kafka_producer) |*producer| {
-            try producer.flush(constants.CDC.KAFKA_FLUSH_TIMEOUT_MS);
-
-            if (self.pending_lsn > 0) {
-                try self.source.sendFeedback(self.pending_lsn);
-                std.log.debug("Final LSN commit: {}", .{self.pending_lsn});
-            }
-        }
+        flush_thread.join();
 
         std.log.info("Streaming stopped gracefully", .{});
     }
