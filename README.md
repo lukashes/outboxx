@@ -45,7 +45,7 @@ Outboxx is heavily inspired by [Debezium](https://debezium.io/), the industry st
 | **Runtime** | Native binary | JVM (Kafka Connect) |
 | **Memory Usage** | <10 MB | ~200-500 MB |
 | **Startup Time** | <1s | 10-30s |
-| **Throughput** | ~85k events/sec | ~150k events/sec |
+| **Throughput** | ~105k events/sec | ~150k events/sec |
 | **Configuration** | Simple TOML | Complex JSON/Properties |
 | **Deployment** | Single binary | Kafka Connect cluster |
 
