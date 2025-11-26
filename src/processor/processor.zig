@@ -47,32 +47,32 @@ fn flushCommitWorker(
     stop_signal: *std.atomic.Value(bool),
 ) void {
     var iterations: u32 = 0;
-    const flush_interval_iterations: u32 = 10;
-    var last_lsn: u64 = 0; // Track LSN changes to avoid log spam
+    const flush_interval_iterations: u32 = @intCast(constants.CDC.KAFKA_FLUSH_INTERVAL_SEC);
 
     while (!stop_signal.load(.monotonic)) {
         std.Thread.sleep(1 * std.time.ns_per_s);
         iterations += 1;
 
-        if (iterations >= flush_interval_iterations) {
-            iterations = 0;
-
-            producer.flush(constants.CDC.KAFKA_FLUSH_TIMEOUT_MS) catch |err| {
-                std.log.warn("Background flush failed: {}", .{err});
-                continue;
-            };
-
-            const lsn = pending_lsn.load(.acquire);
-            source.sendFeedback(lsn) catch |err| {
-                std.log.warn("Background LSN commit failed: {}", .{err});
-                continue;
-            };
-
-            if (last_lsn != lsn) {
-                last_lsn = lsn;
-                std.log.debug("Background LSN commit: {}", .{lsn});
-            }
+        if (iterations < flush_interval_iterations) {
+            continue;
         }
+
+        iterations = 0;
+
+        producer.flush(constants.CDC.KAFKA_FLUSH_TIMEOUT_MS) catch |err| {
+            std.log.err("Background flush failed: {}", .{err});
+            continue;
+        };
+
+        const lsn = pending_lsn.load(.acquire);
+        if (lsn == 0) {
+            continue;
+        }
+
+        source.sendFeedback(lsn) catch |err| {
+            std.log.err("Background LSN commit failed: {}", .{err});
+            continue;
+        };
     }
 
     producer.flush(constants.CDC.KAFKA_FLUSH_TIMEOUT_MS) catch |err| {
@@ -80,11 +80,10 @@ fn flushCommitWorker(
     };
 
     const lsn = pending_lsn.load(.acquire);
-    source.sendFeedback(lsn) catch |err| {
-        std.log.warn("Final background LSN commit failed: {}", .{err});
-    };
     if (lsn > 0) {
-        std.log.debug("Final background LSN commit: {}", .{lsn});
+        source.sendFeedback(lsn) catch |err| {
+            std.log.warn("Final background LSN commit failed: {}", .{err});
+        };
     }
 
     std.log.debug("Flush/commit worker stopped", .{});
