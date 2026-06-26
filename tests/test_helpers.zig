@@ -5,11 +5,9 @@ const StreamSource = config_module.StreamSource;
 const StreamFlow = config_module.StreamFlow;
 const StreamSink = config_module.StreamSink;
 
-// Export C import so E2E tests use the same types
-pub const c = @cImport({
-    @cInclude("libpq-fe.h");
-    @cInclude("librdkafka/rdkafka.h");
-});
+// Combined libpq + librdkafka bindings (build-system translate-c), re-exported
+// so E2E tests use the same C types.
+pub const c = @import("c");
 
 // --- Time / sleep / env helpers ---
 // Zig 0.16 moved time and sleep behind the Io interface and removed the global

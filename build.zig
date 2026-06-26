@@ -67,6 +67,16 @@ pub fn build(b: *std.Build) void {
     const c_pq_module = c_pq.createModule();
     postgres_source_module.addImport("c", c_pq_module);
 
+    // Combined libpq + librdkafka bindings, imported as "c" by the shared test
+    // helpers (which touch both PostgreSQL and Kafka).
+    const c_pqrdkafka = b.addTranslateC(.{
+        .root_source_file = b.path("src/c/pq_rdkafka.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    addCHeadersT(b, c_pqrdkafka);
+    const c_pqrdkafka_module = c_pqrdkafka.createModule();
+
     // Kafka producer module
     const kafka_producer_module = b.createModule(.{
         .root_source_file = b.path("src/kafka/producer.zig"),
@@ -246,8 +256,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     test_helpers_module.addImport("config", config_module);
+    test_helpers_module.addImport("c", c_pqrdkafka_module);
     test_helpers_module.link_libc = true;
-    addCHeaders(b, test_helpers_module);
 
     // Add test_helpers to integration tests
     replication_protocol_tests.root_module.addImport("test_helpers", test_helpers_module);
@@ -289,7 +299,6 @@ pub fn build(b: *std.Build) void {
     e2e_streaming_test.root_module.link_libc = true;
     e2e_streaming_test.root_module.linkSystemLibrary("pq", .{});
     e2e_streaming_test.root_module.linkSystemLibrary("rdkafka", .{});
-    addCHeaders(b, e2e_streaming_test.root_module);
 
     const run_e2e_streaming_test = b.addRunArtifact(e2e_streaming_test);
 
@@ -305,7 +314,6 @@ pub fn build(b: *std.Build) void {
     kafka_integration_tests.root_module.addImport("c", c_rdkafka_module);
     kafka_integration_tests.root_module.link_libc = true;
     kafka_integration_tests.root_module.linkSystemLibrary("rdkafka", .{});
-    addCHeaders(b, kafka_integration_tests.root_module);
 
     const run_kafka_integration_tests = b.addRunArtifact(kafka_integration_tests);
     const run_streaming_integration_tests = b.addRunArtifact(streaming_integration_tests);
@@ -468,9 +476,9 @@ pub fn build(b: *std.Build) void {
     kafka_bench.root_module.addImport("zbench", zbench_module);
     kafka_bench.root_module.addImport("kafka_producer", kafka_producer_module);
     kafka_bench.root_module.addImport("bench_helpers", bench_helpers_module);
+    kafka_bench.root_module.addImport("c", c_rdkafka_module);
     kafka_bench.root_module.link_libc = true;
     kafka_bench.root_module.linkSystemLibrary("rdkafka", .{});
-    addCHeaders(b, kafka_bench.root_module);
 
     const install_kafka_bench = b.addInstallArtifact(kafka_bench, .{});
 
@@ -498,26 +506,9 @@ pub fn build(b: *std.Build) void {
     bench_step.dependOn(&install_message_processor_bench.step);
 }
 
-/// Add C include paths (libpq / librdkafka headers) to a module.
-/// In Zig 0.16, @cImport resolves include paths per-module, so this must be
-/// applied to every module that performs a @cImport. Paths come from
+/// Add C include paths (libpq / librdkafka headers) to a translate-c step, so
+/// the C translation can locate the system headers. Paths come from
 /// C_INCLUDE_PATH (set by the Nix dev shell) with a system fallback.
-fn addCHeaders(b: *std.Build, module: *std.Build.Module) void {
-    if (b.graph.environ_map.get("C_INCLUDE_PATH")) |include_path| {
-        var it = std.mem.splitScalar(u8, include_path, ':');
-        while (it.next()) |path| {
-            if (path.len > 0) {
-                module.addIncludePath(.{ .cwd_relative = path });
-            }
-        }
-    } else {
-        // Fallback to standard system paths
-        module.addIncludePath(.{ .cwd_relative = "/usr/include/postgresql" });
-    }
-}
-
-/// Same as `addCHeaders`, but for a translate-c step (used so the C translation
-/// can locate libpq / librdkafka system headers).
 fn addCHeadersT(b: *std.Build, translate_c: *std.Build.Step.TranslateC) void {
     if (b.graph.environ_map.get("C_INCLUDE_PATH")) |include_path| {
         var it = std.mem.splitScalar(u8, include_path, ':');

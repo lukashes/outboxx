@@ -10,10 +10,7 @@ const message_iterations = 100;
 const batch_size = 1000;
 const flush_iterations = message_iterations;
 
-const c = @cImport({
-    @cInclude("librdkafka/rdkafka.h");
-    @cInclude("librdkafka/rdkafka_mock.h");
-});
+const c = @import("c"); // shared librdkafka bindings incl. mock (translate-c)
 
 const payload =
     \\{
