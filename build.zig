@@ -45,6 +45,17 @@ pub fn build(b: *std.Build) void {
     postgres_source_module.addImport("domain", domain_module);
     postgres_source_module.addImport("constants", constants_module);
 
+    // Shared librdkafka bindings via build-system C translation (Zig 0.16).
+    // One translation, imported as "c" by every module that uses librdkafka,
+    // so the generated C types are identical across modules.
+    const c_rdkafka = b.addTranslateC(.{
+        .root_source_file = b.path("src/c/rdkafka.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    addCHeadersT(b, c_rdkafka);
+    const c_rdkafka_module = c_rdkafka.createModule();
+
     // Kafka producer module
     const kafka_producer_module = b.createModule(.{
         .root_source_file = b.path("src/kafka/producer.zig"),
@@ -52,6 +63,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     kafka_producer_module.addImport("constants", constants_module);
+    kafka_producer_module.addImport("c", c_rdkafka_module);
 
     // Processor module with all dependencies
     const cdc_processor_module = b.createModule(.{
@@ -98,7 +110,6 @@ pub fn build(b: *std.Build) void {
     // @cImport. In Zig 0.16 include paths are per-module, so apply them to each.
     addCHeaders(b, exe.root_module);
     addCHeaders(b, postgres_source_module);
-    addCHeaders(b, kafka_producer_module);
 
     b.installArtifact(exe);
 
@@ -147,9 +158,9 @@ pub fn build(b: *std.Build) void {
         }),
     });
     kafka_producer_tests.root_module.addImport("constants", constants_module);
+    kafka_producer_tests.root_module.addImport("c", c_rdkafka_module);
     kafka_producer_tests.root_module.link_libc = true;
     kafka_producer_tests.root_module.linkSystemLibrary("rdkafka", .{});
-    addCHeaders(b, kafka_producer_tests.root_module);
 
     // ReplicationProtocol tests
     const replication_protocol_tests = b.addTest(.{
@@ -284,6 +295,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     kafka_integration_tests.root_module.addImport("constants", constants_module);
+    kafka_integration_tests.root_module.addImport("c", c_rdkafka_module);
     kafka_integration_tests.root_module.link_libc = true;
     kafka_integration_tests.root_module.linkSystemLibrary("rdkafka", .{});
     addCHeaders(b, kafka_integration_tests.root_module);
@@ -494,5 +506,20 @@ fn addCHeaders(b: *std.Build, module: *std.Build.Module) void {
     } else {
         // Fallback to standard system paths
         module.addIncludePath(.{ .cwd_relative = "/usr/include/postgresql" });
+    }
+}
+
+/// Same as `addCHeaders`, but for a translate-c step (used so the C translation
+/// can locate libpq / librdkafka system headers).
+fn addCHeadersT(b: *std.Build, translate_c: *std.Build.Step.TranslateC) void {
+    if (b.graph.environ_map.get("C_INCLUDE_PATH")) |include_path| {
+        var it = std.mem.splitScalar(u8, include_path, ':');
+        while (it.next()) |path| {
+            if (path.len > 0) {
+                translate_c.addIncludePath(.{ .cwd_relative = path });
+            }
+        }
+    } else {
+        translate_c.addIncludePath(.{ .cwd_relative = "/usr/include/postgresql" });
     }
 }

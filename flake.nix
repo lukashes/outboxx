@@ -51,8 +51,11 @@
           ];
 
           shellHook = ''
-            # Only set C_INCLUDE_PATH for header files (used by build.zig)
-            export C_INCLUDE_PATH="${pkgs.postgresql}/include:${rdkafka-latest}/include:''${C_INCLUDE_PATH:+:$C_INCLUDE_PATH}"
+            # Only set C_INCLUDE_PATH for header files (used by build.zig).
+            # Use the `dev` outputs: the default (`out`) outputs contain no headers,
+            # which breaks the build-system translate-c step (it only honors -I,
+            # unlike @cImport which also reads NIX_CFLAGS_COMPILE).
+            export C_INCLUDE_PATH="${pkgs.postgresql.dev}/include:${rdkafka-latest.dev}/include:''${C_INCLUDE_PATH:+:$C_INCLUDE_PATH}"
 
             echo "Outboxx development environment ready"
           '';
