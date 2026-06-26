@@ -40,7 +40,7 @@ fn buildChangeEvent(allocator: std.mem.Allocator) !ChangeEvent {
 const BenchSerializeInsert = struct {
     event: ChangeEvent,
 
-    pub fn run(self: BenchSerializeInsert, allocator: std.mem.Allocator) void {
+    pub fn run(self: *BenchSerializeInsert, allocator: std.mem.Allocator) void {
         const serializer = JsonSerializer.init();
         const json = serializer.serialize(self.event, allocator) catch unreachable;
         allocator.free(json);
@@ -69,12 +69,7 @@ test "benchmark JsonSerializer" {
         .track_allocations = true,
     });
 
-    var buf: [4096]u8 = undefined;
-    var stdout = std.fs.File.stdout().writer(&buf);
-    const writer = &stdout.interface;
-
-    try bench.run(writer);
-    try writer.flush();
+    try bench.run(std.testing.io, std.Io.File.stdout());
 
     const allocations_per_iter = alloc_count / 1000;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});

@@ -141,28 +141,24 @@ pub const Config = struct {
     }
 
     /// Load passwords from environment variables based on config
-    pub fn loadPasswords(self: *Config, allocator: std.mem.Allocator) !void {
+    pub fn loadPasswords(self: *Config, allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map) !void {
         // Load PostgreSQL password if configured
         if (self.source.postgres) |postgres| {
-            const password = std.process.getEnvVarOwned(allocator, postgres.password_env) catch |err| switch (err) {
-                error.EnvironmentVariableNotFound => {
-                    std.log.warn("Environment variable '{s}' not found", .{postgres.password_env});
-                    return err;
-                },
-                else => return err,
+            const value = environ_map.get(postgres.password_env) orelse {
+                std.log.warn("Environment variable '{s}' not found", .{postgres.password_env});
+                return error.EnvironmentVariableNotFound;
             };
+            const password = try allocator.dupe(u8, value);
             try self.runtime_passwords.put("postgres", password);
         }
 
         // Load MySQL password if configured
         if (self.source.mysql) |mysql| {
-            const password = std.process.getEnvVarOwned(allocator, mysql.password_env) catch |err| switch (err) {
-                error.EnvironmentVariableNotFound => {
-                    std.log.warn("Environment variable '{s}' not found", .{mysql.password_env});
-                    return err;
-                },
-                else => return err,
+            const value = environ_map.get(mysql.password_env) orelse {
+                std.log.warn("Environment variable '{s}' not found", .{mysql.password_env});
+                return error.EnvironmentVariableNotFound;
             };
+            const password = try allocator.dupe(u8, value);
             try self.runtime_passwords.put("mysql", password);
         }
     }
@@ -503,9 +499,9 @@ pub const Config = struct {
     }
 
     /// Load configuration from TOML file
-    pub fn loadFromTomlFile(allocator: std.mem.Allocator, file_path: []const u8) !Config {
+    pub fn loadFromTomlFile(io: std.Io, allocator: std.mem.Allocator, file_path: []const u8) !Config {
         var parser = ConfigParser.init(allocator);
-        return parser.parseFile(file_path);
+        return parser.parseFile(io, file_path);
     }
 };
 
@@ -520,13 +516,8 @@ pub const ConfigParser = struct {
     }
 
     /// Parse TOML config file
-    pub fn parseFile(self: *ConfigParser, file_path: []const u8) !Config {
-        const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
-            return err;
-        };
-        defer file.close();
-
-        const file_content = file.readToEndAlloc(self.allocator, 1024 * 1024) catch |err| {
+    pub fn parseFile(self: *ConfigParser, io: std.Io, file_path: []const u8) !Config {
+        const file_content = std.Io.Dir.cwd().readFileAlloc(io, file_path, self.allocator, .limited(1024 * 1024)) catch |err| {
             std.log.warn("Failed to read config file: {}", .{err});
             return err;
         };

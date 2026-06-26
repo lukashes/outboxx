@@ -11,6 +11,38 @@ pub const c = @cImport({
     @cInclude("librdkafka/rdkafka.h");
 });
 
+// --- Time / sleep / env helpers ---
+// Zig 0.16 moved time and sleep behind the Io interface and removed the global
+// env accessor. Test modules link libc, so use libc primitives directly here.
+
+/// Wall-clock milliseconds since the Unix epoch.
+pub fn nowMillis() i64 {
+    var tv: std.c.timeval = undefined;
+    _ = std.c.gettimeofday(&tv, null);
+    return @as(i64, @intCast(tv.sec)) * 1000 + @divTrunc(@as(i64, @intCast(tv.usec)), 1000);
+}
+
+/// Wall-clock seconds since the Unix epoch.
+pub fn nowSeconds() i64 {
+    return @divTrunc(nowMillis(), 1000);
+}
+
+/// Wall-clock microseconds since the Unix epoch.
+pub fn nowMicros() i64 {
+    var tv: std.c.timeval = undefined;
+    _ = std.c.gettimeofday(&tv, null);
+    return @as(i64, @intCast(tv.sec)) * 1_000_000 + @as(i64, @intCast(tv.usec));
+}
+
+/// Sleep for the given number of nanoseconds.
+pub fn sleepNs(ns: u64) void {
+    var req: std.c.timespec = .{
+        .sec = @intCast(ns / std.time.ns_per_s),
+        .nsec = @intCast(ns % std.time.ns_per_s),
+    };
+    _ = std.c.nanosleep(&req, null);
+}
+
 /// Helper to format SQL with null terminator for C APIs
 pub fn formatSqlZ(allocator: std.mem.Allocator, comptime fmt: []const u8, args: anytype) ![:0]const u8 {
     const sql = try std.fmt.allocPrint(allocator, fmt, args);
@@ -23,11 +55,11 @@ pub fn formatSqlZ(allocator: std.mem.Allocator, comptime fmt: []const u8, args: 
 /// Get PostgreSQL connection string for tests
 /// Uses POSTGRES_PASSWORD env var or defaults to "password"
 pub fn getTestConnectionString(allocator: std.mem.Allocator) ![]const u8 {
-    const password = std.process.getEnvVarOwned(allocator, "POSTGRES_PASSWORD") catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => try allocator.dupe(u8, "password"),
-        else => return err,
-    };
-    defer allocator.free(password);
+    // std.process.getEnvVarOwned was removed in Zig 0.16; use libc getenv.
+    const password: []const u8 = if (std.c.getenv("POSTGRES_PASSWORD")) |p|
+        std.mem.span(p)
+    else
+        "password";
 
     return std.fmt.allocPrint(
         allocator,
@@ -101,7 +133,7 @@ pub fn consumeAllMessages(
     topic: []const u8,
     timeout_ms: i32,
 ) ![]std.json.Parsed(std.json.Value) {
-    var messages = std.ArrayList(std.json.Parsed(std.json.Value)){};
+    var messages: std.ArrayList(std.json.Parsed(std.json.Value)) = .empty;
     errdefer {
         for (messages.items) |msg| msg.deinit();
         messages.deinit(allocator);
@@ -110,7 +142,7 @@ pub fn consumeAllMessages(
     var errstr: [512]u8 = undefined;
 
     // Create consumer with unique group_id (to read from beginning)
-    const group_id = try std.fmt.allocPrint(allocator, "test-group-{d}", .{std.time.timestamp()});
+    const group_id = try std.fmt.allocPrint(allocator, "test-group-{d}", .{nowSeconds()});
     defer allocator.free(group_id);
 
     const conf = c.rd_kafka_conf_new();
@@ -148,13 +180,13 @@ pub fn consumeAllMessages(
 
     // Poll messages until timeout
     // Give consumer time to subscribe and rebalance
-    std.Thread.sleep(2_000_000_000); // 2 seconds for consumer to join and get assignments
+    sleepNs(2_000_000_000); // 2 seconds for consumer to join and get assignments
 
-    const start_time = std.time.milliTimestamp();
+    const start_time = nowMillis();
     var last_message_time = start_time;
 
     while (true) {
-        const elapsed = std.time.milliTimestamp() - start_time;
+        const elapsed = nowMillis() - start_time;
         if (elapsed >= timeout_ms) break;
 
         const message = c.rd_kafka_consumer_poll(consumer, 500);
@@ -167,13 +199,13 @@ pub fn consumeAllMessages(
             };
             try messages.append(allocator, parsed);
 
-            last_message_time = std.time.milliTimestamp();
+            last_message_time = nowMillis();
             c.rd_kafka_message_destroy(message);
         } else {
             if (message != null) c.rd_kafka_message_destroy(message);
 
             // Stop if no messages for 2 seconds after we got at least one
-            if (messages.items.len > 0 and (std.time.milliTimestamp() - last_message_time) > 2000) {
+            if (messages.items.len > 0 and (nowMillis() - last_message_time) > 2000) {
                 break;
             }
         }

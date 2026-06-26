@@ -50,7 +50,11 @@ fn flushCommitWorker(
     const flush_interval_iterations: u32 = @intCast(constants.CDC.KAFKA_FLUSH_INTERVAL_SEC);
 
     while (!stop_signal.load(.monotonic)) {
-        std.Thread.sleep(1 * std.time.ns_per_s);
+        // Zig 0.16 removed std.Thread.sleep (sleeping now goes through the Io
+        // interface); use libc nanosleep to avoid threading `io` into the flush
+        // thread. TODO(phase 6): replace with io.sleep once `io` is threaded.
+        var sleep_req: std.c.timespec = .{ .sec = 1, .nsec = 0 };
+        _ = std.c.nanosleep(&sleep_req, null);
         iterations += 1;
 
         if (iterations < flush_interval_iterations) {

@@ -122,7 +122,7 @@ fn createTestStreams(allocator: std.mem.Allocator) ![]Stream {
 const BenchMatchFound = struct {
     streams: []const Stream,
 
-    pub fn run(self: BenchMatchFound, allocator: std.mem.Allocator) void {
+    pub fn run(self: *BenchMatchFound, allocator: std.mem.Allocator) void {
         var matched = processor_mod.matchStreams(allocator, self.streams, "users", "INSERT") catch unreachable;
         defer matched.deinit(allocator);
     }
@@ -131,7 +131,7 @@ const BenchMatchFound = struct {
 const BenchMatchNotFound = struct {
     streams: []const Stream,
 
-    pub fn run(self: BenchMatchNotFound, allocator: std.mem.Allocator) void {
+    pub fn run(self: *BenchMatchNotFound, allocator: std.mem.Allocator) void {
         var matched = processor_mod.matchStreams(allocator, self.streams, "nonexistent_table", "INSERT") catch unreachable;
         defer matched.deinit(allocator);
     }
@@ -159,11 +159,7 @@ test "benchmark matchStreams found" {
         .track_allocations = true,
     });
 
-    var buf: [4096]u8 = undefined;
-    var stdout = std.fs.File.stdout().writer(&buf);
-    const writer = &stdout.interface;
-    try bench.run(writer);
-    try writer.flush();
+    try bench.run(std.testing.io, std.Io.File.stdout());
 
     const allocations_per_iter = alloc_count / iterations;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
@@ -191,11 +187,7 @@ test "benchmark matchStreams not found" {
         .track_allocations = true,
     });
 
-    var buf: [4096]u8 = undefined;
-    var stdout = std.fs.File.stdout().writer(&buf);
-    const writer = &stdout.interface;
-    try bench.run(writer);
-    try writer.flush();
+    try bench.run(std.testing.io, std.Io.File.stdout());
 
     const allocations_per_iter = alloc_count / iterations;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});

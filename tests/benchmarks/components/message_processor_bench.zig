@@ -92,7 +92,7 @@ const BenchProcessInsert = struct {
     registry: *RelationRegistry,
     message: PgOutputMessage,
 
-    pub fn run(self: BenchProcessInsert, allocator: std.mem.Allocator) void {
+    pub fn run(self: *BenchProcessInsert, allocator: std.mem.Allocator) void {
         var processor = MessageProcessor.init();
         var event = processor.processMessage(allocator, self.message, self.registry) catch unreachable;
         if (event) |*e| {
@@ -153,7 +153,7 @@ const BenchProcessUpdate = struct {
     registry: *RelationRegistry,
     message: PgOutputMessage,
 
-    pub fn run(self: BenchProcessUpdate, allocator: std.mem.Allocator) void {
+    pub fn run(self: *BenchProcessUpdate, allocator: std.mem.Allocator) void {
         var processor = MessageProcessor.init();
         var event = processor.processMessage(allocator, self.message, self.registry) catch unreachable;
         if (event) |*e| {
@@ -194,7 +194,7 @@ const BenchProcessDelete = struct {
     registry: *RelationRegistry,
     message: PgOutputMessage,
 
-    pub fn run(self: BenchProcessDelete, allocator: std.mem.Allocator) void {
+    pub fn run(self: *BenchProcessDelete, allocator: std.mem.Allocator) void {
         var processor = MessageProcessor.init();
         var event = processor.processMessage(allocator, self.message, self.registry) catch unreachable;
         if (event) |*e| {
@@ -233,11 +233,7 @@ test "benchmark MessageProcessor INSERT" {
         .track_allocations = true,
     });
 
-    var buf: [4096]u8 = undefined;
-    var stdout = std.fs.File.stdout().writer(&buf);
-    const writer = &stdout.interface;
-    try bench.run(writer);
-    try writer.flush();
+    try bench.run(std.testing.io, std.Io.File.stdout());
 
     const allocations_per_iter = alloc_count / iterations;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
@@ -273,11 +269,7 @@ test "benchmark MessageProcessor UPDATE" {
         .track_allocations = true,
     });
 
-    var buf: [4096]u8 = undefined;
-    var stdout = std.fs.File.stdout().writer(&buf);
-    const writer = &stdout.interface;
-    try bench.run(writer);
-    try writer.flush();
+    try bench.run(std.testing.io, std.Io.File.stdout());
 
     const allocations_per_iter = alloc_count / iterations;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
@@ -313,11 +305,7 @@ test "benchmark MessageProcessor DELETE" {
         .track_allocations = true,
     });
 
-    var buf: [4096]u8 = undefined;
-    var stdout = std.fs.File.stdout().writer(&buf);
-    const writer = &stdout.interface;
-    try bench.run(writer);
-    try writer.flush();
+    try bench.run(std.testing.io, std.Io.File.stdout());
 
     const allocations_per_iter = alloc_count / iterations;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});

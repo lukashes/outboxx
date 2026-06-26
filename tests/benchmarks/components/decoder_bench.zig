@@ -63,7 +63,7 @@ fn buildInsertMessage(allocator: std.mem.Allocator) ![]u8 {
 const BenchDecoderInsert = struct {
     golden_data: []const u8,
 
-    pub fn run(self: BenchDecoderInsert, allocator: std.mem.Allocator) void {
+    pub fn run(self: *BenchDecoderInsert, allocator: std.mem.Allocator) void {
         var decoder = PgOutputDecoder.init(allocator);
         var msg = decoder.decode(self.golden_data) catch unreachable;
         defer msg.deinit(allocator);
@@ -90,11 +90,7 @@ test "benchmark PgOutputDecoder" {
         .track_allocations = true,
     });
 
-    var buf: [4096]u8 = undefined;
-    var stdout = std.fs.File.stdout().writer(&buf);
-    const writer = &stdout.interface;
-    try bench.run(writer);
-    try writer.flush();
+    try bench.run(std.testing.io, std.Io.File.stdout());
 
     const allocations_per_iter = alloc_count / iterations;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});

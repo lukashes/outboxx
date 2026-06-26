@@ -59,7 +59,7 @@ fn createEventWithStringKey(allocator: std.mem.Allocator) !ChangeEvent {
 const BenchPartitionKeyInteger = struct {
     event: ChangeEvent,
 
-    pub fn run(self: BenchPartitionKeyInteger, allocator: std.mem.Allocator) void {
+    pub fn run(self: *BenchPartitionKeyInteger, allocator: std.mem.Allocator) void {
         const key = self.event.getPartitionKeyValue(allocator, "id") catch unreachable;
         if (key) |k| {
             allocator.free(k);
@@ -70,7 +70,7 @@ const BenchPartitionKeyInteger = struct {
 const BenchPartitionKeyString = struct {
     event: ChangeEvent,
 
-    pub fn run(self: BenchPartitionKeyString, allocator: std.mem.Allocator) void {
+    pub fn run(self: *BenchPartitionKeyString, allocator: std.mem.Allocator) void {
         const key = self.event.getPartitionKeyValue(allocator, "uuid") catch unreachable;
         if (key) |k| {
             allocator.free(k);
@@ -81,7 +81,7 @@ const BenchPartitionKeyString = struct {
 const BenchPartitionKeyBoolean = struct {
     event: ChangeEvent,
 
-    pub fn run(self: BenchPartitionKeyBoolean, allocator: std.mem.Allocator) void {
+    pub fn run(self: *BenchPartitionKeyBoolean, allocator: std.mem.Allocator) void {
         const key = self.event.getPartitionKeyValue(allocator, "active") catch unreachable;
         if (key) |k| {
             allocator.free(k);
@@ -92,7 +92,7 @@ const BenchPartitionKeyBoolean = struct {
 const BenchPartitionKeyNotFound = struct {
     event: ChangeEvent,
 
-    pub fn run(self: BenchPartitionKeyNotFound, allocator: std.mem.Allocator) void {
+    pub fn run(self: *BenchPartitionKeyNotFound, allocator: std.mem.Allocator) void {
         const key = self.event.getPartitionKeyValue(allocator, "nonexistent_field") catch unreachable;
         if (key) |k| {
             allocator.free(k);
@@ -122,11 +122,7 @@ test "benchmark getPartitionKeyValue integer" {
         .track_allocations = true,
     });
 
-    var buf: [4096]u8 = undefined;
-    var stdout = std.fs.File.stdout().writer(&buf);
-    const writer = &stdout.interface;
-    try bench.run(writer);
-    try writer.flush();
+    try bench.run(std.testing.io, std.Io.File.stdout());
 
     const allocations_per_iter = alloc_count / iterations;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
@@ -154,11 +150,7 @@ test "benchmark getPartitionKeyValue string" {
         .track_allocations = true,
     });
 
-    var buf: [4096]u8 = undefined;
-    var stdout = std.fs.File.stdout().writer(&buf);
-    const writer = &stdout.interface;
-    try bench.run(writer);
-    try writer.flush();
+    try bench.run(std.testing.io, std.Io.File.stdout());
 
     const allocations_per_iter = alloc_count / iterations;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
@@ -186,11 +178,7 @@ test "benchmark getPartitionKeyValue boolean" {
         .track_allocations = true,
     });
 
-    var buf: [4096]u8 = undefined;
-    var stdout = std.fs.File.stdout().writer(&buf);
-    const writer = &stdout.interface;
-    try bench.run(writer);
-    try writer.flush();
+    try bench.run(std.testing.io, std.Io.File.stdout());
 
     const allocations_per_iter = alloc_count / iterations;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
@@ -218,11 +206,7 @@ test "benchmark getPartitionKeyValue not found" {
         .track_allocations = true,
     });
 
-    var buf: [4096]u8 = undefined;
-    var stdout = std.fs.File.stdout().writer(&buf);
-    const writer = &stdout.interface;
-    try bench.run(writer);
-    try writer.flush();
+    try bench.run(std.testing.io, std.Io.File.stdout());
 
     const allocations_per_iter = alloc_count / iterations;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});

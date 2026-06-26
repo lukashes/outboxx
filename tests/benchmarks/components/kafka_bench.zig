@@ -75,7 +75,7 @@ const MockCluster = struct {
 const BenchKafkaSend = struct {
     producer: *KafkaProducer,
 
-    pub fn run(self: BenchKafkaSend, allocator: std.mem.Allocator) void {
+    pub fn run(self: *BenchKafkaSend, allocator: std.mem.Allocator) void {
         _ = allocator;
         for (0..batch_size) |_| {
             self.producer.sendMessage("bench_topic", "key_123", payload) catch unreachable;
@@ -88,7 +88,7 @@ const BenchKafkaProduce = struct {
     producer: *KafkaProducer,
     messages: []kafka_producer.Message,
 
-    pub fn run(self: BenchKafkaProduce, allocator: std.mem.Allocator) void {
+    pub fn run(self: *BenchKafkaProduce, allocator: std.mem.Allocator) void {
         _ = allocator;
         self.producer.produce("bench_topic", self.messages) catch unreachable;
         self.producer.poll();
@@ -123,11 +123,7 @@ test "benchmark KafkaProducer sendMessage" {
         .track_allocations = true,
     });
 
-    var buf: [4096]u8 = undefined;
-    var stdout = std.fs.File.stdout().writer(&buf);
-    const writer = &stdout.interface;
-    try bench.run(writer);
-    try writer.flush();
+    try bench.run(std.testing.io, std.Io.File.stdout());
 
     const allocations_per_iter = alloc_count / message_iterations;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
@@ -177,11 +173,7 @@ test "benchmark KafkaProducer produce" {
         .track_allocations = true,
     });
 
-    var buf: [4096]u8 = undefined;
-    var stdout = std.fs.File.stdout().writer(&buf);
-    const writer = &stdout.interface;
-    try bench.run(writer);
-    try writer.flush();
+    try bench.run(std.testing.io, std.Io.File.stdout());
 
     const allocations_per_iter = alloc_count / message_iterations;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});

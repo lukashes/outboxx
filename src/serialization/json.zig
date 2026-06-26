@@ -18,10 +18,10 @@ pub const JsonSerializer = struct {
         _ = self;
 
         // Use custom JSON writer for proper formatting
-        var output = std.ArrayList(u8).empty;
-        errdefer output.deinit(allocator);
+        var output: std.Io.Writer.Allocating = .init(allocator);
+        errdefer output.deinit();
 
-        const writer = output.writer(allocator);
+        const writer = &output.writer;
 
         try writer.writeAll("{\"op\":\"");
         try writer.writeAll(event.op);
@@ -50,7 +50,7 @@ pub const JsonSerializer = struct {
 
         try writer.writeAll("}}");
 
-        return output.toOwnedSlice(allocator);
+        return output.toOwnedSlice();
     }
 
     fn serializeDataSection(data: DataSection, writer: anytype) !void {
@@ -143,7 +143,7 @@ const FieldValueHelpers = domain.FieldValueHelpers;
 test "JsonSerializer serialize INSERT event" {
     const testing = std.testing;
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer {
         const deinit_status = gpa.deinit();
         if (deinit_status == .leak) {
@@ -188,7 +188,7 @@ test "JsonSerializer serialize INSERT event" {
 test "JsonSerializer serialize UPDATE event" {
     const testing = std.testing;
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer {
         const deinit_status = gpa.deinit();
         if (deinit_status == .leak) {
@@ -234,7 +234,7 @@ test "JsonSerializer serialize UPDATE event" {
 test "JsonSerializer validate JSON output is parseable" {
     const testing = std.testing;
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer {
         const deinit_status = gpa.deinit();
         if (deinit_status == .leak) {
@@ -279,7 +279,7 @@ test "JsonSerializer validate JSON output is parseable" {
 test "JsonSerializer string escaping" {
     const testing = std.testing;
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer {
         const deinit_status = gpa.deinit();
         if (deinit_status == .leak) {

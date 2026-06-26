@@ -23,7 +23,7 @@ Outboxx is a lightweight PostgreSQL Change Data Capture (CDC) tool written in Zi
 - ✅ **Kafka Integration**: Producer implementation with at-least-once delivery
 - ✅ **Comprehensive Testing**: Unit, integration, and E2E tests with real services
 - ✅ **Development Environment**: Docker Compose setup with PostgreSQL and Kafka
-- ✅ **Nix Environment**: Isolated, reproducible development environment with Zig 0.15.1
+- ✅ **Nix Environment**: Isolated, reproducible development environment with Zig 0.16.0
 - ✅ **Performance Validated**: High-throughput benchmarks completed, significantly lower memory footprint than JVM alternatives
 
 ## Development Workflow
@@ -487,11 +487,13 @@ outboxx --config config.toml > output.log
 const print = std.debug.print;
 print("Outboxx - PostgreSQL CDC\n", .{});
 
-// ✅ CORRECT: Use stdout for user messages (Zig 0.15.1)
+// ✅ CORRECT: Use stdout for user messages (Zig 0.16.0)
+// `io` comes from the `std.process.Init` parameter of `main`.
 var buf: [4096]u8 = undefined;
-const formatted = try std.fmt.bufPrint(&buf, "Outboxx - PostgreSQL CDC\n", .{});
-const stdout_file = std.fs.File.stdout();
-try stdout_file.writeAll(formatted);
+var stdout_writer = std.Io.File.stdout().writer(io, &buf);
+const w = &stdout_writer.interface;
+try w.print("Outboxx - PostgreSQL CDC\n", .{});
+try w.flush();
 ```
 
 **For logging (anywhere in codebase):**
@@ -503,18 +505,20 @@ std.log.warn("Connection retry...", .{});
 std.log.err("Fatal error", .{});
 ```
 
-**Simple wrapper for error handling (Zig 0.15.1):**
+**Simple wrapper for error handling (Zig 0.16.0):**
 
 ```zig
+// `stdout_io` is a file-scope `std.Io` captured from main's `std.process.Init`.
 fn printStatus(comptime fmt: []const u8, args: anytype) void {
     var buf: [4096]u8 = undefined;
-    const formatted = std.fmt.bufPrint(&buf, fmt, args) catch |err| {
-        std.log.warn("Failed to format message: {}", .{err});
+    var stdout_writer = std.Io.File.stdout().writer(stdout_io, &buf);
+    const w = &stdout_writer.interface;
+    w.print(fmt, args) catch |err| {
+        std.log.warn("Failed to write to stdout: {}", .{err});
         return;
     };
-    const stdout_file = std.fs.File.stdout();
-    stdout_file.writeAll(formatted) catch |err| {
-        std.log.warn("Failed to write to stdout: {}", .{err});
+    w.flush() catch |err| {
+        std.log.warn("Failed to flush stdout: {}", .{err});
     };
 }
 
