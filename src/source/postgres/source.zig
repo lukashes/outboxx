@@ -20,6 +20,16 @@ const DecoderError = pg_output_decoder.DecoderError;
 const relation_registry = @import("relation_registry.zig");
 const RelationRegistryError = relation_registry.RelationRegistryError;
 
+// Wall-clock time in milliseconds. Zig 0.16 removed std.time.milliTimestamp
+// (time now goes through the Io interface); libc gettimeofday is used here to
+// avoid threading `io` into the receive loop.
+// TODO(phase 6): replace with the Io clock once `io` is threaded through.
+fn nowMillis() i64 {
+    var tv: std.c.timeval = undefined;
+    _ = std.c.gettimeofday(&tv, null);
+    return @as(i64, @intCast(tv.sec)) * 1000 + @divTrunc(@as(i64, @intCast(tv.usec)), 1000);
+}
+
 // Re-export types for benchmarks (public API)
 pub const PgOutputMessage = pg_output_decoder.PgOutputMessage;
 pub const InsertMessage = pg_output_decoder.InsertMessage;
@@ -82,7 +92,7 @@ pub const MessageProcessor = struct {
             .source = try batch_allocator.dupe(u8, "postgres"),
             .resource = try batch_allocator.dupe(u8, rel_info.relation_name),
             .schema = try batch_allocator.dupe(u8, rel_info.namespace),
-            .timestamp = std.time.timestamp(),
+            .timestamp = @divTrunc(nowMillis(), 1000),
             .lsn = null,
         };
 
@@ -101,7 +111,7 @@ pub const MessageProcessor = struct {
             .source = try batch_allocator.dupe(u8, "postgres"),
             .resource = try batch_allocator.dupe(u8, rel_info.relation_name),
             .schema = try batch_allocator.dupe(u8, rel_info.namespace),
-            .timestamp = std.time.timestamp(),
+            .timestamp = @divTrunc(nowMillis(), 1000),
             .lsn = null,
         };
 
@@ -125,7 +135,7 @@ pub const MessageProcessor = struct {
             .source = try batch_allocator.dupe(u8, "postgres"),
             .resource = try batch_allocator.dupe(u8, rel_info.relation_name),
             .schema = try batch_allocator.dupe(u8, rel_info.namespace),
-            .timestamp = std.time.timestamp(),
+            .timestamp = @divTrunc(nowMillis(), 1000),
             .lsn = null,
         };
 
@@ -276,11 +286,11 @@ pub const PostgresSource = struct {
 
         var last_confirmed_lsn: u64 = self.last_lsn; // Track LSN locally
 
-        const start_time = std.time.milliTimestamp();
+        const start_time = nowMillis();
         const deadline = start_time + wait_time_ms;
 
-        while (changes.items.len < limit and std.time.milliTimestamp() < deadline) {
-            const remaining_time = @max(deadline - std.time.milliTimestamp(), 0);
+        while (changes.items.len < limit and nowMillis() < deadline) {
+            const remaining_time = @max(deadline - nowMillis(), 0);
             const wait_time: i32 = @intCast(remaining_time);
 
             // Step 1: Blocking receive (poll() inside)
@@ -387,7 +397,7 @@ pub const PostgresSource = struct {
             .wal_write_position = lsn,
             .wal_flush_position = lsn,
             .wal_apply_position = lsn,
-            .client_time = std.time.timestamp(),
+            .client_time = @divTrunc(nowMillis(), 1000),
             .reply_requested = false,
         };
 

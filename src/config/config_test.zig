@@ -106,7 +106,7 @@ test "parse basic TOML config - file not found should fail" {
     const allocator = testing.allocator;
 
     // This should fail with FileNotFound error (fail fast)
-    const result = Config.loadFromTomlFile(allocator, "dummy_path");
+    const result = Config.loadFromTomlFile(testing.io, allocator, "dummy_path");
     try testing.expectError(error.FileNotFound, result);
 }
 
@@ -138,16 +138,12 @@ test "parse basic TOML config - real file" {
     ;
 
     // Write to temporary file
-    const temp_file = try std.fs.cwd().createFile("test_config.toml", .{});
-    defer {
-        temp_file.close();
-        std.fs.cwd().deleteFile("test_config.toml") catch {};
-    }
-
-    try temp_file.writeAll(temp_content);
+    const io = testing.io;
+    try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = "test_config.toml", .data = temp_content });
+    defer std.Io.Dir.cwd().deleteFile(io, "test_config.toml") catch {};
 
     // Now parse the real file
-    var parsed_config = try Config.loadFromTomlFile(allocator, "test_config.toml");
+    var parsed_config = try Config.loadFromTomlFile(io, allocator, "test_config.toml");
     defer parsed_config.deinit(allocator);
 
     // Verify it was parsed correctly

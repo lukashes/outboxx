@@ -43,7 +43,7 @@ pub const RowData = []FieldData;
 pub const RowDataHelpers = struct {
     pub fn createBuilder(allocator: std.mem.Allocator) std.ArrayList(FieldData) {
         _ = allocator;
-        return std.ArrayList(FieldData){};
+        return std.ArrayList(FieldData).empty;
     }
 
     pub fn put(builder: *std.ArrayList(FieldData), allocator: std.mem.Allocator, field_name: []const u8, value: std.json.Value) !void {
@@ -188,7 +188,7 @@ pub const ChangeEvent = struct {
 test "ChangeEvent creation and memory management" {
     const testing = std.testing;
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer {
         const deinit_status = gpa.deinit();
         if (deinit_status == .leak) {
@@ -222,7 +222,7 @@ test "ChangeEvent creation and memory management" {
 test "RowDataHelpers field access" {
     const testing = std.testing;
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer {
         const deinit_status = gpa.deinit();
         if (deinit_status == .leak) {
@@ -251,7 +251,7 @@ test "RowDataHelpers field access" {
 test "UPDATE event with old and new data" {
     const testing = std.testing;
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer {
         const deinit_status = gpa.deinit();
         if (deinit_status == .leak) {
@@ -299,7 +299,7 @@ test "UPDATE event with old and new data" {
 test "getPartitionKeyValue extracts field values" {
     const testing = std.testing;
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer {
         const deinit_status = gpa.deinit();
         if (deinit_status == .leak) {

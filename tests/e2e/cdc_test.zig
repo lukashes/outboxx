@@ -17,8 +17,8 @@ const c = test_helpers.c;
 // - Verification: Message count matches change count, JSON structure is correct
 
 // Enable debug logging for these tests
-pub const std_options = struct {
-    pub const log_level = .debug;
+pub const std_options: std.Options = .{
+    .log_level = .debug,
 };
 
 test "E2E: INSERT operation - full pipeline verification" {
@@ -40,7 +40,7 @@ test "E2E: INSERT operation - full pipeline verification" {
     }
 
     // Test configuration with unique names to avoid cross-test contamination
-    const timestamp = std.time.timestamp();
+    const timestamp = test_helpers.nowSeconds();
     const table_name = try std.fmt.allocPrint(allocator, "users_stream_insert_{d}", .{timestamp});
     defer allocator.free(table_name);
     const topic_name = try std.fmt.allocPrint(allocator, "topic.stream.insert.{d}", .{timestamp});
@@ -105,7 +105,7 @@ test "E2E: INSERT operation - full pipeline verification" {
     _ = c.PQexec(conn, insert1.ptr);
     _ = c.PQexec(conn, insert2.ptr);
     _ = c.PQexec(conn, insert3.ptr);
-    std.Thread.sleep(200_000_000); // 200ms
+    test_helpers.sleepNs(200_000_000); // 200ms
 
     // Process CDC pipeline
     std.debug.print("Step 2: Process CDC pipeline\n", .{});
@@ -184,7 +184,7 @@ test "E2E: UPDATE operation - full pipeline verification" {
     }
 
     // Test configuration with unique names
-    const timestamp = std.time.timestamp();
+    const timestamp = test_helpers.nowSeconds();
     const table_name = try std.fmt.allocPrint(allocator, "users_stream_update_{d}", .{timestamp});
     defer allocator.free(table_name);
     const topic_name = try std.fmt.allocPrint(allocator, "topic.stream.update.{d}", .{timestamp});
@@ -241,7 +241,7 @@ test "E2E: UPDATE operation - full pipeline verification" {
     const insert_sql = try test_helpers.formatSqlZ(allocator, "INSERT INTO {s} (name, value) VALUES ('Alice', 100);", .{table_name});
     defer allocator.free(insert_sql);
     _ = c.PQexec(conn, insert_sql.ptr);
-    std.Thread.sleep(200_000_000); // 200ms
+    test_helpers.sleepNs(200_000_000); // 200ms
 
     // Process initial INSERT
     {
@@ -258,7 +258,7 @@ test "E2E: UPDATE operation - full pipeline verification" {
     defer allocator.free(update2_sql);
     _ = c.PQexec(conn, update1_sql.ptr);
     _ = c.PQexec(conn, update2_sql.ptr);
-    std.Thread.sleep(200_000_000); // 200ms
+    test_helpers.sleepNs(200_000_000); // 200ms
 
     // Process UPDATE operations
     std.debug.print("Step 3: Process UPDATE operations\n", .{});
@@ -323,7 +323,7 @@ test "E2E: DELETE operation - full pipeline verification" {
     }
 
     // Test configuration with unique names
-    const timestamp = std.time.timestamp();
+    const timestamp = test_helpers.nowSeconds();
     const table_name = try std.fmt.allocPrint(allocator, "users_stream_delete_{d}", .{timestamp});
     defer allocator.free(table_name);
     const topic_name = try std.fmt.allocPrint(allocator, "topic.stream.delete.{d}", .{timestamp});
@@ -383,7 +383,7 @@ test "E2E: DELETE operation - full pipeline verification" {
     defer allocator.free(insert2_sql);
     _ = c.PQexec(conn, insert1_sql.ptr);
     _ = c.PQexec(conn, insert2_sql.ptr);
-    std.Thread.sleep(200_000_000); // 200ms
+    test_helpers.sleepNs(200_000_000); // 200ms
 
     // Process initial INSERTs
     {
@@ -400,7 +400,7 @@ test "E2E: DELETE operation - full pipeline verification" {
     defer allocator.free(delete2_sql);
     _ = c.PQexec(conn, delete1_sql.ptr);
     _ = c.PQexec(conn, delete2_sql.ptr);
-    std.Thread.sleep(200_000_000); // 200ms
+    test_helpers.sleepNs(200_000_000); // 200ms
 
     // Process DELETE operations
     std.debug.print("Step 3: Process DELETE operations\n", .{});
