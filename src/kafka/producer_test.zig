@@ -1,9 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const KafkaProducer = @import("producer.zig").KafkaProducer;
-const c = @cImport({
-    @cInclude("librdkafka/rdkafka.h");
-});
+const c = @import("c"); // shared librdkafka bindings (build-system translate-c)
 
 // Simple function to verify message was written to Kafka
 fn verifyMessageWritten(allocator: std.mem.Allocator, brokers: []const u8, topic: []const u8, expected_payload: []const u8) !bool {
