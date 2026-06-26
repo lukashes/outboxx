@@ -56,6 +56,17 @@ pub fn build(b: *std.Build) void {
     addCHeadersT(b, c_rdkafka);
     const c_rdkafka_module = c_rdkafka.createModule();
 
+    // Shared libpq bindings via build-system C translation (Zig 0.16),
+    // imported as "c" by every module that uses libpq.
+    const c_pq = b.addTranslateC(.{
+        .root_source_file = b.path("src/c/pq.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    addCHeadersT(b, c_pq);
+    const c_pq_module = c_pq.createModule();
+    postgres_source_module.addImport("c", c_pq_module);
+
     // Kafka producer module
     const kafka_producer_module = b.createModule(.{
         .root_source_file = b.path("src/kafka/producer.zig"),
@@ -96,6 +107,7 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("config", config_module);
     exe.root_module.addImport("postgres_source", postgres_source_module);
     exe.root_module.addImport("constants", constants_module);
+    exe.root_module.addImport("c", c_pq_module);
 
     // Link libc for PostgreSQL and Kafka C libraries
     exe.root_module.link_libc = true;
@@ -105,11 +117,6 @@ pub fn build(b: *std.Build) void {
 
     // Add Kafka library (librdkafka)
     exe.root_module.linkSystemLibrary("rdkafka", .{});
-
-    // C headers (libpq / librdkafka) are needed by every module that performs a
-    // @cImport. In Zig 0.16 include paths are per-module, so apply them to each.
-    addCHeaders(b, exe.root_module);
-    addCHeaders(b, postgres_source_module);
 
     b.installArtifact(exe);
 
@@ -170,9 +177,9 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    replication_protocol_tests.root_module.addImport("c", c_pq_module);
     replication_protocol_tests.root_module.link_libc = true;
     replication_protocol_tests.root_module.linkSystemLibrary("pq", .{});
-    addCHeaders(b, replication_protocol_tests.root_module);
 
     // PgOutputDecoder tests
     const pg_output_decoder_tests = b.addTest(.{
@@ -202,9 +209,9 @@ pub fn build(b: *std.Build) void {
     });
     streaming_source_tests.root_module.addImport("domain", domain_module);
     streaming_source_tests.root_module.addImport("constants", constants_module);
+    streaming_source_tests.root_module.addImport("c", c_pq_module);
     streaming_source_tests.root_module.link_libc = true;
     streaming_source_tests.root_module.linkSystemLibrary("pq", .{});
-    addCHeaders(b, streaming_source_tests.root_module);
 
     // Streaming replication integration tests
     const streaming_integration_tests = b.addTest(.{
@@ -216,9 +223,9 @@ pub fn build(b: *std.Build) void {
     });
     streaming_integration_tests.root_module.addImport("domain", domain_module);
     streaming_integration_tests.root_module.addImport("constants", constants_module);
+    streaming_integration_tests.root_module.addImport("c", c_pq_module);
     streaming_integration_tests.root_module.link_libc = true;
     streaming_integration_tests.root_module.linkSystemLibrary("pq", .{});
-    addCHeaders(b, streaming_integration_tests.root_module);
 
     // Validator tests
     const validator_tests = b.addTest(.{
@@ -228,9 +235,9 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    validator_tests.root_module.addImport("c", c_pq_module);
     validator_tests.root_module.link_libc = true;
     validator_tests.root_module.linkSystemLibrary("pq", .{});
-    addCHeaders(b, validator_tests.root_module);
 
     // Test helpers module (shared utilities for all tests)
     const test_helpers_module = b.createModule(.{
