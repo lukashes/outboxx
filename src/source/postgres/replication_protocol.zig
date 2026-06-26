@@ -1,7 +1,5 @@
 const std = @import("std");
-const c = @cImport({
-    @cInclude("libpq-fe.h");
-});
+const c = @import("c"); // shared libpq bindings (build-system translate-c)
 
 pub const ReplicationError = error{
     ConnectionFailed,
