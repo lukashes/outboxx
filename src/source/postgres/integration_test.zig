@@ -155,7 +155,7 @@ test "Streaming source: receive and convert INSERT messages to ChangeEvents" {
 
     std.log.info("Streaming source connected, receiving batch...", .{});
 
-    const batch = try source.receiveBatch(allocator, 10);
+    const batch = try source.receiveBatch(std.testing.io, allocator, 10);
     defer {
         var mut_batch = batch;
         mut_batch.deinit();
@@ -176,7 +176,7 @@ test "Streaming source: receive and convert INSERT messages to ChangeEvents" {
     try testing.expectEqual(@as(usize, 2), insert_count);
 
     // Send feedback
-    try source.sendFeedback(batch.last_lsn);
+    try source.sendFeedback(std.testing.io, batch.last_lsn);
 
     std.log.info("Integration test passed!", .{});
 }
@@ -267,7 +267,7 @@ test "Streaming source: UPDATE operation E2E with old and new tuples" {
 
     try source.connect(conn_str, start_lsn);
 
-    const batch = try source.receiveBatch(allocator, 10);
+    const batch = try source.receiveBatch(std.testing.io, allocator, 10);
     defer {
         var mut_batch = batch;
         mut_batch.deinit();
@@ -318,7 +318,7 @@ test "Streaming source: UPDATE operation E2E with old and new tuples" {
     try testing.expect(found_update);
 
     // Send feedback
-    try source.sendFeedback(batch.last_lsn);
+    try source.sendFeedback(std.testing.io, batch.last_lsn);
 
     std.log.info("UPDATE E2E test passed!", .{});
 }
@@ -409,7 +409,7 @@ test "Streaming source: DELETE operation E2E" {
 
     try source.connect(conn_str, start_lsn);
 
-    const batch = try source.receiveBatch(allocator, 10);
+    const batch = try source.receiveBatch(std.testing.io, allocator, 10);
     defer {
         var mut_batch = batch;
         mut_batch.deinit();
@@ -448,7 +448,7 @@ test "Streaming source: DELETE operation E2E" {
     try testing.expect(found_delete);
 
     // Send feedback
-    try source.sendFeedback(batch.last_lsn);
+    try source.sendFeedback(std.testing.io, batch.last_lsn);
 
     std.log.info("DELETE E2E test passed!", .{});
 }
@@ -532,7 +532,7 @@ test "Streaming source: Multiple batches with limit parameter" {
     var last_lsn: u64 = 0;
 
     while (total_changes < 500) {
-        const batch = try source.receiveBatch(allocator, 100);
+        const batch = try source.receiveBatch(std.testing.io, allocator, 100);
         defer {
             var mut_batch = batch;
             mut_batch.deinit();
@@ -550,7 +550,7 @@ test "Streaming source: Multiple batches with limit parameter" {
         std.log.info("Batch {}: {} changes (total: {})", .{ batch_count, batch.changes.len, total_changes });
 
         // Send feedback after each batch
-        try source.sendFeedback(batch.last_lsn);
+        try source.sendFeedback(std.testing.io, batch.last_lsn);
     }
 
     // Verify we got all 500 INSERT events
@@ -626,7 +626,7 @@ test "Streaming source: Timeout behavior with no data" {
 
     const start_time = test_helpers.nowMillis();
 
-    const batch = try source.receiveBatchWithWaitTime(allocator, 10, 1000);
+    const batch = try source.receiveBatchWithWaitTime(std.testing.io, allocator, 10, 1000);
     defer {
         var mut_batch = batch;
         mut_batch.deinit();

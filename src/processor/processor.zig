@@ -73,7 +73,7 @@ fn flushCommitWorker(
             continue;
         }
 
-        source.sendFeedback(lsn) catch |err| {
+        source.sendFeedback(io, lsn) catch |err| {
             std.log.err("Background LSN commit failed: {}", .{err});
             continue;
         };
@@ -85,7 +85,7 @@ fn flushCommitWorker(
 
     const lsn = pending_lsn.load(.acquire);
     if (lsn > 0) {
-        source.sendFeedback(lsn) catch |err| {
+        source.sendFeedback(io, lsn) catch |err| {
             std.log.warn("Final background LSN commit failed: {}", .{err});
         };
     }
@@ -146,8 +146,8 @@ pub const Processor = struct {
         std.log.info("Processor initialized successfully", .{});
     }
 
-    pub fn processChangesToKafka(self: *Self, batch_allocator: std.mem.Allocator, limit: u32) !void {
-        var batch = try self.source.receiveBatch(batch_allocator, limit);
+    pub fn processChangesToKafka(self: *Self, io: std.Io, batch_allocator: std.mem.Allocator, limit: u32) !void {
+        var batch = try self.source.receiveBatch(io, batch_allocator, limit);
         defer batch.deinit();
 
         var producer = &(self.kafka_producer orelse return ProcessorError.ConnectionFailed);
@@ -236,7 +236,7 @@ pub const Processor = struct {
 
             const batch_alloc = batch_arena.allocator();
 
-            try self.processChangesToKafka(batch_alloc, constants.CDC.BATCH_SIZE);
+            try self.processChangesToKafka(io, batch_alloc, constants.CDC.BATCH_SIZE);
         }
 
         flush_thread.join();

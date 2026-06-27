@@ -20,16 +20,6 @@ const DecoderError = pg_output_decoder.DecoderError;
 const relation_registry = @import("relation_registry.zig");
 const RelationRegistryError = relation_registry.RelationRegistryError;
 
-// Wall-clock time in milliseconds. Zig 0.16 removed std.time.milliTimestamp
-// (time now goes through the Io interface); libc gettimeofday is used here to
-// avoid threading `io` into the receive loop.
-// TODO(phase 6): replace with the Io clock once `io` is threaded through.
-fn nowMillis() i64 {
-    var tv: std.c.timeval = undefined;
-    _ = std.c.gettimeofday(&tv, null);
-    return @as(i64, @intCast(tv.sec)) * 1000 + @divTrunc(@as(i64, @intCast(tv.usec)), 1000);
-}
-
 // Re-export types for benchmarks (public API)
 pub const PgOutputMessage = pg_output_decoder.PgOutputMessage;
 pub const InsertMessage = pg_output_decoder.InsertMessage;
@@ -52,7 +42,7 @@ pub const MessageProcessor = struct {
 
     /// Process PgOutputMessage and convert to ChangeEvent
     /// Returns null for messages that don't produce ChangeEvents (BEGIN, COMMIT, RELATION)
-    pub fn processMessage(self: *Self, batch_allocator: std.mem.Allocator, pg_msg: PgOutputMessage, registry: *RelationRegistry) PostgresSourceError!?ChangeEvent {
+    pub fn processMessage(self: *Self, io: std.Io, batch_allocator: std.mem.Allocator, pg_msg: PgOutputMessage, registry: *RelationRegistry) PostgresSourceError!?ChangeEvent {
         switch (pg_msg) {
             .begin, .commit => {
                 return null;
@@ -65,19 +55,19 @@ pub const MessageProcessor = struct {
                 return null;
             },
             .insert => |ins| {
-                return self.convertInsert(batch_allocator, ins, registry) catch |err| {
+                return self.convertInsert(io, batch_allocator, ins, registry) catch |err| {
                     std.log.warn("Failed to convert INSERT: {}", .{err});
                     return PostgresSourceError.ConversionFailed;
                 };
             },
             .update => |upd| {
-                return self.convertUpdate(batch_allocator, upd, registry) catch |err| {
+                return self.convertUpdate(io, batch_allocator, upd, registry) catch |err| {
                     std.log.warn("Failed to convert UPDATE: {}", .{err});
                     return PostgresSourceError.ConversionFailed;
                 };
             },
             .delete => |del| {
-                return self.convertDelete(batch_allocator, del, registry) catch |err| {
+                return self.convertDelete(io, batch_allocator, del, registry) catch |err| {
                     std.log.warn("Failed to convert DELETE: {}", .{err});
                     return PostgresSourceError.ConversionFailed;
                 };
@@ -85,14 +75,14 @@ pub const MessageProcessor = struct {
         }
     }
 
-    fn convertInsert(self: *Self, batch_allocator: std.mem.Allocator, insert_msg: anytype, registry: *RelationRegistry) !ChangeEvent {
+    fn convertInsert(self: *Self, io: std.Io, batch_allocator: std.mem.Allocator, insert_msg: anytype, registry: *RelationRegistry) !ChangeEvent {
         const rel_info = try registry.get(insert_msg.relation_id);
 
         const metadata = Metadata{
             .source = try batch_allocator.dupe(u8, "postgres"),
             .resource = try batch_allocator.dupe(u8, rel_info.relation_name),
             .schema = try batch_allocator.dupe(u8, rel_info.namespace),
-            .timestamp = @divTrunc(nowMillis(), 1000),
+            .timestamp = std.Io.Timestamp.now(io, .real).toSeconds(),
             .lsn = null,
         };
 
@@ -104,14 +94,14 @@ pub const MessageProcessor = struct {
         return event;
     }
 
-    fn convertUpdate(self: *Self, batch_allocator: std.mem.Allocator, update_msg: anytype, registry: *RelationRegistry) !ChangeEvent {
+    fn convertUpdate(self: *Self, io: std.Io, batch_allocator: std.mem.Allocator, update_msg: anytype, registry: *RelationRegistry) !ChangeEvent {
         const rel_info = try registry.get(update_msg.relation_id);
 
         const metadata = Metadata{
             .source = try batch_allocator.dupe(u8, "postgres"),
             .resource = try batch_allocator.dupe(u8, rel_info.relation_name),
             .schema = try batch_allocator.dupe(u8, rel_info.namespace),
-            .timestamp = @divTrunc(nowMillis(), 1000),
+            .timestamp = std.Io.Timestamp.now(io, .real).toSeconds(),
             .lsn = null,
         };
 
@@ -128,14 +118,14 @@ pub const MessageProcessor = struct {
         return event;
     }
 
-    fn convertDelete(self: *Self, batch_allocator: std.mem.Allocator, delete_msg: anytype, registry: *RelationRegistry) !ChangeEvent {
+    fn convertDelete(self: *Self, io: std.Io, batch_allocator: std.mem.Allocator, delete_msg: anytype, registry: *RelationRegistry) !ChangeEvent {
         const rel_info = try registry.get(delete_msg.relation_id);
 
         const metadata = Metadata{
             .source = try batch_allocator.dupe(u8, "postgres"),
             .resource = try batch_allocator.dupe(u8, rel_info.relation_name),
             .schema = try batch_allocator.dupe(u8, rel_info.namespace),
-            .timestamp = @divTrunc(nowMillis(), 1000),
+            .timestamp = std.Io.Timestamp.now(io, .real).toSeconds(),
             .lsn = null,
         };
 
@@ -268,14 +258,14 @@ pub const PostgresSource = struct {
 
     /// Receive batch of changes from PostgreSQL (default wait time from constants)
     /// Wrapper for compatibility with polling source API
-    pub fn receiveBatch(self: *Self, batch_allocator: std.mem.Allocator, limit: usize) PostgresSourceError!Batch {
-        return self.receiveBatchWithWaitTime(batch_allocator, limit, constants.CDC.BATCH_WAIT_MS);
+    pub fn receiveBatch(self: *Self, io: std.Io, batch_allocator: std.mem.Allocator, limit: usize) PostgresSourceError!Batch {
+        return self.receiveBatchWithWaitTime(io, batch_allocator, limit, constants.CDC.BATCH_WAIT_MS);
     }
 
     /// Receive batch of changes from PostgreSQL (with wait time)
     /// limit: desired batch size (soft limit)
     /// wait_time_ms: max time to wait for batch
-    pub fn receiveBatchWithWaitTime(self: *Self, batch_allocator: std.mem.Allocator, limit: usize, wait_time_ms: i32) PostgresSourceError!Batch {
+    pub fn receiveBatchWithWaitTime(self: *Self, io: std.Io, batch_allocator: std.mem.Allocator, limit: usize, wait_time_ms: i32) PostgresSourceError!Batch {
         var changes = std.ArrayList(ChangeEvent).empty;
         errdefer {
             for (changes.items) |*change| {
@@ -286,12 +276,13 @@ pub const PostgresSource = struct {
 
         var last_confirmed_lsn: u64 = self.last_lsn; // Track LSN locally
 
-        const start_time = nowMillis();
-        const deadline = start_time + wait_time_ms;
+        // Monotonic deadline via the Io clock (`.awake` — not affected by
+        // wall-clock jumps, unlike the previous gettimeofday-based timer).
+        const deadline = std.Io.Timestamp.now(io, .awake).addDuration(.fromMilliseconds(wait_time_ms));
 
-        while (changes.items.len < limit and nowMillis() < deadline) {
-            const remaining_time = @max(deadline - nowMillis(), 0);
-            const wait_time: i32 = @intCast(remaining_time);
+        while (changes.items.len < limit and std.Io.Timestamp.now(io, .awake).nanoseconds < deadline.nanoseconds) {
+            const remaining = std.Io.Timestamp.now(io, .awake).durationTo(deadline);
+            const wait_time: i32 = @intCast(@max(remaining.toMilliseconds(), 0));
 
             // Step 1: Blocking receive (poll() inside)
             const repl_msg = self.protocol.receiveMessage(wait_time) catch |err| {
@@ -312,7 +303,7 @@ pub const PostgresSource = struct {
             var msg = repl_msg.?;
             defer msg.deinit(self.allocator);
 
-            const msg_lsn = try self.extractChangeFromMessage(batch_allocator, msg, &changes);
+            const msg_lsn = try self.extractChangeFromMessage(io, batch_allocator, msg, &changes);
             last_confirmed_lsn = msg_lsn; // Update LSN (always > 0 on success)
 
             // Step 2: DRAIN all buffered messages (non-blocking)
@@ -323,7 +314,7 @@ pub const PostgresSource = struct {
                 var buffered_msg = next_msg.?;
                 defer buffered_msg.deinit(self.allocator);
 
-                const buffered_lsn = try self.extractChangeFromMessage(batch_allocator, buffered_msg, &changes);
+                const buffered_lsn = try self.extractChangeFromMessage(io, batch_allocator, buffered_msg, &changes);
                 last_confirmed_lsn = buffered_lsn; // Update LSN (always > 0 on success)
             }
         }
@@ -351,7 +342,7 @@ pub const PostgresSource = struct {
     /// - Supervisor (systemd/k8s) restarts application
     /// - PostgreSQL re-sends the same message (LSN not confirmed)
     /// - If error persists → crash loop → operator intervention required
-    fn extractChangeFromMessage(self: *Self, batch_allocator: std.mem.Allocator, msg: replication_protocol.ReplicationMessage, changes: *std.ArrayList(ChangeEvent)) !u64 {
+    fn extractChangeFromMessage(self: *Self, io: std.Io, batch_allocator: std.mem.Allocator, msg: replication_protocol.ReplicationMessage, changes: *std.ArrayList(ChangeEvent)) !u64 {
         switch (msg) {
             .xlog_data => |xlog| {
                 // Decode pgoutput message
@@ -362,7 +353,7 @@ pub const PostgresSource = struct {
                 defer pg_msg.deinit(self.allocator);
 
                 // Convert to ChangeEvent
-                const change_opt = self.message_processor.processMessage(batch_allocator, pg_msg, &self.registry) catch |err| {
+                const change_opt = self.message_processor.processMessage(io, batch_allocator, pg_msg, &self.registry) catch |err| {
                     std.log.warn("Failed to convert message to ChangeEvent at LSN {}: {}", .{ xlog.server_wal_end, err });
                     return PostgresSourceError.ConversionFailed; // Propagate error up
                 };
@@ -392,12 +383,12 @@ pub const PostgresSource = struct {
     }
 
     /// Send LSN feedback to PostgreSQL (confirm processing)
-    pub fn sendFeedback(self: *Self, lsn: u64) PostgresSourceError!void {
+    pub fn sendFeedback(self: *Self, io: std.Io, lsn: u64) PostgresSourceError!void {
         const status = StandbyStatusUpdate{
             .wal_write_position = lsn,
             .wal_flush_position = lsn,
             .wal_apply_position = lsn,
-            .client_time = @divTrunc(nowMillis(), 1000),
+            .client_time = std.Io.Timestamp.now(io, .real).toSeconds(),
             .reply_requested = false,
         };
 
@@ -461,7 +452,7 @@ test "convertInsert: basic INSERT message to ChangeEvent" {
     defer insert_msg.new_tuple.deinit(allocator);
 
     // Call convertInsert via MessageProcessor
-    var event = try source.message_processor.convertInsert(allocator, insert_msg, &source.registry);
+    var event = try source.message_processor.convertInsert(std.testing.io, allocator, insert_msg, &source.registry);
     defer event.deinit(allocator);
 
     // Verify: operation type
@@ -553,7 +544,7 @@ test "convertUpdate: UPDATE message with old and new tuples" {
     };
 
     // Call convertUpdate via MessageProcessor
-    var event = try source.message_processor.convertUpdate(allocator, update_msg, &source.registry);
+    var event = try source.message_processor.convertUpdate(std.testing.io, allocator, update_msg, &source.registry);
     defer event.deinit(allocator);
 
     // Verify: operation type
@@ -636,7 +627,7 @@ test "convertDelete: DELETE message to ChangeEvent" {
     };
 
     // Call convertDelete via MessageProcessor
-    var event = try source.message_processor.convertDelete(allocator, delete_msg, &source.registry);
+    var event = try source.message_processor.convertDelete(std.testing.io, allocator, delete_msg, &source.registry);
     defer event.deinit(allocator);
 
     // Verify: operation type
@@ -860,7 +851,7 @@ test "convertInsert: error when relation not found in registry" {
     };
 
     // Call convertInsert via MessageProcessor - should return RelationNotFound error
-    const result = source.message_processor.convertInsert(allocator, insert_msg, &source.registry);
+    const result = source.message_processor.convertInsert(std.testing.io, allocator, insert_msg, &source.registry);
 
     // Verify: error is RelationNotFound
     try testing.expectError(RelationRegistryError.RelationNotFound, result);

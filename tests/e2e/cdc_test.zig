@@ -114,7 +114,7 @@ test "E2E: INSERT operation - full pipeline verification" {
     var batch_arena = std.heap.ArenaAllocator.init(allocator);
     defer batch_arena.deinit();
 
-    try processor.processChangesToKafka(batch_arena.allocator(), 100);
+    try processor.processChangesToKafka(std.testing.io, batch_arena.allocator(), 100);
 
     // Verify: Read ALL messages from Kafka
     std.debug.print("Step 3: Consume and verify messages from Kafka topic '{s}'\n", .{topic_name});
@@ -247,7 +247,7 @@ test "E2E: UPDATE operation - full pipeline verification" {
     {
         var batch_arena = std.heap.ArenaAllocator.init(allocator);
         defer batch_arena.deinit();
-        try processor.processChangesToKafka(batch_arena.allocator(), 100);
+        try processor.processChangesToKafka(std.testing.io, batch_arena.allocator(), 100);
     }
 
     // Step 2: Update the record twice
@@ -265,7 +265,7 @@ test "E2E: UPDATE operation - full pipeline verification" {
     {
         var batch_arena = std.heap.ArenaAllocator.init(allocator);
         defer batch_arena.deinit();
-        try processor.processChangesToKafka(batch_arena.allocator(), 100);
+        try processor.processChangesToKafka(std.testing.io, batch_arena.allocator(), 100);
     }
 
     // Verify: Read messages from Kafka (1 INSERT + 2 UPDATEs = 3 total)
@@ -389,7 +389,7 @@ test "E2E: DELETE operation - full pipeline verification" {
     {
         var batch_arena = std.heap.ArenaAllocator.init(allocator);
         defer batch_arena.deinit();
-        try processor.processChangesToKafka(batch_arena.allocator(), 100);
+        try processor.processChangesToKafka(std.testing.io, batch_arena.allocator(), 100);
     }
 
     // Step 2: Delete the records
@@ -407,7 +407,7 @@ test "E2E: DELETE operation - full pipeline verification" {
     {
         var batch_arena = std.heap.ArenaAllocator.init(allocator);
         defer batch_arena.deinit();
-        try processor.processChangesToKafka(batch_arena.allocator(), 100);
+        try processor.processChangesToKafka(std.testing.io, batch_arena.allocator(), 100);
     }
 
     // Verify: Read messages from Kafka (2 INSERTs + 2 DELETEs = 4 total)
