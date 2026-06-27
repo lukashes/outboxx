@@ -40,7 +40,7 @@ test "E2E: INSERT operation - full pipeline verification" {
     }
 
     // Test configuration with unique names to avoid cross-test contamination
-    const timestamp = test_helpers.nowSeconds();
+    const timestamp = test_helpers.nowSeconds(std.testing.io);
     const table_name = try std.fmt.allocPrint(allocator, "users_stream_insert_{d}", .{timestamp});
     defer allocator.free(table_name);
     const topic_name = try std.fmt.allocPrint(allocator, "topic.stream.insert.{d}", .{timestamp});
@@ -105,7 +105,7 @@ test "E2E: INSERT operation - full pipeline verification" {
     _ = c.PQexec(conn, insert1.ptr);
     _ = c.PQexec(conn, insert2.ptr);
     _ = c.PQexec(conn, insert3.ptr);
-    test_helpers.sleepNs(200_000_000); // 200ms
+    test_helpers.sleepNs(std.testing.io, 200_000_000); // 200ms
 
     // Process CDC pipeline
     std.debug.print("Step 2: Process CDC pipeline\n", .{});
@@ -118,7 +118,7 @@ test "E2E: INSERT operation - full pipeline verification" {
 
     // Verify: Read ALL messages from Kafka
     std.debug.print("Step 3: Consume and verify messages from Kafka topic '{s}'\n", .{topic_name});
-    const messages = try test_helpers.consumeAllMessages(allocator, topic_name, 10000);
+    const messages = try test_helpers.consumeAllMessages(std.testing.io, allocator, topic_name, 10000);
     defer test_helpers.cleanupJsonMessages(messages, allocator);
 
     // CRITICAL: Exactly 3 messages (no duplicates, no loss)
@@ -184,7 +184,7 @@ test "E2E: UPDATE operation - full pipeline verification" {
     }
 
     // Test configuration with unique names
-    const timestamp = test_helpers.nowSeconds();
+    const timestamp = test_helpers.nowSeconds(std.testing.io);
     const table_name = try std.fmt.allocPrint(allocator, "users_stream_update_{d}", .{timestamp});
     defer allocator.free(table_name);
     const topic_name = try std.fmt.allocPrint(allocator, "topic.stream.update.{d}", .{timestamp});
@@ -241,7 +241,7 @@ test "E2E: UPDATE operation - full pipeline verification" {
     const insert_sql = try test_helpers.formatSqlZ(allocator, "INSERT INTO {s} (name, value) VALUES ('Alice', 100);", .{table_name});
     defer allocator.free(insert_sql);
     _ = c.PQexec(conn, insert_sql.ptr);
-    test_helpers.sleepNs(200_000_000); // 200ms
+    test_helpers.sleepNs(std.testing.io, 200_000_000); // 200ms
 
     // Process initial INSERT
     {
@@ -258,7 +258,7 @@ test "E2E: UPDATE operation - full pipeline verification" {
     defer allocator.free(update2_sql);
     _ = c.PQexec(conn, update1_sql.ptr);
     _ = c.PQexec(conn, update2_sql.ptr);
-    test_helpers.sleepNs(200_000_000); // 200ms
+    test_helpers.sleepNs(std.testing.io, 200_000_000); // 200ms
 
     // Process UPDATE operations
     std.debug.print("Step 3: Process UPDATE operations\n", .{});
@@ -270,7 +270,7 @@ test "E2E: UPDATE operation - full pipeline verification" {
 
     // Verify: Read messages from Kafka (1 INSERT + 2 UPDATEs = 3 total)
     std.debug.print("Step 4: Consume and verify messages from Kafka topic '{s}'\n", .{topic_name});
-    const messages = try test_helpers.consumeAllMessages(allocator, topic_name, 10000);
+    const messages = try test_helpers.consumeAllMessages(std.testing.io, allocator, topic_name, 10000);
     defer test_helpers.cleanupJsonMessages(messages, allocator);
 
     std.debug.print("Step 5: Verify message count (expected: 3, got: {})\n", .{messages.len});
@@ -323,7 +323,7 @@ test "E2E: DELETE operation - full pipeline verification" {
     }
 
     // Test configuration with unique names
-    const timestamp = test_helpers.nowSeconds();
+    const timestamp = test_helpers.nowSeconds(std.testing.io);
     const table_name = try std.fmt.allocPrint(allocator, "users_stream_delete_{d}", .{timestamp});
     defer allocator.free(table_name);
     const topic_name = try std.fmt.allocPrint(allocator, "topic.stream.delete.{d}", .{timestamp});
@@ -383,7 +383,7 @@ test "E2E: DELETE operation - full pipeline verification" {
     defer allocator.free(insert2_sql);
     _ = c.PQexec(conn, insert1_sql.ptr);
     _ = c.PQexec(conn, insert2_sql.ptr);
-    test_helpers.sleepNs(200_000_000); // 200ms
+    test_helpers.sleepNs(std.testing.io, 200_000_000); // 200ms
 
     // Process initial INSERTs
     {
@@ -400,7 +400,7 @@ test "E2E: DELETE operation - full pipeline verification" {
     defer allocator.free(delete2_sql);
     _ = c.PQexec(conn, delete1_sql.ptr);
     _ = c.PQexec(conn, delete2_sql.ptr);
-    test_helpers.sleepNs(200_000_000); // 200ms
+    test_helpers.sleepNs(std.testing.io, 200_000_000); // 200ms
 
     // Process DELETE operations
     std.debug.print("Step 3: Process DELETE operations\n", .{});
@@ -412,7 +412,7 @@ test "E2E: DELETE operation - full pipeline verification" {
 
     // Verify: Read messages from Kafka (2 INSERTs + 2 DELETEs = 4 total)
     std.debug.print("Step 4: Consume and verify messages from Kafka topic '{s}'\n", .{topic_name});
-    const messages = try test_helpers.consumeAllMessages(allocator, topic_name, 10000);
+    const messages = try test_helpers.consumeAllMessages(std.testing.io, allocator, topic_name, 10000);
     defer test_helpers.cleanupJsonMessages(messages, allocator);
 
     std.debug.print("Step 5: Verify message count (expected: 4, got: {})\n", .{messages.len});

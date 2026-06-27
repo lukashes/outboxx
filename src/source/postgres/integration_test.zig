@@ -82,9 +82,9 @@ test "Streaming source: receive and convert INSERT messages to ChangeEvents" {
     const allocator = testing.allocator;
 
     // Generate unique names for this test (timestamp + random to avoid collisions)
-    var prng = std.Random.DefaultPrng.init(@intCast(test_helpers.nowMicros()));
+    var prng = std.Random.DefaultPrng.init(@intCast(test_helpers.nowMicros(std.testing.io)));
     const random_suffix = prng.random().int(u32);
-    const timestamp = test_helpers.nowSeconds();
+    const timestamp = test_helpers.nowSeconds(std.testing.io);
     const table_name = try std.fmt.allocPrint(allocator, "stream_test_{d}_{d}", .{ timestamp, random_suffix });
     defer allocator.free(table_name);
 
@@ -185,9 +185,9 @@ test "Streaming source: UPDATE operation E2E with old and new tuples" {
     const allocator = testing.allocator;
 
     // Generate unique names for this test (timestamp + random to avoid collisions)
-    var prng = std.Random.DefaultPrng.init(@intCast(test_helpers.nowMicros()));
+    var prng = std.Random.DefaultPrng.init(@intCast(test_helpers.nowMicros(std.testing.io)));
     const random_suffix = prng.random().int(u32);
-    const timestamp = test_helpers.nowSeconds();
+    const timestamp = test_helpers.nowSeconds(std.testing.io);
     const table_name = try std.fmt.allocPrint(allocator, "stream_update_test_{d}_{d}", .{ timestamp, random_suffix });
     defer allocator.free(table_name);
 
@@ -327,9 +327,9 @@ test "Streaming source: DELETE operation E2E" {
     const allocator = testing.allocator;
 
     // Generate unique names for this test (timestamp + random to avoid collisions)
-    var prng = std.Random.DefaultPrng.init(@intCast(test_helpers.nowMicros()));
+    var prng = std.Random.DefaultPrng.init(@intCast(test_helpers.nowMicros(std.testing.io)));
     const random_suffix = prng.random().int(u32);
-    const timestamp = test_helpers.nowSeconds();
+    const timestamp = test_helpers.nowSeconds(std.testing.io);
     const table_name = try std.fmt.allocPrint(allocator, "stream_delete_test_{d}_{d}", .{ timestamp, random_suffix });
     defer allocator.free(table_name);
 
@@ -457,9 +457,9 @@ test "Streaming source: Multiple batches with limit parameter" {
     const allocator = testing.allocator;
 
     // Generate unique names for this test (timestamp + random to avoid collisions)
-    var prng = std.Random.DefaultPrng.init(@intCast(test_helpers.nowMicros()));
+    var prng = std.Random.DefaultPrng.init(@intCast(test_helpers.nowMicros(std.testing.io)));
     const random_suffix = prng.random().int(u32);
-    const timestamp = test_helpers.nowSeconds();
+    const timestamp = test_helpers.nowSeconds(std.testing.io);
     const table_name = try std.fmt.allocPrint(allocator, "stream_batch_test_{d}_{d}", .{ timestamp, random_suffix });
     defer allocator.free(table_name);
 
@@ -564,9 +564,9 @@ test "Streaming source: Timeout behavior with no data" {
     const allocator = testing.allocator;
 
     // Generate unique names for this test (timestamp + random to avoid collisions)
-    var prng = std.Random.DefaultPrng.init(@intCast(test_helpers.nowMicros()));
+    var prng = std.Random.DefaultPrng.init(@intCast(test_helpers.nowMicros(std.testing.io)));
     const random_suffix = prng.random().int(u32);
-    const timestamp = test_helpers.nowSeconds();
+    const timestamp = test_helpers.nowSeconds(std.testing.io);
     const table_name = try std.fmt.allocPrint(allocator, "stream_timeout_test_{d}_{d}", .{ timestamp, random_suffix });
     defer allocator.free(table_name);
 
@@ -624,7 +624,7 @@ test "Streaming source: Timeout behavior with no data" {
 
     std.log.info("Waiting for timeout with no data (1 second)...", .{});
 
-    const start_time = test_helpers.nowMillis();
+    const start_time = test_helpers.nowMillis(std.testing.io);
 
     const batch = try source.receiveBatchWithWaitTime(std.testing.io, allocator, 10, 1000);
     defer {
@@ -632,7 +632,7 @@ test "Streaming source: Timeout behavior with no data" {
         mut_batch.deinit();
     }
 
-    const elapsed = test_helpers.nowMillis() - start_time;
+    const elapsed = test_helpers.nowMillis(std.testing.io) - start_time;
 
     std.log.info("Timeout test: received {} changes in {}ms", .{ batch.changes.len, elapsed });
 

@@ -9,36 +9,28 @@ const StreamSink = config_module.StreamSink;
 // so E2E tests use the same C types.
 pub const c = @import("c");
 
-// --- Time / sleep / env helpers ---
-// Zig 0.16 moved time and sleep behind the Io interface and removed the global
-// env accessor. Test modules link libc, so use libc primitives directly here.
+// --- Time / sleep helpers ---
+// Zig 0.16 routes time and sleep through the Io interface. These thin wrappers
+// take an Io (std.testing.io in tests) so the tests stay free of libc time.
 
-/// Wall-clock milliseconds since the Unix epoch.
-pub fn nowMillis() i64 {
-    var tv: std.c.timeval = undefined;
-    _ = std.c.gettimeofday(&tv, null);
-    return @as(i64, @intCast(tv.sec)) * 1000 + @divTrunc(@as(i64, @intCast(tv.usec)), 1000);
+/// Monotonic milliseconds (for measuring elapsed time / timeouts).
+pub fn nowMillis(io: std.Io) i64 {
+    return std.Io.Timestamp.now(io, .awake).toMilliseconds();
 }
 
-/// Wall-clock seconds since the Unix epoch.
-pub fn nowSeconds() i64 {
-    return @divTrunc(nowMillis(), 1000);
+/// Wall-clock seconds since the Unix epoch (for unique names).
+pub fn nowSeconds(io: std.Io) i64 {
+    return std.Io.Timestamp.now(io, .real).toSeconds();
 }
 
-/// Wall-clock microseconds since the Unix epoch.
-pub fn nowMicros() i64 {
-    var tv: std.c.timeval = undefined;
-    _ = std.c.gettimeofday(&tv, null);
-    return @as(i64, @intCast(tv.sec)) * 1_000_000 + @as(i64, @intCast(tv.usec));
+/// Wall-clock microseconds since the Unix epoch (for unique names / PRNG seed).
+pub fn nowMicros(io: std.Io) i64 {
+    return std.Io.Timestamp.now(io, .real).toMicroseconds();
 }
 
 /// Sleep for the given number of nanoseconds.
-pub fn sleepNs(ns: u64) void {
-    var req: std.c.timespec = .{
-        .sec = @intCast(ns / std.time.ns_per_s),
-        .nsec = @intCast(ns % std.time.ns_per_s),
-    };
-    _ = std.c.nanosleep(&req, null);
+pub fn sleepNs(io: std.Io, ns: u64) void {
+    io.sleep(.fromNanoseconds(@intCast(ns)), .awake) catch {};
 }
 
 /// Helper to format SQL with null terminator for C APIs
@@ -127,6 +119,7 @@ pub fn createTestStreamConfig(allocator: std.mem.Allocator, table_name: []const 
 /// Returns array of parsed JSON messages
 /// Waits up to timeout_ms for messages to arrive
 pub fn consumeAllMessages(
+    io: std.Io,
     allocator: std.mem.Allocator,
     topic: []const u8,
     timeout_ms: i32,
@@ -140,7 +133,7 @@ pub fn consumeAllMessages(
     var errstr: [512]u8 = undefined;
 
     // Create consumer with unique group_id (to read from beginning)
-    const group_id = try std.fmt.allocPrint(allocator, "test-group-{d}", .{nowSeconds()});
+    const group_id = try std.fmt.allocPrint(allocator, "test-group-{d}", .{nowSeconds(io)});
     defer allocator.free(group_id);
 
     const conf = c.rd_kafka_conf_new();
@@ -178,13 +171,13 @@ pub fn consumeAllMessages(
 
     // Poll messages until timeout
     // Give consumer time to subscribe and rebalance
-    sleepNs(2_000_000_000); // 2 seconds for consumer to join and get assignments
+    sleepNs(io, 2_000_000_000); // 2 seconds for consumer to join and get assignments
 
-    const start_time = nowMillis();
+    const start_time = nowMillis(io);
     var last_message_time = start_time;
 
     while (true) {
-        const elapsed = nowMillis() - start_time;
+        const elapsed = nowMillis(io) - start_time;
         if (elapsed >= timeout_ms) break;
 
         const message = c.rd_kafka_consumer_poll(consumer, 500);
@@ -197,13 +190,13 @@ pub fn consumeAllMessages(
             };
             try messages.append(allocator, parsed);
 
-            last_message_time = nowMillis();
+            last_message_time = nowMillis(io);
             c.rd_kafka_message_destroy(message);
         } else {
             if (message != null) c.rd_kafka_message_destroy(message);
 
             // Stop if no messages for 2 seconds after we got at least one
-            if (messages.items.len > 0 and (nowMillis() - last_message_time) > 2000) {
+            if (messages.items.len > 0 and (nowMillis(io) - last_message_time) > 2000) {
                 break;
             }
         }
