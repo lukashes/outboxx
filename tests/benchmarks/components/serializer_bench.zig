@@ -40,7 +40,7 @@ fn buildChangeEvent(allocator: std.mem.Allocator) !ChangeEvent {
 const BenchSerializeInsert = struct {
     event: ChangeEvent,
 
-    pub fn run(self: BenchSerializeInsert, allocator: std.mem.Allocator) void {
+    pub fn run(self: *BenchSerializeInsert, allocator: std.mem.Allocator) void {
         const serializer = JsonSerializer.init();
         const json = serializer.serialize(self.event, allocator) catch unreachable;
         allocator.free(json);

@@ -59,7 +59,7 @@ fn createEventWithStringKey(allocator: std.mem.Allocator) !ChangeEvent {
 const BenchPartitionKeyInteger = struct {
     event: ChangeEvent,
 
-    pub fn run(self: BenchPartitionKeyInteger, allocator: std.mem.Allocator) void {
+    pub fn run(self: *BenchPartitionKeyInteger, allocator: std.mem.Allocator) void {
         const key = self.event.getPartitionKeyValue(allocator, "id") catch unreachable;
         if (key) |k| {
             allocator.free(k);
@@ -70,7 +70,7 @@ const BenchPartitionKeyInteger = struct {
 const BenchPartitionKeyString = struct {
     event: ChangeEvent,
 
-    pub fn run(self: BenchPartitionKeyString, allocator: std.mem.Allocator) void {
+    pub fn run(self: *BenchPartitionKeyString, allocator: std.mem.Allocator) void {
         const key = self.event.getPartitionKeyValue(allocator, "uuid") catch unreachable;
         if (key) |k| {
             allocator.free(k);
@@ -81,7 +81,7 @@ const BenchPartitionKeyString = struct {
 const BenchPartitionKeyBoolean = struct {
     event: ChangeEvent,
 
-    pub fn run(self: BenchPartitionKeyBoolean, allocator: std.mem.Allocator) void {
+    pub fn run(self: *BenchPartitionKeyBoolean, allocator: std.mem.Allocator) void {
         const key = self.event.getPartitionKeyValue(allocator, "active") catch unreachable;
         if (key) |k| {
             allocator.free(k);
@@ -92,7 +92,7 @@ const BenchPartitionKeyBoolean = struct {
 const BenchPartitionKeyNotFound = struct {
     event: ChangeEvent,
 
-    pub fn run(self: BenchPartitionKeyNotFound, allocator: std.mem.Allocator) void {
+    pub fn run(self: *BenchPartitionKeyNotFound, allocator: std.mem.Allocator) void {
         const key = self.event.getPartitionKeyValue(allocator, "nonexistent_field") catch unreachable;
         if (key) |k| {
             allocator.free(k);

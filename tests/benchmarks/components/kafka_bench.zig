@@ -75,7 +75,7 @@ const MockCluster = struct {
 const BenchKafkaSend = struct {
     producer: *KafkaProducer,
 
-    pub fn run(self: BenchKafkaSend, allocator: std.mem.Allocator) void {
+    pub fn run(self: *BenchKafkaSend, allocator: std.mem.Allocator) void {
         _ = allocator;
         for (0..batch_size) |_| {
             self.producer.sendMessage("bench_topic", "key_123", payload) catch unreachable;
@@ -88,7 +88,7 @@ const BenchKafkaProduce = struct {
     producer: *KafkaProducer,
     messages: []kafka_producer.Message,
 
-    pub fn run(self: BenchKafkaProduce, allocator: std.mem.Allocator) void {
+    pub fn run(self: *BenchKafkaProduce, allocator: std.mem.Allocator) void {
         _ = allocator;
         self.producer.produce("bench_topic", self.messages) catch unreachable;
         self.producer.poll();
