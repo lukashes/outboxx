@@ -122,7 +122,7 @@ fn createTestStreams(allocator: std.mem.Allocator) ![]Stream {
 const BenchMatchFound = struct {
     streams: []const Stream,
 
-    pub fn run(self: BenchMatchFound, allocator: std.mem.Allocator) void {
+    pub fn run(self: *BenchMatchFound, allocator: std.mem.Allocator) void {
         var matched = processor_mod.matchStreams(allocator, self.streams, "users", "INSERT") catch unreachable;
         defer matched.deinit(allocator);
     }
@@ -131,7 +131,7 @@ const BenchMatchFound = struct {
 const BenchMatchNotFound = struct {
     streams: []const Stream,
 
-    pub fn run(self: BenchMatchNotFound, allocator: std.mem.Allocator) void {
+    pub fn run(self: *BenchMatchNotFound, allocator: std.mem.Allocator) void {
         var matched = processor_mod.matchStreams(allocator, self.streams, "nonexistent_table", "INSERT") catch unreachable;
         defer matched.deinit(allocator);
     }

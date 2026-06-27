@@ -63,7 +63,7 @@ fn buildInsertMessage(allocator: std.mem.Allocator) ![]u8 {
 const BenchDecoderInsert = struct {
     golden_data: []const u8,
 
-    pub fn run(self: BenchDecoderInsert, allocator: std.mem.Allocator) void {
+    pub fn run(self: *BenchDecoderInsert, allocator: std.mem.Allocator) void {
         var decoder = PgOutputDecoder.init(allocator);
         var msg = decoder.decode(self.golden_data) catch unreachable;
         defer msg.deinit(allocator);
