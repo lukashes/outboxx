@@ -205,13 +205,13 @@ pub const PgOutputDecoder = struct {
         pos += 4;
 
         // Namespace (null-terminated string)
-        const namespace_end = std.mem.indexOfScalar(u8, data[pos..], 0) orelse return DecoderError.InvalidMessage;
+        const namespace_end = std.mem.findScalar(u8, data[pos..], 0) orelse return DecoderError.InvalidMessage;
         const namespace = self.allocator.dupe(u8, data[pos .. pos + namespace_end]) catch return DecoderError.OutOfMemory;
         errdefer self.allocator.free(namespace);
         pos += namespace_end + 1;
 
         // Relation name (null-terminated string)
-        const relation_name_end = std.mem.indexOfScalar(u8, data[pos..], 0) orelse return DecoderError.InvalidMessage;
+        const relation_name_end = std.mem.findScalar(u8, data[pos..], 0) orelse return DecoderError.InvalidMessage;
         const relation_name = self.allocator.dupe(u8, data[pos .. pos + relation_name_end]) catch return DecoderError.OutOfMemory;
         errdefer self.allocator.free(relation_name);
         pos += relation_name_end + 1;
@@ -238,7 +238,7 @@ pub const PgOutputDecoder = struct {
             const flags = data[pos];
             pos += 1;
 
-            const col_name_end = std.mem.indexOfScalar(u8, data[pos..], 0) orelse return DecoderError.InvalidMessage;
+            const col_name_end = std.mem.findScalar(u8, data[pos..], 0) orelse return DecoderError.InvalidMessage;
             const col_name = self.allocator.dupe(u8, data[pos .. pos + col_name_end]) catch return DecoderError.OutOfMemory;
             errdefer self.allocator.free(col_name);
             pos += col_name_end + 1;

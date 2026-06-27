@@ -175,14 +175,14 @@ test "JsonSerializer serialize INSERT event" {
     defer allocator.free(json_output);
 
     // Validate JSON structure
-    try testing.expect(std.mem.indexOf(u8, json_output, "\"op\":\"INSERT\"") != null);
-    try testing.expect(std.mem.indexOf(u8, json_output, "\"data\":{") != null);
-    try testing.expect(std.mem.indexOf(u8, json_output, "\"meta\":{") != null);
-    try testing.expect(std.mem.indexOf(u8, json_output, "\"source\":\"postgres\"") != null);
-    try testing.expect(std.mem.indexOf(u8, json_output, "\"resource\":\"users\"") != null);
-    try testing.expect(std.mem.indexOf(u8, json_output, "\"id\":1") != null);
-    try testing.expect(std.mem.indexOf(u8, json_output, "\"name\":\"Alice\"") != null);
-    try testing.expect(std.mem.indexOf(u8, json_output, "\"active\":true") != null);
+    try testing.expect(std.mem.find(u8, json_output, "\"op\":\"INSERT\"") != null);
+    try testing.expect(std.mem.find(u8, json_output, "\"data\":{") != null);
+    try testing.expect(std.mem.find(u8, json_output, "\"meta\":{") != null);
+    try testing.expect(std.mem.find(u8, json_output, "\"source\":\"postgres\"") != null);
+    try testing.expect(std.mem.find(u8, json_output, "\"resource\":\"users\"") != null);
+    try testing.expect(std.mem.find(u8, json_output, "\"id\":1") != null);
+    try testing.expect(std.mem.find(u8, json_output, "\"name\":\"Alice\"") != null);
+    try testing.expect(std.mem.find(u8, json_output, "\"active\":true") != null);
 }
 
 test "JsonSerializer serialize UPDATE event" {
@@ -225,10 +225,10 @@ test "JsonSerializer serialize UPDATE event" {
     defer allocator.free(json_output);
 
     // Validate UPDATE structure - now simplified (only new data)
-    try testing.expect(std.mem.indexOf(u8, json_output, "\"op\":\"UPDATE\"") != null);
-    try testing.expect(std.mem.indexOf(u8, json_output, "\"data\":{\"status\":\"active\"}") != null);
+    try testing.expect(std.mem.find(u8, json_output, "\"op\":\"UPDATE\"") != null);
+    try testing.expect(std.mem.find(u8, json_output, "\"data\":{\"status\":\"active\"}") != null);
     // Old data is NOT in JSON output (only in domain model)
-    try testing.expect(std.mem.indexOf(u8, json_output, "pending") == null);
+    try testing.expect(std.mem.find(u8, json_output, "pending") == null);
 }
 
 test "JsonSerializer validate JSON output is parseable" {
@@ -309,9 +309,9 @@ test "JsonSerializer string escaping" {
     defer allocator.free(json_output);
 
     // Validate escaping
-    try testing.expect(std.mem.indexOf(u8, json_output, "\\n") != null);
-    try testing.expect(std.mem.indexOf(u8, json_output, "\\t") != null);
-    try testing.expect(std.mem.indexOf(u8, json_output, "\\\"") != null);
+    try testing.expect(std.mem.find(u8, json_output, "\\n") != null);
+    try testing.expect(std.mem.find(u8, json_output, "\\t") != null);
+    try testing.expect(std.mem.find(u8, json_output, "\\\"") != null);
 
     // Validate JSON is still parseable
     const is_valid = try std.json.validate(allocator, json_output);

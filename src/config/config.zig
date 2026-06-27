@@ -547,7 +547,7 @@ pub const ConfigParser = struct {
             // Parse array of tables [[streams]]
             if (trimmed.len >= 4 and std.mem.startsWith(u8, trimmed, "[[")) {
                 // Find closing ]] (may have comments after)
-                const closing_bracket = std.mem.indexOf(u8, trimmed, "]]") orelse continue;
+                const closing_bracket = std.mem.find(u8, trimmed, "]]") orelse continue;
                 const array_section = trimmed[2..closing_bracket];
 
                 if (std.mem.eql(u8, array_section, "streams")) {
@@ -577,9 +577,9 @@ pub const ConfigParser = struct {
             if (trimmed[0] == '[' and trimmed[trimmed.len - 1] == ']') {
                 const section_name = trimmed[1 .. trimmed.len - 1];
 
-                if (std.mem.indexOf(u8, section_name, ".")) |dot_pos| {
-                    current_section = section_name[0..dot_pos];
-                    current_subsection = section_name[dot_pos + 1 ..];
+                if (std.mem.cut(u8, section_name, ".")) |parts| {
+                    current_section = parts[0];
+                    current_subsection = parts[1];
                 } else {
                     current_section = section_name;
                     current_subsection = null;
@@ -588,9 +588,9 @@ pub const ConfigParser = struct {
             }
 
             // Parse key-value pairs
-            if (std.mem.indexOf(u8, trimmed, "=")) |eq_pos| {
-                const key = std.mem.trim(u8, trimmed[0..eq_pos], " \t");
-                const value_str = std.mem.trim(u8, trimmed[eq_pos + 1 ..], " \t");
+            if (std.mem.cut(u8, trimmed, "=")) |kv| {
+                const key = std.mem.trim(u8, kv[0], " \t");
+                const value_str = std.mem.trim(u8, kv[1], " \t");
 
                 const current_stream = if (current_stream_index) |idx| &streams_list.items[idx] else null;
                 try self.setConfigValue(&result, current_section, current_subsection, key, value_str, current_stream);
@@ -765,9 +765,8 @@ pub const ConfigParser = struct {
 
     fn parseStringArray(self: *ConfigParser, value_str: []const u8) ![]const []const u8 {
         // Remove comments first
-        const comment_pos = std.mem.indexOf(u8, value_str, "#");
-        const value_without_comment = if (comment_pos) |pos|
-            std.mem.trim(u8, value_str[0..pos], " \t")
+        const value_without_comment = if (std.mem.cut(u8, value_str, "#")) |parts|
+            std.mem.trim(u8, parts[0], " \t")
         else
             value_str;
 
@@ -846,9 +845,8 @@ pub const ConfigParser = struct {
 
     fn parseStringValue(self: *ConfigParser, target: anytype, value_str: []const u8) ![]const u8 {
         // Remove comments first
-        const comment_pos = std.mem.indexOf(u8, value_str, "#");
-        const value_without_comment = if (comment_pos) |pos|
-            std.mem.trim(u8, value_str[0..pos], " \t")
+        const value_without_comment = if (std.mem.cut(u8, value_str, "#")) |parts|
+            std.mem.trim(u8, parts[0], " \t")
         else
             value_str;
 
