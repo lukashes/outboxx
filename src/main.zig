@@ -94,7 +94,7 @@ fn run(init: std.process.Init) !void {
     printStatus("Using publication: {s}\n", .{postgres.publication_name});
     printStatus("Press Ctrl+C to stop gracefully.\n\n", .{});
 
-    try processor.startStreaming(&shutdown_requested);
+    try processor.startStreaming(init.io, &shutdown_requested);
 }
 
 /// Print user-facing messages to stdout

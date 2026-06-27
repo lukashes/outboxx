@@ -41,6 +41,7 @@ pub fn matchStreams(allocator: std.mem.Allocator, streams: []const Stream, table
 }
 
 fn flushCommitWorker(
+    io: std.Io,
     producer: *KafkaProducer,
     source: *PostgresSource,
     pending_lsn: *std.atomic.Value(u64),
@@ -50,11 +51,10 @@ fn flushCommitWorker(
     const flush_interval_iterations: u32 = @intCast(constants.CDC.KAFKA_FLUSH_INTERVAL_SEC);
 
     while (!stop_signal.load(.monotonic)) {
-        // Zig 0.16 removed std.Thread.sleep (sleeping now goes through the Io
-        // interface); use libc nanosleep to avoid threading `io` into the flush
-        // thread. TODO(phase 6): replace with io.sleep once `io` is threaded.
-        var sleep_req: std.c.timespec = .{ .sec = 1, .nsec = 0 };
-        _ = std.c.nanosleep(&sleep_req, null);
+        // Sleep 1s between flush checks. Cancellation is unused here — the loop
+        // re-checks stop_signal each tick (and this runs on a raw thread, where
+        // Io cancellation is a no-op anyway).
+        io.sleep(.fromSeconds(1), .awake) catch {};
         iterations += 1;
 
         if (iterations < flush_interval_iterations) {
@@ -219,10 +219,11 @@ pub const Processor = struct {
         return try allocator.dupe(u8, change_event.meta.resource);
     }
 
-    pub fn startStreaming(self: *Self, stop_signal: *std.atomic.Value(bool)) !void {
+    pub fn startStreaming(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !void {
         const producer = &(self.kafka_producer orelse return ProcessorError.ConnectionFailed);
 
         const flush_thread = try std.Thread.spawn(.{}, flushCommitWorker, .{
+            io,
             producer,
             &self.source,
             &self.pending_lsn,
