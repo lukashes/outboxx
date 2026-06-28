@@ -142,7 +142,14 @@ while read -r bench_name; do
             ignored)   color="$CYAN";  icon="~" ;;
             *)         color="$NC";    icon="→" ;;
         esac
-        alloc_change=$(echo "scale=2; (($current_allocs - $baseline_allocs) * 100) / $baseline_allocs" | bc 2>/dev/null || echo "0")
+        # Guard against a zero baseline: bc's divide-by-zero behaviour differs
+        # across platforms (GNU bc prints nothing and still exits 0), which
+        # would feed printf an empty string and abort the script under set -e.
+        if [ "$baseline_allocs" -ne 0 ]; then
+            alloc_change=$(echo "scale=2; (($current_allocs - $baseline_allocs) * 100) / $baseline_allocs" | bc)
+        else
+            alloc_change=0
+        fi
         printf "${color}%-40s${NC} " "$bench_name"
         printf "Time: %8.2fμs → %8.2fμs (%+6.1f%%) %s\n" "$baseline_time" "$current_time" "$time_change" "$icon"
         printf "                                         Allocs: %5d → %5d (%+6.1f%%)\n" "$baseline_allocs" "$current_allocs" "$alloc_change"
