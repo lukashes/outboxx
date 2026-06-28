@@ -13,6 +13,10 @@ if [ "${1:-}" = "--markdown" ]; then
     MODE="markdown"
 fi
 
+# What the baseline represents, shown in the markdown report header. Defaults to
+# the committed baseline; the CI workflow overrides it (base branch, same runner).
+BASELINE_LABEL="${BASELINE_LABEL:-the committed baseline (\`tests/benchmarks/baseline/components.json\`)}"
+
 # Colors (terminal mode only)
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -67,7 +71,7 @@ current_runs=$(jq -r '.runs // "?"' "$CURRENT_FILE")
 if [ "$MODE" = "markdown" ]; then
     echo "## 📊 Benchmark Results"
     echo ""
-    echo "Current run is the **minimum over ${current_runs} passes**, compared against the committed baseline (\`tests/benchmarks/baseline/components.json\`)."
+    echo "Current run is the **minimum over ${current_runs} passes**, compared against ${BASELINE_LABEL}."
     echo ""
     echo "| Benchmark | Baseline | Current | Δ Time | Allocs | Status |"
     echo "|---|--:|--:|--:|--:|:--:|"

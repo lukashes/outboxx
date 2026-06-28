@@ -1,4 +1,4 @@
-.PHONY: help build run test test-integration test-unit clean fmt lint dev install-deps check-deps env-up env-down env-restart env-logs env-status coverage load-up load-down load-switch load-test-steady load-test-burst load-test-ramp load-test-mixed load-status bench bench-compare bench-save bench-ci
+.PHONY: help build run test test-integration test-unit clean fmt lint dev install-deps check-deps env-up env-down env-restart env-logs env-status coverage load-up load-down load-switch load-test-steady load-test-burst load-test-ramp load-test-mixed load-status bench bench-collect bench-report bench-compare bench-save bench-ci
 
 # Use direnv to auto-load Nix environment for local development
 # This allows commands to work without 'nix develop' wrapper
@@ -226,35 +226,38 @@ bench:
 	@echo ""
 	@./zig-out/bin/message_processor_bench
 
-# Benchmark comparison (local development)
-bench-compare:
+# Build the benchmark binaries and collect one set of results into
+# tests/benchmarks/results/current.json (min of BENCH_RUNS passes). This is the
+# reusable unit: the CI workflow runs it once on the PR and once on the base
+# branch (in a separate worktree) to compare both on identical hardware.
+bench-collect:
 	@echo "Building benchmarks..."
 	@zig build bench >/dev/null 2>&1
 	@echo "Collecting benchmark results..."
 	@tests/benchmarks/scripts/collect_results.sh
-	@echo ""
-	@tests/benchmarks/scripts/compare_results.sh
 
-# CI entrypoint: run the suite (min of BENCH_RUNS passes) against the committed
-# baseline and emit both a terminal report (for the Actions log) and a markdown
-# report at BENCH_REPORT (posted as a PR comment). Informational only, never
-# fails the build.
+# Compare the collected results against the baseline, writing a terminal report
+# (for the Actions log) and a markdown report at BENCH_REPORT (for a PR
+# comment). Reads tests/benchmarks/{baseline/components.json,results/current.json}
+# as prepared by the caller. Informational only, never fails the build.
+# BASELINE_LABEL describes what the baseline represents in the report header.
 BENCH_REPORT ?= tests/benchmarks/results/benchmark-comment.md
-bench-ci:
-	@echo "Building benchmarks..."
-	@zig build bench >/dev/null 2>&1
-	@echo "Collecting benchmark results..."
-	@tests/benchmarks/scripts/collect_results.sh
-	@echo ""
+export BASELINE_LABEL ?=
+bench-report:
 	@tests/benchmarks/scripts/compare_results.sh
 	@tests/benchmarks/scripts/compare_results.sh --markdown > "$(BENCH_REPORT)"
 	@echo "Markdown report written to $(BENCH_REPORT)"
 
-bench-save:
-	@echo "Building benchmarks..."
-	@zig build bench >/dev/null 2>&1
-	@echo "Collecting benchmark results..."
-	@tests/benchmarks/scripts/collect_results.sh
+# Local development: collect + terminal comparison against the committed baseline.
+bench-compare: bench-collect
+	@echo ""
+	@tests/benchmarks/scripts/compare_results.sh
+
+# CI entrypoint: collect + terminal & markdown report.
+bench-ci: bench-collect bench-report
+
+# Save the current results as the new committed baseline.
+bench-save: bench-collect
 	@echo ""
 	@echo "Updating baseline from current results..."
 	@cp tests/benchmarks/results/current.json tests/benchmarks/baseline/components.json

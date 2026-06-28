@@ -21,9 +21,20 @@ jobs:
       contents: read
       pull-requests: write
 
+    # GitHub-hosted runners don't guarantee identical hardware between runs, so
+    # absolute timings aren't comparable across runs and a committed wall-clock
+    # baseline is meaningless on CI. Instead we benchmark BOTH the PR and its
+    # base branch on this same runner and compare the delta — the hardware
+    # cancels out. On one runner intra-run jitter is the only noise left, so a
+    # couple of passes (the minimum is kept) is enough.
+    env:
+      BENCH_RUNS: 2
+
     steps:
-      - name: Checkout code
+      - name: Checkout PR
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # need the base commit to benchmark it on the same runner
 
       - name: Install Nix
         uses: cachix/install-nix-action@v31
@@ -35,18 +46,36 @@ jobs:
         with:
           name: devenv
 
-      # Run the suite several times and keep the minimum per benchmark. CI
-      # runners are noisy (one-sided: scheduling/cold cache only add time), so
-      # the min over N passes is far more stable than a single run. The result
-      # is compared against the committed baseline; the comparison is purely
-      # informational and never fails the build.
-      - name: Run benchmarks and compare with baseline
-        run: make bench-ci BENCH_RUNS=3 BENCH_REPORT=tests/benchmarks/results/benchmark-comment.md
+      - name: Benchmark PR head
+        run: |
+          make bench-collect
+          cp tests/benchmarks/results/current.json "$RUNNER_TEMP/pr.json"
 
-      # Only runs if the step above succeeded, so the report file is present.
+      # Build and run the base branch in a separate worktree on the same runner.
+      - name: Benchmark base branch
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git worktree add "$RUNNER_TEMP/base" "$BASE_SHA"
+          make -C "$RUNNER_TEMP/base" bench-collect
+          cp "$RUNNER_TEMP/base/tests/benchmarks/results/current.json" "$RUNNER_TEMP/base.json"
+
+      # Compare PR (current) against base (baseline) and render the report.
+      # Informational only — this step never fails the build.
+      - name: Compare PR against base
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          cp "$RUNNER_TEMP/base.json" tests/benchmarks/baseline/components.json
+          cp "$RUNNER_TEMP/pr.json" tests/benchmarks/results/current.json
+          make bench-report \
+            BENCH_REPORT="$RUNNER_TEMP/benchmark-comment.md" \
+            BASELINE_LABEL="the base branch (\`$BASE_REF\` @ \`${BASE_SHA:0:7}\`), built on the same runner"
+
       - name: Post benchmark comment on PR
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           number: ${{ github.event.pull_request.number }}
-          path: tests/benchmarks/results/benchmark-comment.md
+          path: ${{ runner.temp }}/benchmark-comment.md
           header: benchmark-results
