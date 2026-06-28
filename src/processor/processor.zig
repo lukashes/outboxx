@@ -45,16 +45,17 @@ fn flushCommitWorker(
     producer: *KafkaProducer,
     source: *PostgresSource,
     pending_lsn: *std.atomic.Value(u64),
-    stop_signal: *std.atomic.Value(bool),
 ) void {
     var iterations: u32 = 0;
     const flush_interval_iterations: u32 = @intCast(constants.CDC.KAFKA_FLUSH_INTERVAL_SEC);
 
-    while (!stop_signal.load(.monotonic)) {
-        // Sleep 1s between flush checks. Cancellation is unused here — the loop
-        // re-checks stop_signal each tick (and this runs on a raw thread, where
-        // Io cancellation is a no-op anyway).
-        io.sleep(.fromSeconds(1), .awake) catch {};
+    while (true) {
+        // Sleep 1s between flush checks. This is the worker's only cancelation
+        // point: when startStreaming cancels the future on shutdown, the next
+        // sleep returns error.Canceled, we break, and fall through to the final
+        // flush/commit below. Per the Io model, only this first cancelation
+        // point re-signals, so the final-flush Io calls run uninterrupted.
+        io.sleep(.fromSeconds(1), .awake) catch break;
         iterations += 1;
 
         if (iterations < flush_interval_iterations) {
@@ -222,13 +223,21 @@ pub const Processor = struct {
     pub fn startStreaming(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !void {
         const producer = &(self.kafka_producer orelse return ProcessorError.ConnectionFailed);
 
-        const flush_thread = try std.Thread.spawn(.{}, flushCommitWorker, .{
+        // Run the flush/commit loop as a background Io task. `concurrent` (not
+        // `async`): the worker must make progress alongside the receive loop,
+        // and `async` may legally defer the call until `await` on a stackful
+        // single-threaded Io. Returns error.ConcurrencyUnavailable if the Io
+        // implementation can't provide concurrency — propagated to the caller.
+        var flush_future = try io.concurrent(flushCommitWorker, .{
             io,
             producer,
             &self.source,
             &self.pending_lsn,
-            stop_signal,
         });
+        // Stop the worker on every exit path (graceful shutdown or a receive
+        // error): cancel both requests cancellation — waking the worker's sleep
+        // with error.Canceled so it runs its final flush/commit — and awaits it.
+        defer flush_future.cancel(io);
 
         while (!stop_signal.load(.monotonic)) {
             var batch_arena = std.heap.ArenaAllocator.init(self.allocator);
@@ -238,8 +247,6 @@ pub const Processor = struct {
 
             try self.processChangesToKafka(io, batch_alloc, constants.CDC.BATCH_SIZE);
         }
-
-        flush_thread.join();
 
         std.log.info("Streaming stopped gracefully", .{});
     }
