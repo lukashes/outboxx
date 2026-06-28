@@ -127,6 +127,7 @@ fn setupSignalHandlers() void {
 fn printBanner() void {
     printStatus("{s} - {s}\n", .{ constants.APP_NAME, constants.DESCRIPTION });
     printStatus("Version: {s}\n", .{constants.VERSION});
+    printStatus("Zig: {s}\n", .{builtin.zig_version_string});
     printStatus("Build: {s}\n\n", .{@tagName(constants.BUILD_MODE)});
 }
 
