@@ -63,6 +63,21 @@ get_threshold() {
     fi
 }
 
+# Percentage change of current vs baseline. Multiply before dividing so bc's
+# fixed scale keeps precision for small deltas (otherwise e.g. +0.7% truncates
+# to +0.0%). Returns 0 when the baseline is 0: there's no meaningful ratio, and
+# it avoids a platform-dependent bc divide-by-zero that produces an empty string
+# and aborts the script under set -e (GNU bc) or fails the assignment (BSD bc).
+# The bc comparison handles both float times and integer allocation counts.
+pct_change() {
+    local current=$1 baseline=$2
+    if [ "$(echo "$baseline == 0" | bc -l)" = "1" ]; then
+        echo "0"
+    else
+        echo "scale=2; (($current - $baseline) * 100) / $baseline" | bc
+    fi
+}
+
 baseline_ts=$(jq -r '.timestamp' "$BASELINE_FILE")
 current_ts=$(jq -r '.timestamp' "$CURRENT_FILE")
 current_runs=$(jq -r '.runs // "?"' "$CURRENT_FILE")
@@ -92,13 +107,15 @@ ignored=0
 
 # Compare each benchmark (use process substitution to preserve variables)
 while read -r bench_name; do
-    # Extract baseline metrics
-    baseline_time=$(jq -r ".benchmarks[\"$bench_name\"].time_avg_us" "$BASELINE_FILE")
-    baseline_allocs=$(jq -r ".benchmarks[\"$bench_name\"].allocations" "$BASELINE_FILE")
+    # Extract baseline metrics (default missing/null fields to 0 so the
+    # arithmetic below never sees the string "null").
+    baseline_time=$(jq -r ".benchmarks[\"$bench_name\"].time_avg_us // 0" "$BASELINE_FILE")
+    baseline_allocs=$(jq -r ".benchmarks[\"$bench_name\"].allocations // 0" "$BASELINE_FILE")
 
-    # Extract current metrics
+    # Extract current metrics. A missing time means the benchmark is absent from
+    # the current results (handled below); a missing alloc count defaults to 0.
     current_time=$(jq -r ".benchmarks[\"$bench_name\"].time_avg_us // \"N/A\"" "$CURRENT_FILE")
-    current_allocs=$(jq -r ".benchmarks[\"$bench_name\"].allocations // \"N/A\"" "$CURRENT_FILE")
+    current_allocs=$(jq -r ".benchmarks[\"$bench_name\"].allocations // 0" "$CURRENT_FILE")
 
     if [ "$current_time" = "N/A" ]; then
         if [ "$MODE" = "markdown" ]; then
@@ -109,9 +126,7 @@ while read -r bench_name; do
         continue
     fi
 
-    # Percentage change. Multiply before dividing so bc's fixed scale keeps
-    # precision for small deltas (otherwise e.g. +0.7% truncates to +0.0%).
-    time_change=$(echo "scale=2; (($current_time - $baseline_time) * 100) / $baseline_time" | bc)
+    time_change=$(pct_change "$current_time" "$baseline_time")
 
     # Classify the change against the time-dependent threshold.
     threshold=$(get_threshold "$baseline_time")
@@ -146,14 +161,7 @@ while read -r bench_name; do
             ignored)   color="$CYAN";  icon="~" ;;
             *)         color="$NC";    icon="→" ;;
         esac
-        # Guard against a zero baseline: bc's divide-by-zero behaviour differs
-        # across platforms (GNU bc prints nothing and still exits 0), which
-        # would feed printf an empty string and abort the script under set -e.
-        if [ "$baseline_allocs" -ne 0 ]; then
-            alloc_change=$(echo "scale=2; (($current_allocs - $baseline_allocs) * 100) / $baseline_allocs" | bc)
-        else
-            alloc_change=0
-        fi
+        alloc_change=$(pct_change "$current_allocs" "$baseline_allocs")
         printf "${color}%-40s${NC} " "$bench_name"
         printf "Time: %8.2fμs → %8.2fμs (%+6.1f%%) %s\n" "$baseline_time" "$current_time" "$time_change" "$icon"
         printf "                                         Allocs: %5d → %5d (%+6.1f%%)\n" "$baseline_allocs" "$current_allocs" "$alloc_change"
