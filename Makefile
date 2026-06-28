@@ -5,6 +5,10 @@
 SHELL := $(CURDIR)/.make-shell
 .SHELLFLAGS :=
 
+# Number of passes for bench-save / bench-compare (the minimum time/run is
+# kept). Override e.g. `make bench-save BENCH_RUNS=9`.
+export BENCH_RUNS ?= 5
+
 # Helper function for running commands with spinner
 # Captures both stdout and stderr, shows full output on failure
 define run_with_spinner
@@ -61,8 +65,8 @@ help:
 	@echo ""
 	@echo "Component Benchmarks:"
 	@echo "  make bench         - Run component benchmarks (view results in terminal)"
-	@echo "  make bench-compare - Compare current run with baseline"
-	@echo "  make bench-save    - Save current results as new baseline"
+	@echo "  make bench-compare - Compare current run with baseline (min of BENCH_RUNS passes)"
+	@echo "  make bench-save    - Save current results as new baseline (BENCH_RUNS=N, default 5)"
 	@echo ""
 	@echo "Dependencies:"
 	@echo "  make check-deps    - Check system dependencies"
