@@ -52,12 +52,16 @@ jobs:
           cp tests/benchmarks/results/current.json "$RUNNER_TEMP/pr.json"
 
       # Build and run the base branch in a separate worktree on the same runner.
+      # Drive it with version-stable primitives (zig build + the collect script)
+      # rather than this PR's make targets — the base checkout predates them.
+      # BENCH_RUNS is inherited from the job env by the collect script.
       - name: Benchmark base branch
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           git worktree add "$RUNNER_TEMP/base" "$BASE_SHA"
-          make -C "$RUNNER_TEMP/base" bench-collect
+          ( cd "$RUNNER_TEMP/base" \
+            && nix develop --command bash -c 'zig build bench && tests/benchmarks/scripts/collect_results.sh' )
           cp "$RUNNER_TEMP/base/tests/benchmarks/results/current.json" "$RUNNER_TEMP/base.json"
 
       # Compare PR (current) against base (baseline) and render the report.
