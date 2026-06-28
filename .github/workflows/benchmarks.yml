@@ -41,7 +41,7 @@ jobs:
       # is compared against the committed baseline; the comparison is purely
       # informational and never fails the build.
       - name: Run benchmarks and compare with baseline
-        run: make bench-ci BENCH_RUNS=7 BENCH_REPORT=tests/benchmarks/results/benchmark-comment.md
+        run: make bench-ci BENCH_RUNS=3 BENCH_REPORT=tests/benchmarks/results/benchmark-comment.md
 
       # Only runs if the step above succeeded, so the report file is present.
       - name: Post benchmark comment on PR
