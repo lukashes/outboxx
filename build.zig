@@ -45,9 +45,8 @@ pub fn build(b: *std.Build) void {
     postgres_source_module.addImport("domain", domain_module);
     postgres_source_module.addImport("constants", constants_module);
 
-    // Shared librdkafka bindings via build-system C translation (Zig 0.16).
-    // One translation, imported as "c" by every module that uses librdkafka,
-    // so the generated C types are identical across modules.
+    // Shared librdkafka bindings: one translate-c, imported as "c" by every
+    // module that uses librdkafka, so the generated C types match across modules.
     const c_rdkafka = b.addTranslateC(.{
         .root_source_file = b.path("src/c/rdkafka.h"),
         .target = target,
@@ -56,8 +55,7 @@ pub fn build(b: *std.Build) void {
     addCHeadersT(b, c_rdkafka);
     const c_rdkafka_module = c_rdkafka.createModule();
 
-    // Shared libpq bindings via build-system C translation (Zig 0.16),
-    // imported as "c" by every module that uses libpq.
+    // Shared libpq bindings, imported as "c" by every module that uses libpq.
     const c_pq = b.addTranslateC(.{
         .root_source_file = b.path("src/c/pq.h"),
         .target = target,
@@ -376,8 +374,7 @@ pub fn build(b: *std.Build) void {
     const fmt_fix_step = b.step("fmt", "Format code");
     fmt_fix_step.dependOn(&fmt.step);
 
-    // Clean build artifacts
-    // Note: Zig 0.16 removed Build.addRemoveDirTree; use a system command instead.
+    // Clean build artifacts. No std build step for a recursive delete, so shell out.
     const clean_step = b.step("clean", "Clean build artifacts");
     const remove_artifacts = b.addSystemCommand(&.{ "rm", "-rf", "zig-out", ".zig-cache" });
     clean_step.dependOn(&remove_artifacts.step);
@@ -506,9 +503,8 @@ pub fn build(b: *std.Build) void {
     bench_step.dependOn(&install_message_processor_bench.step);
 }
 
-/// Add C include paths (libpq / librdkafka headers) to a translate-c step, so
-/// the C translation can locate the system headers. Paths come from
-/// C_INCLUDE_PATH (set by the Nix dev shell) with a system fallback.
+/// Point a translate-c step at the system headers, from C_INCLUDE_PATH (set by
+/// the Nix dev shell) with a system fallback.
 fn addCHeadersT(b: *std.Build, translate_c: *std.Build.Step.TranslateC) void {
     if (b.graph.environ_map.get("C_INCLUDE_PATH")) |include_path| {
         var it = std.mem.splitScalar(u8, include_path, ':');

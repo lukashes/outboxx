@@ -1,5 +1,5 @@
-/* Wrapper header for translate-c (Zig 0.16 build-system C translation).
- * Shared across all modules that use librdkafka so the generated C types
- * are identical everywhere. Includes the mock API used by benchmarks. */
+/* Wrapper header for translate-c, shared across all modules that use librdkafka
+ * so the generated C types are identical everywhere. Includes the mock API used
+ * by benchmarks. */
 #include <librdkafka/rdkafka.h>
 #include <librdkafka/rdkafka_mock.h>

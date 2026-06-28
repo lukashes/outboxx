@@ -15,9 +15,8 @@ pub const CliError = error{
 
 var shutdown_requested = std.atomic.Value(bool).init(false);
 
-// Writing to stdout requires an Io instance in Zig 0.16. Stored here so the
-// printStatus/printBanner helpers can stay parameterless for now.
-// TODO(phase 6): thread `io` through an explicit app context instead of a global.
+// Stdout writes need an Io; kept here so printStatus/printBanner stay
+// parameterless. TODO: thread `io` through an explicit app context instead.
 var stdout_io: std.Io = undefined;
 
 pub fn main(init: std.process.Init) void {

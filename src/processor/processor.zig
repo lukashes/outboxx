@@ -50,11 +50,8 @@ fn flushCommitWorker(
     const flush_interval_iterations: u32 = @intCast(constants.CDC.KAFKA_FLUSH_INTERVAL_SEC);
 
     while (true) {
-        // Sleep 1s between flush checks. This is the worker's only cancelation
-        // point: when startStreaming cancels the future on shutdown, the next
-        // sleep returns error.Canceled, we break, and fall through to the final
-        // flush/commit below. Per the Io model, only this first cancelation
-        // point re-signals, so the final-flush Io calls run uninterrupted.
+        // The worker's only cancelation point: on shutdown the future is
+        // canceled, this returns error.Canceled, and we break to the final flush.
         io.sleep(.fromSeconds(1), .awake) catch break;
         iterations += 1;
 
@@ -223,20 +220,15 @@ pub const Processor = struct {
     pub fn startStreaming(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !void {
         const producer = &(self.kafka_producer orelse return ProcessorError.ConnectionFailed);
 
-        // Run the flush/commit loop as a background Io task. `concurrent` (not
-        // `async`): the worker must make progress alongside the receive loop,
-        // and `async` may legally defer the call until `await` on a stackful
-        // single-threaded Io. Returns error.ConcurrencyUnavailable if the Io
-        // implementation can't provide concurrency — propagated to the caller.
+        // Background flush/commit loop. `concurrent` not `async`: it must run
+        // alongside the receive loop, and `async` may defer the call until await.
         var flush_future = try io.concurrent(flushCommitWorker, .{
             io,
             producer,
             &self.source,
             &self.pending_lsn,
         });
-        // Stop the worker on every exit path (graceful shutdown or a receive
-        // error): cancel both requests cancellation — waking the worker's sleep
-        // with error.Canceled so it runs its final flush/commit — and awaits it.
+        // Cancel on any exit path: wakes the worker for its final flush, and awaits.
         defer flush_future.cancel(io);
 
         while (!stop_signal.load(.monotonic)) {

@@ -9,26 +9,20 @@ const StreamSink = config_module.StreamSink;
 // so E2E tests use the same C types.
 pub const c = @import("c");
 
-// --- Time / sleep helpers ---
-// Zig 0.16 routes time and sleep through the Io interface. These thin wrappers
-// take an Io (std.testing.io in tests) so the tests stay free of libc time.
-
-/// Monotonic milliseconds (for measuring elapsed time / timeouts).
+// Time/sleep over the Io clock. nowMillis is monotonic (.awake) for measuring
+// elapsed time; nowSeconds/nowMicros are wall-clock (.real) for unique names.
 pub fn nowMillis(io: std.Io) i64 {
     return std.Io.Timestamp.now(io, .awake).toMilliseconds();
 }
 
-/// Wall-clock seconds since the Unix epoch (for unique names).
 pub fn nowSeconds(io: std.Io) i64 {
     return std.Io.Timestamp.now(io, .real).toSeconds();
 }
 
-/// Wall-clock microseconds since the Unix epoch (for unique names / PRNG seed).
 pub fn nowMicros(io: std.Io) i64 {
     return std.Io.Timestamp.now(io, .real).toMicroseconds();
 }
 
-/// Sleep for the given number of nanoseconds.
 pub fn sleepNs(io: std.Io, ns: u64) void {
     io.sleep(.fromNanoseconds(@intCast(ns)), .awake) catch {};
 }
@@ -45,7 +39,6 @@ pub fn formatSqlZ(allocator: std.mem.Allocator, comptime fmt: []const u8, args: 
 /// Get PostgreSQL connection string for tests
 /// Uses POSTGRES_PASSWORD env var or defaults to "password"
 pub fn getTestConnectionString(allocator: std.mem.Allocator) ![]const u8 {
-    // std.process.getEnvVarOwned was removed in Zig 0.16; use libc getenv.
     const password: []const u8 = if (std.c.getenv("POSTGRES_PASSWORD")) |p|
         std.mem.span(p)
     else

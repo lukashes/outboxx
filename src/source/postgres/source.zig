@@ -276,8 +276,7 @@ pub const PostgresSource = struct {
 
         var last_confirmed_lsn: u64 = self.last_lsn; // Track LSN locally
 
-        // Monotonic deadline via the Io clock (`.awake` — not affected by
-        // wall-clock jumps, unlike the previous gettimeofday-based timer).
+        // Monotonic deadline (`.awake`), so a wall-clock jump can't skew the wait.
         const deadline = std.Io.Timestamp.now(io, .awake).addDuration(.fromMilliseconds(wait_time_ms));
 
         while (changes.items.len < limit and std.Io.Timestamp.now(io, .awake).nanoseconds < deadline.nanoseconds) {
