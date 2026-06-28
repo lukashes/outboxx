@@ -53,14 +53,19 @@ timing_lines_of() {
     grep -E '^[A-Za-z].*[0-9]+(\.[0-9]+)?(us|ns)' "$1" | grep -v '\[MEMORY\]'
 }
 
-# First "<num>us|ns" on a line -> microseconds.
+# Average time/run -> microseconds: take the token before "±" and convert its
+# unit (zbench scales ns/us/ms/s by magnitude).
 time_us_of() {
     local twu unit val
-    twu=$(echo "$1" | grep -oE '[0-9]+(\.[0-9]+)?(us|ns)' | head -1)
-    unit=$(echo "$twu" | grep -oE '(us|ns)')
-    val=$(echo "$twu" | sed 's/us//;s/ns//')
+    twu=$(echo "$1" | grep -oE '[0-9]+(\.[0-9]+)?(ns|us|ms|s) *±' | head -1 | grep -oE '[0-9]+(\.[0-9]+)?(ns|us|ms|s)')
+    unit=$(echo "$twu" | grep -oE '(ns|us|ms|s)$')
+    val=$(echo "$twu" | sed -E 's/(ns|us|ms|s)$//')
     val=${val:-0}
-    [ "$unit" = "ns" ] && val=$(echo "scale=4; $val / 1000" | bc)
+    case "$unit" in
+        ns) val=$(echo "scale=6; $val / 1000" | bc) ;;
+        ms) val=$(echo "scale=6; $val * 1000" | bc) ;;
+        s) val=$(echo "scale=6; $val * 1000000" | bc) ;;
+    esac
     echo "$val"
 }
 
