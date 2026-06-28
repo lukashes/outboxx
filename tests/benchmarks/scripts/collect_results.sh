@@ -6,124 +6,113 @@ BENCH_DIR="$(dirname "$SCRIPT_DIR")"
 RESULTS_DIR="$BENCH_DIR/results"
 BIN_DIR="$BENCH_DIR/../../zig-out/bin"
 
+# Number of full passes over the whole suite. Each benchmark's time/run is then
+# reduced to its *minimum* across passes (see below). Override:
+#   BENCH_RUNS=9 make bench-save
+BENCH_RUNS="${BENCH_RUNS:-5}"
+
+BENCHES=(serializer_bench decoder_bench match_streams_bench partition_key_bench kafka_bench message_processor_bench)
+
 # Colors
-RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-echo "Collecting benchmark results..."
+echo "Collecting benchmark results (${BENCH_RUNS} passes over the suite, keeping min)..."
 echo ""
 
-# Create results directory if it doesn't exist
 mkdir -p "$RESULTS_DIR"
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
 
-# Output file
+# --- Run the whole suite BENCH_RUNS times -----------------------------------
+# Running the full suite each pass (rather than one binary N times in a row)
+# keeps cache conditions realistic between repeated runs of the same binary.
+for ((pass = 1; pass <= BENCH_RUNS; pass++)); do
+    echo -e "${YELLOW}Pass ${pass}/${BENCH_RUNS}...${NC}"
+    for bench in "${BENCHES[@]}"; do
+        "$BIN_DIR/$bench" 2>&1 | sed 's/\x1b\[[0-9;]*m//g' > "$TMP/${bench}.${pass}"
+    done
+done
+echo ""
+
 OUTPUT_FILE="$RESULTS_DIR/current.json"
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-# Start JSON output
 cat > "$OUTPUT_FILE" << EOF
 {
   "timestamp": "$TIMESTAMP",
+  "runs": $BENCH_RUNS,
+  "aggregate": "min",
   "benchmarks": {
 EOF
 
 FIRST=true
 
-# Function to parse all benchmarks from a single file
-parse_benchmark_file() {
-    local bench_file="$1"
+# Timing lines (one per sub-benchmark, in order) from a captured-output file.
+timing_lines_of() {
+    grep -E '^[A-Za-z].*[0-9]+(\.[0-9]+)?(us|ns)' "$1" | grep -v '\[MEMORY\]'
+}
 
-    echo -e "${YELLOW}Running $bench_file...${NC}"
+# First "<num>us|ns" on a line -> microseconds.
+time_us_of() {
+    local twu unit val
+    twu=$(echo "$1" | grep -oE '[0-9]+(\.[0-9]+)?(us|ns)' | head -1)
+    unit=$(echo "$twu" | grep -oE '(us|ns)')
+    val=$(echo "$twu" | sed 's/us//;s/ns//')
+    val=${val:-0}
+    [ "$unit" = "ns" ] && val=$(echo "scale=4; $val / 1000" | bc)
+    echo "$val"
+}
 
-    # Run benchmark and capture output, strip ANSI color codes
-    local output=$("$BIN_DIR/$bench_file" 2>&1 | sed 's/\x1b\[[0-9;]*m//g')
+# --- Aggregate: minimum time/run per sub-benchmark across passes -------------
+# Why min: benchmark noise is one-sided (scheduling / cold cache / load only
+# *add* time), so the minimum is the cleanest, least-noisy sample — far more
+# stable than the average for a regression baseline. Memory and allocation
+# counts are deterministic, so they come from the first pass.
+for bench in "${BENCHES[@]}"; do
+    local_first="$TMP/${bench}.1"
 
-    # Extract full benchmark names from test runner lines (format: "N/M file.test.benchmark NAME...")
-    local bench_names=$(echo "$output" | grep "\.test\.benchmark " | sed -E 's/^[0-9]+\/[0-9]+ [^ ]+\.test\.benchmark ([^.]+)\.\.\..*/\1/')
+    bench_names=$(grep "\.test\.benchmark " "$local_first" | sed -E 's/^[0-9]+\/[0-9]+ [^ ]+\.test\.benchmark ([^.]+)\.\.\..*/\1/')
+    allocations_list=$(grep "Allocations per operation:" "$local_first" | grep -oE '[0-9]+$')
+    memory_lines=$(grep '\[MEMORY\]' "$local_first" || true)
 
-    # Extract "Allocations per operation:" values
-    local allocations_list=$(echo "$output" | grep "Allocations per operation:" | grep -oE '[0-9]+$')
-
-    # Extract timing and memory lines (non-[MEMORY] lines with time units)
-    local timing_lines=$(echo "$output" | grep -E '^[A-Za-z].*[0-9]+(\.[0-9]+)?(us|ns)' | grep -v '\[MEMORY\]')
-    local memory_lines=$(echo "$output" | grep '\[MEMORY\]')
-
-    # Process each benchmark
-    local bench_index=0
+    bench_index=0
     while IFS= read -r bench_name; do
-        if [ -z "$bench_name" ]; then
-            continue
-        fi
-
+        [ -z "$bench_name" ] && continue
         bench_index=$((bench_index + 1))
 
-        # Get corresponding timing line
-        local time_line=$(echo "$timing_lines" | sed -n "${bench_index}p")
+        min_time=""
+        for ((pass = 1; pass <= BENCH_RUNS; pass++)); do
+            time_line=$(timing_lines_of "$TMP/${bench}.${pass}" | sed -n "${bench_index}p")
+            [ -z "$time_line" ] && continue
+            t=$(time_us_of "$time_line")
+            if [ -z "$min_time" ] || (( $(echo "$t < $min_time" | bc -l) )); then
+                min_time=$t
+            fi
+        done
+        min_time=${min_time:-0}
 
-        # Extract time average (first number with us/ns)
-        local time_with_unit=$(echo "$time_line" | grep -oE '[0-9]+(\.[0-9]+)?(us|ns)' | head -1)
-        local time_unit=$(echo "$time_with_unit" | grep -oE '(us|ns)')
-        local time_avg=$(echo "$time_with_unit" | sed 's/us//;s/ns//')
-
-        # Convert ns to us
-        if [ "$time_unit" = "ns" ]; then
-            time_avg=$(echo "scale=3; $time_avg / 1000" | bc)
-        fi
-
-        # Extract stddev (after ±)
-        local stddev_with_unit=$(echo "$time_line" | grep -oE '± [0-9]+(\.[0-9]+)?(us|ns)' | head -1 | sed 's/± //')
-        local stddev_unit=$(echo "$stddev_with_unit" | grep -oE '(us|ns)')
-        local time_stddev=$(echo "$stddev_with_unit" | sed 's/us//;s/ns//')
-
-        # Convert stddev ns to us
-        if [ "$stddev_unit" = "ns" ]; then
-            time_stddev=$(echo "scale=3; $time_stddev / 1000" | bc)
-        fi
-
-        # Get corresponding memory line
-        local memory_line=$(echo "$memory_lines" | sed -n "${bench_index}p")
-        local memory=$(echo "$memory_line" | grep -oE '[0-9]+B' | head -1 | sed 's/B//')
-
-        # Get corresponding allocation count
-        local allocations=$(echo "$allocations_list" | sed -n "${bench_index}p")
-
-        # Default to 0 if not found
-        time_avg=${time_avg:-0}
-        time_stddev=${time_stddev:-0}
+        memory=$(echo "$memory_lines" | sed -n "${bench_index}p" | grep -oE '[0-9]+B' | head -1 | sed 's/B//')
         memory=${memory:-0}
+        allocations=$(echo "$allocations_list" | sed -n "${bench_index}p")
         allocations=${allocations:-0}
 
-        # Add comma if not first entry
         if [ "$FIRST" = false ]; then
             echo "," >> "$OUTPUT_FILE"
         fi
         FIRST=false
 
-        # Write JSON entry
         cat >> "$OUTPUT_FILE" << EOF
     "$bench_name": {
-      "time_avg_us": $time_avg,
-      "time_stddev_us": $time_stddev,
+      "time_avg_us": $min_time,
       "memory_bytes": $memory,
       "allocations": $allocations
     }
 EOF
-
-        echo -e "${GREEN}✓ $bench_name: ${time_avg}us, ${memory}B, ${allocations} allocs${NC}"
+        echo -e "${GREEN}✓ $bench_name: ${min_time}us (min of ${BENCH_RUNS}), ${memory}B, ${allocations} allocs${NC}"
     done <<< "$bench_names"
-}
+done
 
-# Parse all benchmark files
-parse_benchmark_file "serializer_bench"
-parse_benchmark_file "decoder_bench"
-parse_benchmark_file "match_streams_bench"
-parse_benchmark_file "partition_key_bench"
-parse_benchmark_file "kafka_bench"
-parse_benchmark_file "message_processor_bench"
-
-# Close JSON
 cat >> "$OUTPUT_FILE" << EOF
 
   }
