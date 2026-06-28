@@ -1,13 +1,19 @@
 name: Benchmarks
 
+# Two triggers, both deliberately sparing (the suite builds and runs BOTH the PR
+# and its base branch on one runner, so it's expensive):
+#   1. Automatic: once per PR, when it becomes ready for review (draft -> ready,
+#      or opened directly as non-draft). NOT on every push.
+#   2. Manual: comment "/bench" on a PR to re-run on demand.
 on:
   pull_request:
-    branches: [ main, develop ]
-    types: [ opened, synchronize, reopened, ready_for_review ]
+    types: [opened, ready_for_review]
+  issue_comment:
+    types: [created]
 
-# Cancel superseded runs on the same PR — only the latest push matters.
+# Don't pile up runs for the same PR (e.g. "/bench" spammed, or ready toggled).
 concurrency:
-  group: benchmarks-${{ github.event.pull_request.number }}
+  group: benchmarks-${{ github.event.issue.number || github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
@@ -15,11 +21,29 @@ jobs:
     name: Component Benchmarks
     runs-on: ubuntu-latest
 
-    if: github.event.pull_request.draft == false
+    # Allow either trigger:
+    #   - pull_request: only when the PR is ready (not a draft). "opened" can
+    #     arrive for a draft PR, so the draft guard is what keeps it to one run
+    #     at the draft->ready transition.
+    #   - issue_comment: only the exact command "/bench" on a PR comment, and
+    #     only from someone with write access (issue_comment fires for every
+    #     comment, so this guard scopes it down and blocks drive-by triggers).
+    if: >-
+      (
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.draft == false
+      ) ||
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        github.event.comment.body == '/bench' &&
+        contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
+      )
 
     permissions:
       contents: read
       pull-requests: write
+      issues: write   # to add the 👀 reaction on a "/bench" comment
 
     # GitHub-hosted runners don't guarantee identical hardware between runs, so
     # absolute timings aren't comparable across runs and a committed wall-clock
@@ -28,12 +52,51 @@ jobs:
     # cancels out. On one runner intra-run jitter is the only noise left, so a
     # couple of passes (the minimum is kept) is enough.
     env:
-      BENCH_RUNS: 2
+      BENCH_RUNS: 3
 
     steps:
-      - name: Checkout PR
+      # Acknowledge a "/bench" command so the user sees it was picked up — an
+      # issue_comment run doesn't surface as a PR check. (pull_request runs do.)
+      - name: Acknowledge the command
+        if: github.event_name == 'issue_comment'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'eyes',
+            });
+
+      # Normalize PR head/base across both triggers into one set of outputs.
+      # pull_request carries them in the payload; issue_comment runs on the
+      # default branch with no PR data, so resolve via the API by PR number.
+      - name: Resolve PR head and base
+        id: pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            let pr;
+            if (context.eventName === 'issue_comment') {
+              const res = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+              });
+              pr = res.data;
+            } else {
+              pr = context.payload.pull_request;
+            }
+            core.setOutput('number', pr.number);
+            core.setOutput('head_sha', pr.head.sha);
+            core.setOutput('base_sha', pr.base.sha);
+            core.setOutput('base_ref', pr.base.ref);
+
+      - name: Checkout PR head
         uses: actions/checkout@v6
         with:
+          ref: ${{ steps.pr.outputs.head_sha }}
           fetch-depth: 0   # need the base commit to benchmark it on the same runner
 
       - name: Install Nix
@@ -57,7 +120,7 @@ jobs:
       # BENCH_RUNS is inherited from the job env by the collect script.
       - name: Benchmark base branch
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
         run: |
           git worktree add "$RUNNER_TEMP/base" "$BASE_SHA"
           ( cd "$RUNNER_TEMP/base" \
@@ -68,8 +131,8 @@ jobs:
       # Informational only — this step never fails the build.
       - name: Compare PR against base
         env:
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ steps.pr.outputs.base_ref }}
+          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
         run: |
           cp "$RUNNER_TEMP/base.json" tests/benchmarks/baseline/components.json
           cp "$RUNNER_TEMP/pr.json" tests/benchmarks/results/current.json
@@ -80,6 +143,6 @@ jobs:
       - name: Post benchmark comment on PR
         uses: marocchino/sticky-pull-request-comment@v2
         with:
-          number: ${{ github.event.pull_request.number }}
+          number: ${{ steps.pr.outputs.number }}
           path: ${{ runner.temp }}/benchmark-comment.md
           header: benchmark-results
