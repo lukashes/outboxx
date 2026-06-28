@@ -163,8 +163,22 @@ done < <(jq -r '.benchmarks | keys[]' "$BASELINE_FILE")
 
 # Summary
 if [ "$MODE" = "markdown" ]; then
+    # Only list non-empty buckets so an empty "🔴 0 slower" doesn't draw the eye
+    # when nothing regressed.
+    parts=()
+    [ "$improved" -gt 0 ]  && parts+=("🟢 ${improved} faster")
+    [ "$neutral" -gt 0 ]   && parts+=("➡️ ${neutral} neutral")
+    [ "$regressed" -gt 0 ] && parts+=("🔴 ${regressed} slower")
+    [ "$ignored" -gt 0 ]   && parts+=("⚪ ${ignored} ignored (sub-μs)")
+    summary=""
+    if [ "${#parts[@]}" -gt 0 ]; then
+        for part in "${parts[@]}"; do
+            [ -n "$summary" ] && summary="$summary · "
+            summary="$summary$part"
+        done
+    fi
     echo ""
-    echo "**Summary:** 🟢 ${improved} faster · ➡️ ${neutral} neutral · 🔴 ${regressed} slower · ⚪ ${ignored} ignored (sub-μs)"
+    echo "**Summary:** ${summary:-no benchmarks compared}"
     echo ""
     echo "<sub>Thresholds: <1μs ignore · 1–20μs 15% · 20–50μs 10% · ≥50μs 5%. Measured on a shared CI runner — treat small deltas as noise. Informational only; this check never fails the build.</sub>"
 else
