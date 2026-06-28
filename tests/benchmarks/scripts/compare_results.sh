@@ -69,7 +69,7 @@ if [ "$MODE" = "markdown" ]; then
     echo ""
     echo "Current run is the **minimum over ${current_runs} passes**, compared against the committed baseline (\`tests/benchmarks/baseline/components.json\`)."
     echo ""
-    echo "| Benchmark | Baseline | Current | Δ Time | Allocs | |"
+    echo "| Benchmark | Baseline | Current | Δ Time | Allocs | Status |"
     echo "|---|--:|--:|--:|--:|:--:|"
 else
     echo -e "${CYAN}Benchmark Comparison Report${NC}"
@@ -105,49 +105,46 @@ while read -r bench_name; do
         continue
     fi
 
-    # Calculate percentage change
-    time_change=$(echo "scale=2; (($current_time - $baseline_time) / $baseline_time) * 100" | bc)
-    alloc_change=$(echo "scale=2; (($current_allocs - $baseline_allocs) / $baseline_allocs) * 100" | bc 2>/dev/null || echo "0")
+    # Percentage change. Multiply before dividing so bc's fixed scale keeps
+    # precision for small deltas (otherwise e.g. +0.7% truncates to +0.0%).
+    time_change=$(echo "scale=2; (($current_time - $baseline_time) * 100) / $baseline_time" | bc)
 
-    # Get dynamic threshold based on baseline time
-    THRESHOLD=$(get_threshold "$baseline_time")
-
-    # Determine status
-    status_icon="→"
-    status_color="$NC"
-
-    # Special handling for sub-microsecond operations (ignore changes)
-    if [ "$THRESHOLD" = "0" ]; then
-        status_icon="~"
-        status_color="${CYAN}"
+    # Classify the change against the time-dependent threshold.
+    threshold=$(get_threshold "$baseline_time")
+    if [ "$threshold" = "0" ]; then
+        status="ignored"   # sub-microsecond: too fast to measure reliably
         ignored=$((ignored + 1))
-    # Check time regression/improvement
-    elif (( $(echo "$time_change > $THRESHOLD" | bc -l) )); then
-        status_icon="↑"
-        status_color="$RED"
+    elif (( $(echo "$time_change > $threshold" | bc -l) )); then
+        status="regressed"
         regressed=$((regressed + 1))
-    elif (( $(echo "$time_change < -$THRESHOLD" | bc -l) )); then
-        status_icon="↓"
-        status_color="$GREEN"
+    elif (( $(echo "$time_change < -$threshold" | bc -l) )); then
+        status="improved"
         improved=$((improved + 1))
     else
+        status="neutral"
         neutral=$((neutral + 1))
     fi
 
     if [ "$MODE" = "markdown" ]; then
-        # Map terminal icons to emoji for the table
-        case "$status_icon" in
-            "↑") md_icon="🔴 slower" ;;
-            "↓") md_icon="🟢 faster" ;;
-            "~") md_icon="⚪ noise" ;;
-            *)   md_icon="➡️" ;;
+        case "$status" in
+            regressed) badge="🔴 slower" ;;
+            improved)  badge="🟢 faster" ;;
+            ignored)   badge="⚪ noise" ;;
+            *)         badge="➡️" ;;
         esac
         printf "| \`%s\` | %.2fμs | %.2fμs | %+.1f%% | %d → %d | %s |\n" \
             "$bench_name" "$baseline_time" "$current_time" "$time_change" \
-            "$baseline_allocs" "$current_allocs" "$md_icon"
+            "$baseline_allocs" "$current_allocs" "$badge"
     else
-        printf "${status_color}%-40s${NC} " "$bench_name"
-        printf "Time: %8.2fμs → %8.2fμs (%+6.1f%%) %s\n" "$baseline_time" "$current_time" "$time_change" "$status_icon"
+        case "$status" in
+            regressed) color="$RED";   icon="↑" ;;
+            improved)  color="$GREEN"; icon="↓" ;;
+            ignored)   color="$CYAN";  icon="~" ;;
+            *)         color="$NC";    icon="→" ;;
+        esac
+        alloc_change=$(echo "scale=2; (($current_allocs - $baseline_allocs) * 100) / $baseline_allocs" | bc 2>/dev/null || echo "0")
+        printf "${color}%-40s${NC} " "$bench_name"
+        printf "Time: %8.2fμs → %8.2fμs (%+6.1f%%) %s\n" "$baseline_time" "$current_time" "$time_change" "$icon"
         printf "                                         Allocs: %5d → %5d (%+6.1f%%)\n" "$baseline_allocs" "$current_allocs" "$alloc_change"
         echo ""
     fi

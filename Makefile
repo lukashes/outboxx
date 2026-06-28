@@ -239,7 +239,7 @@ bench-compare:
 # baseline and emit both a terminal report (for the Actions log) and a markdown
 # report at BENCH_REPORT (posted as a PR comment). Informational only, never
 # fails the build.
-BENCH_REPORT ?= benchmark-comment.md
+BENCH_REPORT ?= tests/benchmarks/results/benchmark-comment.md
 bench-ci:
 	@echo "Building benchmarks..."
 	@zig build bench >/dev/null 2>&1
