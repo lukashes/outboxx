@@ -1,4 +1,4 @@
-.PHONY: help build run test test-integration test-unit clean fmt lint dev install-deps check-deps env-up env-down env-restart env-logs env-status coverage load-up load-down load-switch load-test-steady load-test-burst load-test-ramp load-test-mixed load-status bench
+.PHONY: help build run test test-integration test-unit clean fmt lint dev install-deps check-deps env-up env-down env-restart env-logs env-status coverage load-up load-down load-switch load-test-steady load-test-burst load-test-ramp load-test-mixed load-status bench bench-compare bench-save bench-ci
 
 # Use direnv to auto-load Nix environment for local development
 # This allows commands to work without 'nix develop' wrapper
@@ -66,6 +66,7 @@ help:
 	@echo "Component Benchmarks:"
 	@echo "  make bench         - Run component benchmarks (view results in terminal)"
 	@echo "  make bench-compare - Compare current run with baseline (min of BENCH_RUNS passes)"
+	@echo "  make bench-ci      - Compare + write markdown report (used by CI for PR comments)"
 	@echo "  make bench-save    - Save current results as new baseline (BENCH_RUNS=N, default 5)"
 	@echo ""
 	@echo "Dependencies:"
@@ -233,6 +234,21 @@ bench-compare:
 	@tests/benchmarks/scripts/collect_results.sh
 	@echo ""
 	@tests/benchmarks/scripts/compare_results.sh
+
+# CI entrypoint: run the suite (min of BENCH_RUNS passes) against the committed
+# baseline and emit both a terminal report (for the Actions log) and a markdown
+# report at BENCH_REPORT (posted as a PR comment). Informational only, never
+# fails the build.
+BENCH_REPORT ?= benchmark-comment.md
+bench-ci:
+	@echo "Building benchmarks..."
+	@zig build bench >/dev/null 2>&1
+	@echo "Collecting benchmark results..."
+	@tests/benchmarks/scripts/collect_results.sh
+	@echo ""
+	@tests/benchmarks/scripts/compare_results.sh
+	@tests/benchmarks/scripts/compare_results.sh --markdown > "$(BENCH_REPORT)"
+	@echo "Markdown report written to $(BENCH_REPORT)"
 
 bench-save:
 	@echo "Building benchmarks..."
