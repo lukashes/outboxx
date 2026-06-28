@@ -1,7 +1,6 @@
 const std = @import("std");
 const config_mod = @import("config");
 const Config = config_mod.Config;
-const Stream = config_mod.Stream;
 const Processor = @import("processor/processor.zig").Processor;
 const PostgresSource = @import("postgres_source").PostgresSource;
 const PostgresValidator = @import("source/postgres/validator.zig").PostgresValidator;

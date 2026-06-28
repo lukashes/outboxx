@@ -228,8 +228,9 @@ pub const Processor = struct {
             &self.source,
             &self.pending_lsn,
         });
-        // Cancel on any exit path: wakes the worker for its final flush, and awaits.
-        defer flush_future.cancel(io);
+        // On a receive error, still stop the worker (wakes its sleep for the
+        // final flush, and awaits) before the error propagates.
+        errdefer flush_future.cancel(io);
 
         while (!stop_signal.load(.monotonic)) {
             var batch_arena = std.heap.ArenaAllocator.init(self.allocator);
@@ -240,6 +241,9 @@ pub const Processor = struct {
             try self.processChangesToKafka(io, batch_alloc, constants.CDC.BATCH_SIZE);
         }
 
+        // Graceful stop: cancel and await the worker (runs its final flush/commit)
+        // before reporting the stream stopped.
+        flush_future.cancel(io);
         std.log.info("Streaming stopped gracefully", .{});
     }
 };
