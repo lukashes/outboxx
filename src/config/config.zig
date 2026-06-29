@@ -148,8 +148,8 @@ pub const Config = struct {
                 std.log.warn("Environment variable '{s}' not found", .{postgres.password_env});
                 return error.EnvironmentVariableNotFound;
             };
-            const password = try allocator.dupe(u8, value);
-            try self.runtime_passwords.put("postgres", password);
+            const pw = try allocator.dupe(u8, value);
+            try self.runtime_passwords.put("postgres", pw);
         }
 
         // Load MySQL password if configured
@@ -158,8 +158,8 @@ pub const Config = struct {
                 std.log.warn("Environment variable '{s}' not found", .{mysql.password_env});
                 return error.EnvironmentVariableNotFound;
             };
-            const password = try allocator.dupe(u8, value);
-            try self.runtime_passwords.put("mysql", password);
+            const pw = try allocator.dupe(u8, value);
+            try self.runtime_passwords.put("mysql", pw);
         }
     }
 
