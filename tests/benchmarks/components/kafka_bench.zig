@@ -10,10 +10,7 @@ const message_iterations = 100;
 const batch_size = 1000;
 const flush_iterations = message_iterations;
 
-const c = @cImport({
-    @cInclude("librdkafka/rdkafka.h");
-    @cInclude("librdkafka/rdkafka_mock.h");
-});
+const c = @import("c"); // C bindings incl. mock cluster (build-system translate-c)
 
 const payload =
     \\{
@@ -123,11 +120,7 @@ test "benchmark KafkaProducer sendMessage" {
         .track_allocations = true,
     });
 
-    var buf: [4096]u8 = undefined;
-    var stdout = std.fs.File.stdout().writer(&buf);
-    const writer = &stdout.interface;
-    try bench.run(writer);
-    try writer.flush();
+    try bench.run(std.testing.io, std.Io.File.stdout());
 
     const allocations_per_iter = alloc_count / message_iterations;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
@@ -177,11 +170,7 @@ test "benchmark KafkaProducer produce" {
         .track_allocations = true,
     });
 
-    var buf: [4096]u8 = undefined;
-    var stdout = std.fs.File.stdout().writer(&buf);
-    const writer = &stdout.interface;
-    try bench.run(writer);
-    try writer.flush();
+    try bench.run(std.testing.io, std.Io.File.stdout());
 
     const allocations_per_iter = alloc_count / message_iterations;
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});

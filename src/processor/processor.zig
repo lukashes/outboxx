@@ -41,16 +41,18 @@ pub fn matchStreams(allocator: std.mem.Allocator, streams: []const Stream, table
 }
 
 fn flushCommitWorker(
+    io: std.Io,
     producer: *KafkaProducer,
     source: *PostgresSource,
     pending_lsn: *std.atomic.Value(u64),
-    stop_signal: *std.atomic.Value(bool),
 ) void {
     var iterations: u32 = 0;
     const flush_interval_iterations: u32 = @intCast(constants.CDC.KAFKA_FLUSH_INTERVAL_SEC);
 
-    while (!stop_signal.load(.monotonic)) {
-        std.Thread.sleep(1 * std.time.ns_per_s);
+    while (true) {
+        // The worker's only cancelation point: on shutdown the future is
+        // canceled, this returns error.Canceled, and we break to the final flush.
+        io.sleep(.fromSeconds(1), .awake) catch break;
         iterations += 1;
 
         if (iterations < flush_interval_iterations) {
@@ -69,7 +71,7 @@ fn flushCommitWorker(
             continue;
         }
 
-        source.sendFeedback(lsn) catch |err| {
+        source.sendFeedback(io, lsn) catch |err| {
             std.log.err("Background LSN commit failed: {}", .{err});
             continue;
         };
@@ -81,7 +83,7 @@ fn flushCommitWorker(
 
     const lsn = pending_lsn.load(.acquire);
     if (lsn > 0) {
-        source.sendFeedback(lsn) catch |err| {
+        source.sendFeedback(io, lsn) catch |err| {
             std.log.warn("Final background LSN commit failed: {}", .{err});
         };
     }
@@ -142,8 +144,8 @@ pub const Processor = struct {
         std.log.info("Processor initialized successfully", .{});
     }
 
-    pub fn processChangesToKafka(self: *Self, batch_allocator: std.mem.Allocator, limit: u32) !void {
-        var batch = try self.source.receiveBatch(batch_allocator, limit);
+    pub fn processChangesToKafka(self: *Self, io: std.Io, batch_allocator: std.mem.Allocator, limit: u32) !void {
+        var batch = try self.source.receiveBatch(io, batch_allocator, limit);
         defer batch.deinit();
 
         var producer = &(self.kafka_producer orelse return ProcessorError.ConnectionFailed);
@@ -215,15 +217,20 @@ pub const Processor = struct {
         return try allocator.dupe(u8, change_event.meta.resource);
     }
 
-    pub fn startStreaming(self: *Self, stop_signal: *std.atomic.Value(bool)) !void {
+    pub fn startStreaming(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !void {
         const producer = &(self.kafka_producer orelse return ProcessorError.ConnectionFailed);
 
-        const flush_thread = try std.Thread.spawn(.{}, flushCommitWorker, .{
+        // Background flush/commit loop. `concurrent` not `async`: it must run
+        // alongside the receive loop, and `async` may defer the call until await.
+        var flush_future = try io.concurrent(flushCommitWorker, .{
+            io,
             producer,
             &self.source,
             &self.pending_lsn,
-            stop_signal,
         });
+        // On a receive error, still stop the worker (wakes its sleep for the
+        // final flush, and awaits) before the error propagates.
+        errdefer flush_future.cancel(io);
 
         while (!stop_signal.load(.monotonic)) {
             var batch_arena = std.heap.ArenaAllocator.init(self.allocator);
@@ -231,11 +238,12 @@ pub const Processor = struct {
 
             const batch_alloc = batch_arena.allocator();
 
-            try self.processChangesToKafka(batch_alloc, constants.CDC.BATCH_SIZE);
+            try self.processChangesToKafka(io, batch_alloc, constants.CDC.BATCH_SIZE);
         }
 
-        flush_thread.join();
-
+        // Graceful stop: cancel and await the worker (runs its final flush/commit)
+        // before reporting the stream stopped.
+        flush_future.cancel(io);
         std.log.info("Streaming stopped gracefully", .{});
     }
 };

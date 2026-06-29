@@ -18,10 +18,10 @@ pub const JsonSerializer = struct {
         _ = self;
 
         // Use custom JSON writer for proper formatting
-        var output = std.ArrayList(u8).empty;
-        errdefer output.deinit(allocator);
+        var output: std.Io.Writer.Allocating = .init(allocator);
+        errdefer output.deinit();
 
-        const writer = output.writer(allocator);
+        const writer = &output.writer;
 
         try writer.writeAll("{\"op\":\"");
         try writer.writeAll(event.op);
@@ -50,7 +50,7 @@ pub const JsonSerializer = struct {
 
         try writer.writeAll("}}");
 
-        return output.toOwnedSlice(allocator);
+        return output.toOwnedSlice();
     }
 
     fn serializeDataSection(data: DataSection, writer: anytype) !void {
@@ -143,7 +143,7 @@ const FieldValueHelpers = domain.FieldValueHelpers;
 test "JsonSerializer serialize INSERT event" {
     const testing = std.testing;
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer {
         const deinit_status = gpa.deinit();
         if (deinit_status == .leak) {
@@ -175,20 +175,20 @@ test "JsonSerializer serialize INSERT event" {
     defer allocator.free(json_output);
 
     // Validate JSON structure
-    try testing.expect(std.mem.indexOf(u8, json_output, "\"op\":\"INSERT\"") != null);
-    try testing.expect(std.mem.indexOf(u8, json_output, "\"data\":{") != null);
-    try testing.expect(std.mem.indexOf(u8, json_output, "\"meta\":{") != null);
-    try testing.expect(std.mem.indexOf(u8, json_output, "\"source\":\"postgres\"") != null);
-    try testing.expect(std.mem.indexOf(u8, json_output, "\"resource\":\"users\"") != null);
-    try testing.expect(std.mem.indexOf(u8, json_output, "\"id\":1") != null);
-    try testing.expect(std.mem.indexOf(u8, json_output, "\"name\":\"Alice\"") != null);
-    try testing.expect(std.mem.indexOf(u8, json_output, "\"active\":true") != null);
+    try testing.expect(std.mem.find(u8, json_output, "\"op\":\"INSERT\"") != null);
+    try testing.expect(std.mem.find(u8, json_output, "\"data\":{") != null);
+    try testing.expect(std.mem.find(u8, json_output, "\"meta\":{") != null);
+    try testing.expect(std.mem.find(u8, json_output, "\"source\":\"postgres\"") != null);
+    try testing.expect(std.mem.find(u8, json_output, "\"resource\":\"users\"") != null);
+    try testing.expect(std.mem.find(u8, json_output, "\"id\":1") != null);
+    try testing.expect(std.mem.find(u8, json_output, "\"name\":\"Alice\"") != null);
+    try testing.expect(std.mem.find(u8, json_output, "\"active\":true") != null);
 }
 
 test "JsonSerializer serialize UPDATE event" {
     const testing = std.testing;
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer {
         const deinit_status = gpa.deinit();
         if (deinit_status == .leak) {
@@ -225,16 +225,16 @@ test "JsonSerializer serialize UPDATE event" {
     defer allocator.free(json_output);
 
     // Validate UPDATE structure - now simplified (only new data)
-    try testing.expect(std.mem.indexOf(u8, json_output, "\"op\":\"UPDATE\"") != null);
-    try testing.expect(std.mem.indexOf(u8, json_output, "\"data\":{\"status\":\"active\"}") != null);
+    try testing.expect(std.mem.find(u8, json_output, "\"op\":\"UPDATE\"") != null);
+    try testing.expect(std.mem.find(u8, json_output, "\"data\":{\"status\":\"active\"}") != null);
     // Old data is NOT in JSON output (only in domain model)
-    try testing.expect(std.mem.indexOf(u8, json_output, "pending") == null);
+    try testing.expect(std.mem.find(u8, json_output, "pending") == null);
 }
 
 test "JsonSerializer validate JSON output is parseable" {
     const testing = std.testing;
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer {
         const deinit_status = gpa.deinit();
         if (deinit_status == .leak) {
@@ -279,7 +279,7 @@ test "JsonSerializer validate JSON output is parseable" {
 test "JsonSerializer string escaping" {
     const testing = std.testing;
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer {
         const deinit_status = gpa.deinit();
         if (deinit_status == .leak) {
@@ -309,9 +309,9 @@ test "JsonSerializer string escaping" {
     defer allocator.free(json_output);
 
     // Validate escaping
-    try testing.expect(std.mem.indexOf(u8, json_output, "\\n") != null);
-    try testing.expect(std.mem.indexOf(u8, json_output, "\\t") != null);
-    try testing.expect(std.mem.indexOf(u8, json_output, "\\\"") != null);
+    try testing.expect(std.mem.find(u8, json_output, "\\n") != null);
+    try testing.expect(std.mem.find(u8, json_output, "\\t") != null);
+    try testing.expect(std.mem.find(u8, json_output, "\\\"") != null);
 
     // Validate JSON is still parseable
     const is_valid = try std.json.validate(allocator, json_output);

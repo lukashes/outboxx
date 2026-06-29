@@ -1,9 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const KafkaProducer = @import("producer.zig").KafkaProducer;
-const c = @cImport({
-    @cInclude("librdkafka/rdkafka.h");
-});
+const c = @import("c"); // C bindings (build-system translate-c)
 
 // Simple function to verify message was written to Kafka
 fn verifyMessageWritten(allocator: std.mem.Allocator, brokers: []const u8, topic: []const u8, expected_payload: []const u8) !bool {
@@ -68,7 +66,7 @@ test "Kafka integration tests" {
 }
 
 test "KafkaProducer can initialize and connect to Kafka" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer {
         const deinit_status = gpa.deinit();
         if (deinit_status == .leak) {
@@ -85,7 +83,7 @@ test "KafkaProducer can initialize and connect to Kafka" {
 }
 
 test "KafkaProducer can send message to topic" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer {
         const deinit_status = gpa.deinit();
         if (deinit_status == .leak) {
@@ -117,7 +115,7 @@ test "KafkaProducer can send message to topic" {
 }
 
 test "KafkaProducer can send messages to multiple topics" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer {
         const deinit_status = gpa.deinit();
         if (deinit_status == .leak) {
@@ -158,7 +156,7 @@ test "KafkaProducer can send messages to multiple topics" {
 }
 
 test "KafkaProducer handles invalid broker gracefully" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer {
         const deinit_status = gpa.deinit();
         if (deinit_status == .leak) {
@@ -184,7 +182,7 @@ test "KafkaProducer handles invalid broker gracefully" {
 }
 
 test "KafkaProducer memory management" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer {
         const deinit_status = gpa.deinit();
         if (deinit_status == .leak) {

@@ -1,14 +1,11 @@
 .{
     .name = .outboxx,
     .version = "0.1.0",
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{
-        .toml = .{
-            .url = "git+https://github.com/sam701/zig-toml?ref=zig-0.15#475b03c630c802f8b6bd3e239d8fc2279b4fadb8",
-            .hash = "toml-0.3.0-bV14BfV7AQD8DkuQI7skP8ekQTaBYKTO0MY_35Cw_EXo",
-        },
         .zbench = .{
-            .url = "https://github.com/hendriknielaender/zbench/archive/refs/tags/v0.12.0.tar.gz",
-            .hash = "zbench-0.11.1-YTdc7zkmAQBWI99esNFueJc9GuzK-KaU6Nfr1ZXhNGmc",
+            .url = "https://github.com/hendriknielaender/zbench/archive/refs/tags/v0.13.0.tar.gz",
+            .hash = "zbench-0.13.0-YTdc7xVBAQCCMC-IdLLuotBeiNNNm8k9Pi2V4VYqrwfI",
         },
     },
     .paths = .{""},

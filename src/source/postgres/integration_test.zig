@@ -10,9 +10,7 @@ const ChangeOperation = domain.ChangeOperation;
 const source_mod = @import("source.zig");
 const PostgresSource = source_mod.PostgresSource;
 
-const c = @cImport({
-    @cInclude("libpq-fe.h");
-});
+const c = @import("c"); // C bindings (build-system translate-c)
 
 // Helper to create setup connection (non-replication)
 fn createSetupConnection(allocator: std.mem.Allocator) !*c.PGconn {
@@ -84,9 +82,9 @@ test "Streaming source: receive and convert INSERT messages to ChangeEvents" {
     const allocator = testing.allocator;
 
     // Generate unique names for this test (timestamp + random to avoid collisions)
-    var prng = std.Random.DefaultPrng.init(@intCast(std.time.microTimestamp()));
+    var prng = std.Random.DefaultPrng.init(@intCast(test_helpers.nowMicros(std.testing.io)));
     const random_suffix = prng.random().int(u32);
-    const timestamp = std.time.timestamp();
+    const timestamp = test_helpers.nowSeconds(std.testing.io);
     const table_name = try std.fmt.allocPrint(allocator, "stream_test_{d}_{d}", .{ timestamp, random_suffix });
     defer allocator.free(table_name);
 
@@ -157,7 +155,7 @@ test "Streaming source: receive and convert INSERT messages to ChangeEvents" {
 
     std.log.info("Streaming source connected, receiving batch...", .{});
 
-    const batch = try source.receiveBatch(allocator, 10);
+    const batch = try source.receiveBatch(std.testing.io, allocator, 10);
     defer {
         var mut_batch = batch;
         mut_batch.deinit();
@@ -178,7 +176,7 @@ test "Streaming source: receive and convert INSERT messages to ChangeEvents" {
     try testing.expectEqual(@as(usize, 2), insert_count);
 
     // Send feedback
-    try source.sendFeedback(batch.last_lsn);
+    try source.sendFeedback(std.testing.io, batch.last_lsn);
 
     std.log.info("Integration test passed!", .{});
 }
@@ -187,9 +185,9 @@ test "Streaming source: UPDATE operation E2E with old and new tuples" {
     const allocator = testing.allocator;
 
     // Generate unique names for this test (timestamp + random to avoid collisions)
-    var prng = std.Random.DefaultPrng.init(@intCast(std.time.microTimestamp()));
+    var prng = std.Random.DefaultPrng.init(@intCast(test_helpers.nowMicros(std.testing.io)));
     const random_suffix = prng.random().int(u32);
-    const timestamp = std.time.timestamp();
+    const timestamp = test_helpers.nowSeconds(std.testing.io);
     const table_name = try std.fmt.allocPrint(allocator, "stream_update_test_{d}_{d}", .{ timestamp, random_suffix });
     defer allocator.free(table_name);
 
@@ -269,7 +267,7 @@ test "Streaming source: UPDATE operation E2E with old and new tuples" {
 
     try source.connect(conn_str, start_lsn);
 
-    const batch = try source.receiveBatch(allocator, 10);
+    const batch = try source.receiveBatch(std.testing.io, allocator, 10);
     defer {
         var mut_batch = batch;
         mut_batch.deinit();
@@ -320,7 +318,7 @@ test "Streaming source: UPDATE operation E2E with old and new tuples" {
     try testing.expect(found_update);
 
     // Send feedback
-    try source.sendFeedback(batch.last_lsn);
+    try source.sendFeedback(std.testing.io, batch.last_lsn);
 
     std.log.info("UPDATE E2E test passed!", .{});
 }
@@ -329,9 +327,9 @@ test "Streaming source: DELETE operation E2E" {
     const allocator = testing.allocator;
 
     // Generate unique names for this test (timestamp + random to avoid collisions)
-    var prng = std.Random.DefaultPrng.init(@intCast(std.time.microTimestamp()));
+    var prng = std.Random.DefaultPrng.init(@intCast(test_helpers.nowMicros(std.testing.io)));
     const random_suffix = prng.random().int(u32);
-    const timestamp = std.time.timestamp();
+    const timestamp = test_helpers.nowSeconds(std.testing.io);
     const table_name = try std.fmt.allocPrint(allocator, "stream_delete_test_{d}_{d}", .{ timestamp, random_suffix });
     defer allocator.free(table_name);
 
@@ -411,7 +409,7 @@ test "Streaming source: DELETE operation E2E" {
 
     try source.connect(conn_str, start_lsn);
 
-    const batch = try source.receiveBatch(allocator, 10);
+    const batch = try source.receiveBatch(std.testing.io, allocator, 10);
     defer {
         var mut_batch = batch;
         mut_batch.deinit();
@@ -450,7 +448,7 @@ test "Streaming source: DELETE operation E2E" {
     try testing.expect(found_delete);
 
     // Send feedback
-    try source.sendFeedback(batch.last_lsn);
+    try source.sendFeedback(std.testing.io, batch.last_lsn);
 
     std.log.info("DELETE E2E test passed!", .{});
 }
@@ -459,9 +457,9 @@ test "Streaming source: Multiple batches with limit parameter" {
     const allocator = testing.allocator;
 
     // Generate unique names for this test (timestamp + random to avoid collisions)
-    var prng = std.Random.DefaultPrng.init(@intCast(std.time.microTimestamp()));
+    var prng = std.Random.DefaultPrng.init(@intCast(test_helpers.nowMicros(std.testing.io)));
     const random_suffix = prng.random().int(u32);
-    const timestamp = std.time.timestamp();
+    const timestamp = test_helpers.nowSeconds(std.testing.io);
     const table_name = try std.fmt.allocPrint(allocator, "stream_batch_test_{d}_{d}", .{ timestamp, random_suffix });
     defer allocator.free(table_name);
 
@@ -534,7 +532,7 @@ test "Streaming source: Multiple batches with limit parameter" {
     var last_lsn: u64 = 0;
 
     while (total_changes < 500) {
-        const batch = try source.receiveBatch(allocator, 100);
+        const batch = try source.receiveBatch(std.testing.io, allocator, 100);
         defer {
             var mut_batch = batch;
             mut_batch.deinit();
@@ -552,7 +550,7 @@ test "Streaming source: Multiple batches with limit parameter" {
         std.log.info("Batch {}: {} changes (total: {})", .{ batch_count, batch.changes.len, total_changes });
 
         // Send feedback after each batch
-        try source.sendFeedback(batch.last_lsn);
+        try source.sendFeedback(std.testing.io, batch.last_lsn);
     }
 
     // Verify we got all 500 INSERT events
@@ -566,9 +564,9 @@ test "Streaming source: Timeout behavior with no data" {
     const allocator = testing.allocator;
 
     // Generate unique names for this test (timestamp + random to avoid collisions)
-    var prng = std.Random.DefaultPrng.init(@intCast(std.time.microTimestamp()));
+    var prng = std.Random.DefaultPrng.init(@intCast(test_helpers.nowMicros(std.testing.io)));
     const random_suffix = prng.random().int(u32);
-    const timestamp = std.time.timestamp();
+    const timestamp = test_helpers.nowSeconds(std.testing.io);
     const table_name = try std.fmt.allocPrint(allocator, "stream_timeout_test_{d}_{d}", .{ timestamp, random_suffix });
     defer allocator.free(table_name);
 
@@ -626,15 +624,15 @@ test "Streaming source: Timeout behavior with no data" {
 
     std.log.info("Waiting for timeout with no data (1 second)...", .{});
 
-    const start_time = std.time.milliTimestamp();
+    const start_time = test_helpers.nowMillis(std.testing.io);
 
-    const batch = try source.receiveBatchWithWaitTime(allocator, 10, 1000);
+    const batch = try source.receiveBatchWithWaitTime(std.testing.io, allocator, 10, 1000);
     defer {
         var mut_batch = batch;
         mut_batch.deinit();
     }
 
-    const elapsed = std.time.milliTimestamp() - start_time;
+    const elapsed = test_helpers.nowMillis(std.testing.io) - start_time;
 
     std.log.info("Timeout test: received {} changes in {}ms", .{ batch.changes.len, elapsed });
 

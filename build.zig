@@ -7,11 +7,6 @@ pub fn build(b: *std.Build) void {
     // Standard optimization options allow the person running zig build to pick the optimization level
     const optimize = b.standardOptimizeOption(.{});
 
-    // Add TOML dependency, sadly it was not working with 0.15.1 zig version
-    // TODO: Check it later again
-    const toml_dep = b.dependency("toml", .{});
-    const toml_module = toml_dep.module("toml");
-
     // Constants module (application-wide constants)
     const constants_module = b.createModule(.{
         .root_source_file = b.path("src/constants.zig"),
@@ -50,6 +45,29 @@ pub fn build(b: *std.Build) void {
     postgres_source_module.addImport("domain", domain_module);
     postgres_source_module.addImport("constants", constants_module);
 
+    // C bindings via build-system translate-c, split by deployment target so the
+    // test-only mock cluster API never reaches the production binary. Each target
+    // imports exactly one as "c", so the generated C types match within a build.
+    //   prod = libpq + librdkafka
+    //   dev  = prod + librdkafka's mock cluster (tests/benchmarks only)
+    const c_prod = b.addTranslateC(.{
+        .root_source_file = b.path("src/c/prod.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    addCHeadersT(b, c_prod);
+    const c_prod_module = c_prod.createModule();
+
+    const c_dev = b.addTranslateC(.{
+        .root_source_file = b.path("src/c/dev.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    addCHeadersT(b, c_dev);
+    const c_dev_module = c_dev.createModule();
+
+    postgres_source_module.addImport("c", c_prod_module);
+
     // Kafka producer module
     const kafka_producer_module = b.createModule(.{
         .root_source_file = b.path("src/kafka/producer.zig"),
@@ -57,6 +75,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     kafka_producer_module.addImport("constants", constants_module);
+    kafka_producer_module.addImport("c", c_prod_module);
 
     // Processor module with all dependencies
     const cdc_processor_module = b.createModule(.{
@@ -83,36 +102,22 @@ pub fn build(b: *std.Build) void {
     });
 
     // Dependencies for the main executable
-    exe.root_module.addImport("toml", toml_module);
     exe.root_module.addImport("domain", domain_module);
     exe.root_module.addImport("json_serialization", json_serialization_module);
     exe.root_module.addImport("kafka_producer", kafka_producer_module);
     exe.root_module.addImport("config", config_module);
     exe.root_module.addImport("postgres_source", postgres_source_module);
     exe.root_module.addImport("constants", constants_module);
+    exe.root_module.addImport("c", c_prod_module);
 
     // Link libc for PostgreSQL and Kafka C libraries
-    exe.linkLibC();
+    exe.root_module.link_libc = true;
 
     // Add PostgreSQL library (libpq)
-    exe.linkSystemLibrary("pq");
+    exe.root_module.linkSystemLibrary("pq", .{});
 
     // Add Kafka library (librdkafka)
-    exe.linkSystemLibrary("rdkafka");
-
-    // Add include paths from environment (useful for Nix and custom installs)
-    if (std.process.getEnvVarOwned(b.allocator, "C_INCLUDE_PATH")) |include_path| {
-        defer b.allocator.free(include_path);
-        var it = std.mem.splitScalar(u8, include_path, ':');
-        while (it.next()) |path| {
-            if (path.len > 0) {
-                exe.addIncludePath(.{ .cwd_relative = path });
-            }
-        }
-    } else |_| {
-        // Fallback to standard system paths
-        exe.addIncludePath(.{ .cwd_relative = "/usr/include/postgresql" });
-    }
+    exe.root_module.linkSystemLibrary("rdkafka", .{});
 
     b.installArtifact(exe);
 
@@ -136,7 +141,6 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    config_tests.root_module.addImport("toml", toml_module);
 
     // Domain layer tests (new)
     const domain_tests = b.addTest(.{
@@ -162,8 +166,9 @@ pub fn build(b: *std.Build) void {
         }),
     });
     kafka_producer_tests.root_module.addImport("constants", constants_module);
-    kafka_producer_tests.linkLibC();
-    kafka_producer_tests.linkSystemLibrary("rdkafka");
+    kafka_producer_tests.root_module.addImport("c", c_dev_module);
+    kafka_producer_tests.root_module.link_libc = true;
+    kafka_producer_tests.root_module.linkSystemLibrary("rdkafka", .{});
 
     // ReplicationProtocol tests
     const replication_protocol_tests = b.addTest(.{
@@ -173,8 +178,9 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    replication_protocol_tests.linkLibC();
-    replication_protocol_tests.linkSystemLibrary("pq");
+    replication_protocol_tests.root_module.addImport("c", c_dev_module);
+    replication_protocol_tests.root_module.link_libc = true;
+    replication_protocol_tests.root_module.linkSystemLibrary("pq", .{});
 
     // PgOutputDecoder tests
     const pg_output_decoder_tests = b.addTest(.{
@@ -204,8 +210,9 @@ pub fn build(b: *std.Build) void {
     });
     streaming_source_tests.root_module.addImport("domain", domain_module);
     streaming_source_tests.root_module.addImport("constants", constants_module);
-    streaming_source_tests.linkLibC();
-    streaming_source_tests.linkSystemLibrary("pq");
+    streaming_source_tests.root_module.addImport("c", c_dev_module);
+    streaming_source_tests.root_module.link_libc = true;
+    streaming_source_tests.root_module.linkSystemLibrary("pq", .{});
 
     // Streaming replication integration tests
     const streaming_integration_tests = b.addTest(.{
@@ -217,8 +224,9 @@ pub fn build(b: *std.Build) void {
     });
     streaming_integration_tests.root_module.addImport("domain", domain_module);
     streaming_integration_tests.root_module.addImport("constants", constants_module);
-    streaming_integration_tests.linkLibC();
-    streaming_integration_tests.linkSystemLibrary("pq");
+    streaming_integration_tests.root_module.addImport("c", c_dev_module);
+    streaming_integration_tests.root_module.link_libc = true;
+    streaming_integration_tests.root_module.linkSystemLibrary("pq", .{});
 
     // Validator tests
     const validator_tests = b.addTest(.{
@@ -228,8 +236,9 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    validator_tests.linkLibC();
-    validator_tests.linkSystemLibrary("pq");
+    validator_tests.root_module.addImport("c", c_dev_module);
+    validator_tests.root_module.link_libc = true;
+    validator_tests.root_module.linkSystemLibrary("pq", .{});
 
     // Test helpers module (shared utilities for all tests)
     const test_helpers_module = b.createModule(.{
@@ -238,6 +247,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     test_helpers_module.addImport("config", config_module);
+    test_helpers_module.addImport("c", c_dev_module);
+    test_helpers_module.link_libc = true;
 
     // Add test_helpers to integration tests
     replication_protocol_tests.root_module.addImport("test_helpers", test_helpers_module);
@@ -276,9 +287,9 @@ pub fn build(b: *std.Build) void {
     e2e_streaming_test.root_module.addImport("cdc_processor", cdc_processor_module);
     e2e_streaming_test.root_module.addImport("config", config_module);
     e2e_streaming_test.root_module.addImport("postgres_source", postgres_source_module);
-    e2e_streaming_test.linkLibC();
-    e2e_streaming_test.linkSystemLibrary("pq");
-    e2e_streaming_test.linkSystemLibrary("rdkafka");
+    e2e_streaming_test.root_module.link_libc = true;
+    e2e_streaming_test.root_module.linkSystemLibrary("pq", .{});
+    e2e_streaming_test.root_module.linkSystemLibrary("rdkafka", .{});
 
     const run_e2e_streaming_test = b.addRunArtifact(e2e_streaming_test);
 
@@ -291,8 +302,9 @@ pub fn build(b: *std.Build) void {
         }),
     });
     kafka_integration_tests.root_module.addImport("constants", constants_module);
-    kafka_integration_tests.linkLibC();
-    kafka_integration_tests.linkSystemLibrary("rdkafka");
+    kafka_integration_tests.root_module.addImport("c", c_dev_module);
+    kafka_integration_tests.root_module.link_libc = true;
+    kafka_integration_tests.root_module.linkSystemLibrary("rdkafka", .{});
 
     const run_kafka_integration_tests = b.addRunArtifact(kafka_integration_tests);
     const run_streaming_integration_tests = b.addRunArtifact(streaming_integration_tests);
@@ -317,8 +329,8 @@ pub fn build(b: *std.Build) void {
             .optimize = .Debug,
         }),
     });
-    debug_exe.linkLibC();
-    debug_exe.linkSystemLibrary("pq");
+    debug_exe.root_module.link_libc = true;
+    debug_exe.root_module.linkSystemLibrary("pq", .{});
 
     const debug_install = b.addInstallArtifact(debug_exe, .{});
     const debug_step = b.step("debug", "Build debug version");
@@ -333,8 +345,8 @@ pub fn build(b: *std.Build) void {
             .optimize = .ReleaseSmall,
         }),
     });
-    release_small_exe.linkLibC();
-    release_small_exe.linkSystemLibrary("pq");
+    release_small_exe.root_module.link_libc = true;
+    release_small_exe.root_module.linkSystemLibrary("pq", .{});
 
     const release_small_install = b.addInstallArtifact(release_small_exe, .{});
     const release_small_step = b.step("release-small", "Build release version optimized for size");
@@ -355,12 +367,10 @@ pub fn build(b: *std.Build) void {
     const fmt_fix_step = b.step("fmt", "Format code");
     fmt_fix_step.dependOn(&fmt.step);
 
-    // Clean build artifacts
+    // Clean build artifacts. No std build step for a recursive delete, so shell out.
     const clean_step = b.step("clean", "Clean build artifacts");
-    const remove_zig_out = b.addRemoveDirTree(b.path("zig-out"));
-    const remove_zig_cache = b.addRemoveDirTree(b.path(".zig-cache"));
-    clean_step.dependOn(&remove_zig_out.step);
-    clean_step.dependOn(&remove_zig_cache.step);
+    const remove_artifacts = b.addSystemCommand(&.{ "rm", "-rf", "zig-out", ".zig-cache" });
+    clean_step.dependOn(&remove_artifacts.step);
 
     // Development workflow: format, test, and build
     const dev_step = b.step("dev", "Development workflow: format, test, and build");
@@ -386,7 +396,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = .ReleaseFast,
     });
-
 
     const serializer_bench = b.addTest(.{
         .name = "serializer_bench",
@@ -457,8 +466,9 @@ pub fn build(b: *std.Build) void {
     kafka_bench.root_module.addImport("zbench", zbench_module);
     kafka_bench.root_module.addImport("kafka_producer", kafka_producer_module);
     kafka_bench.root_module.addImport("bench_helpers", bench_helpers_module);
-    kafka_bench.linkLibC();
-    kafka_bench.linkSystemLibrary("rdkafka");
+    kafka_bench.root_module.addImport("c", c_dev_module);
+    kafka_bench.root_module.link_libc = true;
+    kafka_bench.root_module.linkSystemLibrary("rdkafka", .{});
 
     const install_kafka_bench = b.addInstallArtifact(kafka_bench, .{});
 
@@ -484,4 +494,19 @@ pub fn build(b: *std.Build) void {
     bench_step.dependOn(&install_partition_key_bench.step);
     bench_step.dependOn(&install_kafka_bench.step);
     bench_step.dependOn(&install_message_processor_bench.step);
+}
+
+/// Point a translate-c step at the system headers, from C_INCLUDE_PATH (set by
+/// the Nix dev shell) with a system fallback.
+fn addCHeadersT(b: *std.Build, translate_c: *std.Build.Step.TranslateC) void {
+    if (b.graph.environ_map.get("C_INCLUDE_PATH")) |include_path| {
+        var it = std.mem.splitScalar(u8, include_path, ':');
+        while (it.next()) |path| {
+            if (path.len > 0) {
+                translate_c.addIncludePath(.{ .cwd_relative = path });
+            }
+        }
+    } else {
+        translate_c.addIncludePath(.{ .cwd_relative = "/usr/include/postgresql" });
+    }
 }

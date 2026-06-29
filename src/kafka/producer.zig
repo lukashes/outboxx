@@ -1,7 +1,5 @@
 const std = @import("std");
-const c = @cImport({
-    @cInclude("librdkafka/rdkafka.h");
-});
+const c = @import("c"); // C bindings (build-system translate-c)
 const constants = @import("constants");
 
 const KafkaError = error{

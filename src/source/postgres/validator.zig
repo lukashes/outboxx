@@ -1,8 +1,6 @@
 const std = @import("std");
 const print = std.debug.print;
-const c = @cImport({
-    @cInclude("libpq-fe.h");
-});
+const c = @import("c"); // C bindings (build-system translate-c)
 
 pub const ValidationError = error{
     ConnectionFailed,

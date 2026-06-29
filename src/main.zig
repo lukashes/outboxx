@@ -1,7 +1,6 @@
 const std = @import("std");
 const config_mod = @import("config");
 const Config = config_mod.Config;
-const Stream = config_mod.Stream;
 const Processor = @import("processor/processor.zig").Processor;
 const PostgresSource = @import("postgres_source").PostgresSource;
 const PostgresValidator = @import("source/postgres/validator.zig").PostgresValidator;
@@ -15,16 +14,21 @@ pub const CliError = error{
 
 var shutdown_requested = std.atomic.Value(bool).init(false);
 
-pub fn main() void {
-    run() catch |err| {
+// Stdout writes need an Io; kept here so printStatus/printBanner stay
+// parameterless. TODO: thread `io` through an explicit app context instead.
+var stdout_io: std.Io = undefined;
+
+pub fn main(init: std.process.Init) void {
+    stdout_io = init.io;
+    run(init) catch |err| {
         std.log.err("Fatal error: {}", .{err});
         std.process.exit(1);
     };
     std.process.exit(0);
 }
 
-fn run() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{
+fn run(init: std.process.Init) !void {
+    var gpa = std.heap.DebugAllocator(.{
         .safety = true,
         .retain_metadata = true,
     }){};
@@ -40,18 +44,18 @@ fn run() !void {
 
     printBanner();
 
-    const config_file_path = try parseConfigPath(allocator) orelse {
+    const config_file_path = try parseConfigPath(init.minimal.args, allocator) orelse {
         std.log.warn("config file is required. Use --config <path>", .{});
         return CliError.NoConfigPath;
     };
     defer allocator.free(config_file_path);
 
     printStatus("Loading configuration from: {s}\n", .{config_file_path});
-    var config = try Config.loadFromTomlFile(allocator, config_file_path);
+    var config = try Config.loadFromTomlFile(init.io, allocator, config_file_path);
     defer config.deinit(allocator);
 
     try config.validate(allocator);
-    try config.loadPasswords(allocator);
+    try config.loadPasswords(allocator, init.environ_map);
 
     printConfigInfo(config);
 
@@ -88,7 +92,7 @@ fn run() !void {
     printStatus("Using publication: {s}\n", .{postgres.publication_name});
     printStatus("Press Ctrl+C to stop gracefully.\n\n", .{});
 
-    try processor.startStreaming(&shutdown_requested);
+    try processor.startStreaming(init.io, &shutdown_requested);
 }
 
 /// Print user-facing messages to stdout
@@ -96,17 +100,18 @@ fn run() !void {
 /// For logs and diagnostics, use std.log.* (writes to stderr)
 fn printStatus(comptime fmt: []const u8, args: anytype) void {
     var buf: [4096]u8 = undefined;
-    const formatted = std.fmt.bufPrint(&buf, fmt, args) catch |err| {
-        std.log.warn("Failed to format message: {}", .{err});
+    var stdout_writer = std.Io.File.stdout().writer(stdout_io, &buf);
+    const w = &stdout_writer.interface;
+    w.print(fmt, args) catch |err| {
+        std.log.warn("Failed to write to stdout: {}", .{err});
         return;
     };
-    const stdout_file = std.fs.File.stdout();
-    stdout_file.writeAll(formatted) catch |err| {
-        std.log.warn("Failed to write to stdout: {}", .{err});
+    w.flush() catch |err| {
+        std.log.warn("Failed to flush stdout: {}", .{err});
     };
 }
 
-fn handleShutdownSignal(_: c_int) callconv(.c) void {
+fn handleShutdownSignal(_: posix.SIG) callconv(.c) void {
     shutdown_requested.store(true, .seq_cst);
     std.log.info("Shutdown signal received, initiating graceful shutdown...", .{});
 }
@@ -131,14 +136,16 @@ fn printBanner() void {
     printStatus("Build: {s}\n\n", .{@tagName(constants.BUILD_MODE)});
 }
 
-fn parseConfigPath(allocator: std.mem.Allocator) !?[]const u8 {
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+fn parseConfigPath(args: std.process.Args, allocator: std.mem.Allocator) !?[]const u8 {
+    var it = args.iterate();
+    defer it.deinit();
 
-    var i: usize = 1;
-    while (i < args.len) : (i += 1) {
-        if (std.mem.eql(u8, args[i], "--config") and i + 1 < args.len) {
-            return try allocator.dupe(u8, args[i + 1]);
+    _ = it.next(); // skip executable name (argv[0])
+    while (it.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--config")) {
+            if (it.next()) |path| {
+                return try allocator.dupe(u8, path);
+            }
         }
     }
 
