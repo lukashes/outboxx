@@ -141,7 +141,7 @@ jobs:
             BASELINE_LABEL="the base branch (\`$BASE_REF\` @ \`${BASE_SHA:0:7}\`), built on the same runner"
 
       - name: Post benchmark comment on PR
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@v3
         with:
           number: ${{ steps.pr.outputs.number }}
           path: ${{ runner.temp }}/benchmark-comment.md
