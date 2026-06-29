@@ -59,7 +59,7 @@ jobs:
       # issue_comment run doesn't surface as a PR check. (pull_request runs do.)
       - name: Acknowledge the command
         if: github.event_name == 'issue_comment'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             await github.rest.reactions.createForIssueComment({
@@ -74,7 +74,7 @@ jobs:
       # default branch with no PR data, so resolve via the API by PR number.
       - name: Resolve PR head and base
         id: pr
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             let pr;
