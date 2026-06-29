@@ -45,35 +45,28 @@ pub fn build(b: *std.Build) void {
     postgres_source_module.addImport("domain", domain_module);
     postgres_source_module.addImport("constants", constants_module);
 
-    // Shared librdkafka bindings: one translate-c, imported as "c" by every
-    // module that uses librdkafka, so the generated C types match across modules.
-    const c_rdkafka = b.addTranslateC(.{
-        .root_source_file = b.path("src/c/rdkafka.h"),
+    // C bindings via build-system translate-c, split by deployment target so the
+    // test-only mock cluster API never reaches the production binary. Each target
+    // imports exactly one as "c", so the generated C types match within a build.
+    //   prod = libpq + librdkafka
+    //   dev  = prod + librdkafka's mock cluster (tests/benchmarks only)
+    const c_prod = b.addTranslateC(.{
+        .root_source_file = b.path("src/c/prod.h"),
         .target = target,
         .optimize = optimize,
     });
-    addCHeadersT(b, c_rdkafka);
-    const c_rdkafka_module = c_rdkafka.createModule();
+    addCHeadersT(b, c_prod);
+    const c_prod_module = c_prod.createModule();
 
-    // Shared libpq bindings, imported as "c" by every module that uses libpq.
-    const c_pq = b.addTranslateC(.{
-        .root_source_file = b.path("src/c/pq.h"),
+    const c_dev = b.addTranslateC(.{
+        .root_source_file = b.path("src/c/dev.h"),
         .target = target,
         .optimize = optimize,
     });
-    addCHeadersT(b, c_pq);
-    const c_pq_module = c_pq.createModule();
-    postgres_source_module.addImport("c", c_pq_module);
+    addCHeadersT(b, c_dev);
+    const c_dev_module = c_dev.createModule();
 
-    // Combined libpq + librdkafka bindings, imported as "c" by the shared test
-    // helpers (which touch both PostgreSQL and Kafka).
-    const c_pqrdkafka = b.addTranslateC(.{
-        .root_source_file = b.path("src/c/pq_rdkafka.h"),
-        .target = target,
-        .optimize = optimize,
-    });
-    addCHeadersT(b, c_pqrdkafka);
-    const c_pqrdkafka_module = c_pqrdkafka.createModule();
+    postgres_source_module.addImport("c", c_prod_module);
 
     // Kafka producer module
     const kafka_producer_module = b.createModule(.{
@@ -82,7 +75,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     kafka_producer_module.addImport("constants", constants_module);
-    kafka_producer_module.addImport("c", c_rdkafka_module);
+    kafka_producer_module.addImport("c", c_prod_module);
 
     // Processor module with all dependencies
     const cdc_processor_module = b.createModule(.{
@@ -115,7 +108,7 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("config", config_module);
     exe.root_module.addImport("postgres_source", postgres_source_module);
     exe.root_module.addImport("constants", constants_module);
-    exe.root_module.addImport("c", c_pq_module);
+    exe.root_module.addImport("c", c_prod_module);
 
     // Link libc for PostgreSQL and Kafka C libraries
     exe.root_module.link_libc = true;
@@ -173,7 +166,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     kafka_producer_tests.root_module.addImport("constants", constants_module);
-    kafka_producer_tests.root_module.addImport("c", c_rdkafka_module);
+    kafka_producer_tests.root_module.addImport("c", c_dev_module);
     kafka_producer_tests.root_module.link_libc = true;
     kafka_producer_tests.root_module.linkSystemLibrary("rdkafka", .{});
 
@@ -185,7 +178,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    replication_protocol_tests.root_module.addImport("c", c_pq_module);
+    replication_protocol_tests.root_module.addImport("c", c_dev_module);
     replication_protocol_tests.root_module.link_libc = true;
     replication_protocol_tests.root_module.linkSystemLibrary("pq", .{});
 
@@ -217,7 +210,7 @@ pub fn build(b: *std.Build) void {
     });
     streaming_source_tests.root_module.addImport("domain", domain_module);
     streaming_source_tests.root_module.addImport("constants", constants_module);
-    streaming_source_tests.root_module.addImport("c", c_pq_module);
+    streaming_source_tests.root_module.addImport("c", c_dev_module);
     streaming_source_tests.root_module.link_libc = true;
     streaming_source_tests.root_module.linkSystemLibrary("pq", .{});
 
@@ -231,7 +224,7 @@ pub fn build(b: *std.Build) void {
     });
     streaming_integration_tests.root_module.addImport("domain", domain_module);
     streaming_integration_tests.root_module.addImport("constants", constants_module);
-    streaming_integration_tests.root_module.addImport("c", c_pq_module);
+    streaming_integration_tests.root_module.addImport("c", c_dev_module);
     streaming_integration_tests.root_module.link_libc = true;
     streaming_integration_tests.root_module.linkSystemLibrary("pq", .{});
 
@@ -243,7 +236,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    validator_tests.root_module.addImport("c", c_pq_module);
+    validator_tests.root_module.addImport("c", c_dev_module);
     validator_tests.root_module.link_libc = true;
     validator_tests.root_module.linkSystemLibrary("pq", .{});
 
@@ -254,7 +247,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     test_helpers_module.addImport("config", config_module);
-    test_helpers_module.addImport("c", c_pqrdkafka_module);
+    test_helpers_module.addImport("c", c_dev_module);
     test_helpers_module.link_libc = true;
 
     // Add test_helpers to integration tests
@@ -309,7 +302,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     kafka_integration_tests.root_module.addImport("constants", constants_module);
-    kafka_integration_tests.root_module.addImport("c", c_rdkafka_module);
+    kafka_integration_tests.root_module.addImport("c", c_dev_module);
     kafka_integration_tests.root_module.link_libc = true;
     kafka_integration_tests.root_module.linkSystemLibrary("rdkafka", .{});
 
@@ -473,7 +466,7 @@ pub fn build(b: *std.Build) void {
     kafka_bench.root_module.addImport("zbench", zbench_module);
     kafka_bench.root_module.addImport("kafka_producer", kafka_producer_module);
     kafka_bench.root_module.addImport("bench_helpers", bench_helpers_module);
-    kafka_bench.root_module.addImport("c", c_rdkafka_module);
+    kafka_bench.root_module.addImport("c", c_dev_module);
     kafka_bench.root_module.link_libc = true;
     kafka_bench.root_module.linkSystemLibrary("rdkafka", .{});
 

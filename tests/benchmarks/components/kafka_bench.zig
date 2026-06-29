@@ -10,7 +10,7 @@ const message_iterations = 100;
 const batch_size = 1000;
 const flush_iterations = message_iterations;
 
-const c = @import("c"); // shared librdkafka bindings incl. mock (translate-c)
+const c = @import("c"); // C bindings incl. mock cluster (build-system translate-c)
 
 const payload =
     \\{

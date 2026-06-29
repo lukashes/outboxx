@@ -1,5 +1,5 @@
 const std = @import("std");
-const c = @import("c"); // shared librdkafka bindings (build-system translate-c)
+const c = @import("c"); // C bindings (build-system translate-c)
 const constants = @import("constants");
 
 const KafkaError = error{

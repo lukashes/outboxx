@@ -10,7 +10,7 @@ const ChangeOperation = domain.ChangeOperation;
 const source_mod = @import("source.zig");
 const PostgresSource = source_mod.PostgresSource;
 
-const c = @import("c"); // shared libpq bindings (build-system translate-c)
+const c = @import("c"); // C bindings (build-system translate-c)
 
 // Helper to create setup connection (non-replication)
 fn createSetupConnection(allocator: std.mem.Allocator) !*c.PGconn {
