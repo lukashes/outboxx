@@ -43,7 +43,8 @@ format = "json" # Only "json" format is currently supported
 destination = "outboxx.users" # Kafka topic name
 routing_key = "id" # Field used for partitioning in Kafka
 
-[[streams]] # Second stream example
+# Second stream example
+[[streams]]
 name = "orders_dev_stream"
 
 [streams.source]

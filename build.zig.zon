@@ -7,6 +7,10 @@
             .url = "https://github.com/hendriknielaender/zbench/archive/refs/tags/v0.13.0.tar.gz",
             .hash = "zbench-0.13.0-YTdc7xVBAQCCMC-IdLLuotBeiNNNm8k9Pi2V4VYqrwfI",
         },
+        .toml = .{
+            .url = "git+https://github.com/sam701/zig-toml?ref=zig-0.16#8685923e32e8b8a795eb2715684236975a70faed",
+            .hash = "toml-0.3.0-bV14BRmKAQAWR0FT0KUKFwVJTImaFhWjSe6HfSMtNZOH",
+        },
     },
     .paths = .{""},
     .fingerprint = 0xdcb3806ad7417129,
