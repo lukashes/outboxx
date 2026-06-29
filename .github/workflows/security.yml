@@ -62,8 +62,11 @@ jobs:
           # Check for common secret patterns
           echo "Scanning for potential secrets..."
 
-          # Database credentials (exclude test configs, format strings, default values, and env var names)
-          if grep -r -i "password.*=" src/ --include="*.zig" | grep -v "_test" | grep -v "// " | grep -v "password.*=.*\"password\"" | grep -v "\.password.*=.*\"password\"" | grep -v "password={s}" | grep -v "password_env" | grep -v "runtime_passwords" | grep -v "getPassword"; then
+          # Database credentials: only a string-literal assignment is a hardcoded
+          # secret, so require a quote after "=" (a bare `const password = expr;`
+          # is a runtime value, not a secret). Exclude test configs, the "password"
+          # default, format strings, and env-var-name fields.
+          if grep -r -i "password.*=.*\"" src/ --include="*.zig" | grep -v "_test" | grep -v "// " | grep -v "password.*=.*\"password\"" | grep -v "\.password.*=.*\"password\"" | grep -v "password={s}" | grep -v "password_env" | grep -v "runtime_passwords" | grep -v "getPassword"; then
             echo "FAIL: Found potential hardcoded passwords"
             exit 1
           fi
