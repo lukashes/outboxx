@@ -50,7 +50,7 @@ test "PgOutputDecoder: decode BEGIN message" {
     writeI64(data[9..17], 1234567890);
     writeU32(data[17..21], 42);
 
-    var msg = try pg_decoder.decode(&data);
+    var msg = try pg_decoder.decode(allocator, &data);
     defer msg.deinit(allocator);
 
     try testing.expect(msg == .begin);
@@ -71,7 +71,7 @@ test "PgOutputDecoder: decode COMMIT message" {
     writeU64(data[10..18], 0x2000);
     writeI64(data[18..26], 9999);
 
-    var msg = try pg_decoder.decode(&data);
+    var msg = try pg_decoder.decode(allocator, &data);
     defer msg.deinit(allocator);
 
     try testing.expect(msg == .commit);
@@ -132,7 +132,7 @@ test "PgOutputDecoder: decode RELATION message" {
     writeI32(&type_buf, -1);
     try data.appendSlice(allocator, &type_buf);
 
-    var msg = try pg_decoder.decode(data.items);
+    var msg = try pg_decoder.decode(allocator, data.items);
     defer msg.deinit(allocator);
 
     try testing.expect(msg == .relation);
@@ -187,7 +187,7 @@ test "PgOutputDecoder: decode INSERT message" {
     try data.appendSlice(allocator, &buf);
     try data.appendSlice(allocator, "Alice");
 
-    var msg = try pg_decoder.decode(data.items);
+    var msg = try pg_decoder.decode(allocator, data.items);
     defer msg.deinit(allocator);
 
     try testing.expect(msg == .insert);
@@ -244,7 +244,7 @@ test "PgOutputDecoder: decode UPDATE message with old tuple" {
     try data.appendSlice(allocator, &buf);
     try data.appendSlice(allocator, "new_name");
 
-    var msg = try pg_decoder.decode(data.items);
+    var msg = try pg_decoder.decode(allocator, data.items);
     defer msg.deinit(allocator);
 
     try testing.expect(msg == .update);
@@ -290,7 +290,7 @@ test "PgOutputDecoder: decode DELETE message" {
     try data.appendSlice(allocator, &buf);
     try data.appendSlice(allocator, "deleted_row");
 
-    var msg = try pg_decoder.decode(data.items);
+    var msg = try pg_decoder.decode(allocator, data.items);
     defer msg.deinit(allocator);
 
     try testing.expect(msg == .delete);
@@ -328,7 +328,7 @@ test "PgOutputDecoder: decode tuple with NULL values" {
     // Column 2: NULL
     try data.append(allocator, 'n');
 
-    var msg = try pg_decoder.decode(data.items);
+    var msg = try pg_decoder.decode(allocator, data.items);
     defer msg.deinit(allocator);
 
     try testing.expect(msg == .insert);
@@ -346,6 +346,6 @@ test "PgOutputDecoder: invalid message type" {
 
     const data = [_]u8{'X'}; // Unknown message type
 
-    const result = pg_decoder.decode(&data);
+    const result = pg_decoder.decode(allocator, &data);
     try testing.expectError(decoder_mod.DecoderError.UnknownMessageType, result);
 }

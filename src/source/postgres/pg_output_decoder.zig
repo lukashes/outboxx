@@ -153,7 +153,9 @@ pub const PgOutputDecoder = struct {
         };
     }
 
-    pub fn decode(self: *Self, data: []const u8) DecoderError!PgOutputMessage {
+    pub fn decode(self: *Self, allocator: std.mem.Allocator, data: []const u8) DecoderError!PgOutputMessage {
+        self.allocator = allocator; // decode into the caller's (per-batch) allocator
+
         if (data.len == 0) {
             return DecoderError.InvalidMessage;
         }

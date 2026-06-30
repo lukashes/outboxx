@@ -344,12 +344,12 @@ pub const PostgresSource = struct {
     fn extractChangeFromMessage(self: *Self, io: std.Io, batch_allocator: std.mem.Allocator, msg: replication_protocol.ReplicationMessage, changes: *std.ArrayList(ChangeEvent)) !u64 {
         switch (msg) {
             .xlog_data => |xlog| {
-                // Decode pgoutput message
-                var pg_msg = self.decoder.decode(xlog.wal_data) catch |err| {
+                // Decode into the batch arena (freed in bulk at batch reset);
+                // the registry copies the relation data it keeps.
+                const pg_msg = self.decoder.decode(batch_allocator, xlog.wal_data) catch |err| {
                     std.log.warn("Failed to decode pgoutput message at LSN {}: {}", .{ xlog.server_wal_end, err });
                     return PostgresSourceError.DecodeFailed; // Propagate error up
                 };
-                defer pg_msg.deinit(self.allocator);
 
                 // Convert to ChangeEvent
                 const change_opt = self.message_processor.processMessage(io, batch_allocator, pg_msg, &self.registry) catch |err| {
