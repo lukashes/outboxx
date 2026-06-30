@@ -54,7 +54,7 @@ help:
 	@echo "  make env-status    - Show environment status"
 	@echo ""
 	@echo "Load Testing (baseline: ~60k evt/s):"
-	@echo "  make load-up CDC=<cdc>     - Start infrastructure with CDC (outboxx|debezium)"
+	@echo "  make load-up CDC=<cdc>     - Start infrastructure with CDC (outboxx|debezium|both)"
 	@echo "  make load-switch CDC=<cdc> - Switch to different CDC solution"
 	@echo "  make load-test-steady      - Steady load (30k evt/s × 120s = 3.6M events)"
 	@echo "  make load-test-burst       - Burst load (10M events max speed)"

@@ -18,13 +18,22 @@ check_prerequisites() {
     fi
 }
 
-# Supported CDC solutions
-SUPPORTED_CDC=("outboxx" "debezium")
-if [[ ! " ${SUPPORTED_CDC[@]} " =~ " ${CDC} " ]]; then
-    echo "Error: Unsupported CDC solution: $CDC"
-    echo "Supported: ${SUPPORTED_CDC[*]}"
-    exit 1
-fi
+# Resolve which CDC services to start ("both" runs them in parallel: separate
+# replication slots, publications and Kafka topics keep them independent).
+case "$CDC" in
+    outboxx|debezium) CDC_LIST=("$CDC") ;;
+    both)             CDC_LIST=("outboxx" "debezium") ;;
+    *)
+        echo "Error: Unsupported CDC solution: $CDC"
+        echo "Supported: outboxx, debezium, both"
+        exit 1
+        ;;
+esac
+
+HAS_DEBEZIUM=false
+for cdc in "${CDC_LIST[@]}"; do
+    [ "$cdc" = "debezium" ] && HAS_DEBEZIUM=true
+done
 
 echo "Starting load testing infrastructure with $CDC..."
 cd "$LOAD_DIR"
@@ -46,12 +55,16 @@ done
 echo "Waiting for Kafka..."
 sleep 5
 
-# Start CDC solution
-echo "Starting $CDC CDC..."
-docker compose --profile "$CDC" up --build -d "$CDC"
+# Start CDC solution(s)
+echo "Starting CDC: ${CDC_LIST[*]}..."
+profile_args=()
+for cdc in "${CDC_LIST[@]}"; do
+    profile_args+=(--profile "$cdc")
+done
+docker compose "${profile_args[@]}" up --build -d "${CDC_LIST[@]}"
 
 # Wait for CDC to be ready
-if [ "$CDC" = "debezium" ]; then
+if [ "$HAS_DEBEZIUM" = true ]; then
     echo "Waiting for Debezium Kafka Connect..."
     until curl -s -o /dev/null -w "%{http_code}" http://localhost:8083/ | grep -q "200"; do
         sleep 2
@@ -71,7 +84,7 @@ echo "  Grafana:    http://localhost:3000 (admin/admin)"
 echo "  Prometheus: http://localhost:9090"
 echo "  cAdvisor:   http://localhost:8080"
 echo ""
-if [ "$CDC" = "debezium" ]; then
+if [ "$HAS_DEBEZIUM" = true ]; then
     echo "  Debezium API: http://localhost:8083"
     echo ""
 fi
