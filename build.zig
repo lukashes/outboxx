@@ -14,12 +14,20 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // TOML parser dependency (parses config straight into Zig structs)
+    const toml_dep = b.dependency("toml", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const toml_module = toml_dep.module("toml");
+
     // Config module (for type definitions like KafkaSink, Stream, etc.)
     const config_module = b.createModule(.{
         .root_source_file = b.path("src/config/config.zig"),
         .target = target,
         .optimize = optimize,
     });
+    config_module.addImport("toml", toml_module);
 
     // Domain module (new architecture) - must be defined before use
     const domain_module = b.createModule(.{
@@ -141,6 +149,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    config_tests.root_module.addImport("toml", toml_module);
 
     // Domain layer tests (new)
     const domain_tests = b.addTest(.{

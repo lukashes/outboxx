@@ -1,4 +1,5 @@
 const std = @import("std");
+const toml = @import("toml");
 
 // Configuration validation limits and constants
 pub const ValidationLimits = struct {
@@ -57,14 +58,11 @@ pub const SourceConfig = struct {
 
 pub const KafkaSink = struct {
     brokers: []const []const u8,
-    // Track if brokers array was dynamically allocated
-    brokers_allocated: bool = false,
 };
 
 pub const WebhookSink = struct {
     url: []const u8,
     method: []const u8,
-    headers: std.StringHashMap([]const u8),
 };
 
 pub const SinkConfig = struct {
@@ -99,128 +97,57 @@ pub const TableFilter = struct {
     exclude: []const []const u8,
 };
 
-pub const ParseError = error{
-    InvalidToml,
-    MissingSection,
-    InvalidType,
-    OutOfMemory,
-};
-
+// Configuration data, and the TOML parse target. Strings point into the arena of the
+// returned toml.Parsed(Config), so the caller keeps that value alive while using it.
 pub const Config = struct {
     metadata: Metadata,
     source: SourceConfig,
     sink: SinkConfig,
-    streams: []Stream,
-    tables: TableFilter,
+    streams: []const Stream = &.{},
+    tables: ?TableFilter = null,
 
-    // Runtime password storage (populated from ENV)
-    runtime_passwords: std.StringHashMap([]const u8),
-
-    // Track allocated strings for proper cleanup
-    allocated_strings: [][]const u8,
-    allocated_count: usize,
-    allocator: std.mem.Allocator,
-
-    pub fn init(allocator: std.mem.Allocator) Config {
-        return Config{
-            .metadata = Metadata{
-                .version = "", // Empty string, will be set by parser
-            },
-            .source = SourceConfig{ .type = "" }, // Empty, will be set by parser
-            .sink = SinkConfig{ .type = "" },
-            .streams = &.{},
-            .tables = TableFilter{
-                .include = &.{},
-                .exclude = &.{},
-            },
-            .runtime_passwords = std.StringHashMap([]const u8).init(allocator),
-            .allocated_strings = &[_][]const u8{},
-            .allocated_count = 0,
-            .allocator = allocator,
+    /// Parse a config file; caller owns and must deinit the returned result.
+    pub fn loadFromTomlFile(io: std.Io, allocator: std.mem.Allocator, file_path: []const u8) !toml.Parsed(Config) {
+        var parser = toml.Parser(Config).init(allocator);
+        defer parser.deinit();
+        return parser.parseFile(io, file_path) catch |err| {
+            std.log.warn("Failed to parse config file '{s}': {}", .{ file_path, err });
+            return err;
         };
     }
 
-    /// Load passwords from environment variables based on config
-    pub fn loadPasswords(self: *Config, allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map) !void {
-        // Load PostgreSQL password if configured
-        if (self.source.postgres) |postgres| {
-            const value = environ_map.get(postgres.password_env) orelse {
-                std.log.warn("Environment variable '{s}' not found", .{postgres.password_env});
-                return error.EnvironmentVariableNotFound;
-            };
-            const pw = try allocator.dupe(u8, value);
-            try self.runtime_passwords.put("postgres", pw);
-        }
-
-        // Load MySQL password if configured
-        if (self.source.mysql) |mysql| {
-            const value = environ_map.get(mysql.password_env) orelse {
-                std.log.warn("Environment variable '{s}' not found", .{mysql.password_env});
-                return error.EnvironmentVariableNotFound;
-            };
-            const pw = try allocator.dupe(u8, value);
-            try self.runtime_passwords.put("mysql", pw);
-        }
+    /// Parse a config string; caller owns and must deinit the returned result.
+    pub fn loadFromTomlString(allocator: std.mem.Allocator, content: []const u8) !toml.Parsed(Config) {
+        var parser = toml.Parser(Config).init(allocator);
+        defer parser.deinit();
+        return parser.parseString(content);
     }
 
-    /// Get password for source type
-    pub fn getPassword(self: Config, source_type: []const u8) ?[]const u8 {
-        return self.runtime_passwords.get(source_type);
+    /// Read the configured source's password from the environment; caller owns the result.
+    pub fn loadPassword(self: Config, allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map) ![]u8 {
+        const env_name = if (self.source.postgres) |postgres|
+            postgres.password_env
+        else if (self.source.mysql) |mysql|
+            mysql.password_env
+        else
+            return error.PasswordNotConfigured;
+
+        const value = environ_map.get(env_name) orelse {
+            std.log.warn("Environment variable '{s}' not found", .{env_name});
+            return error.EnvironmentVariableNotFound;
+        };
+        return allocator.dupe(u8, value);
     }
 
-    /// Generate PostgreSQL connection string
-    pub fn postgresConnectionString(self: Config, allocator: std.mem.Allocator) ![]u8 {
+    /// Build the libpq connection string for the configured PostgreSQL source.
+    pub fn postgresConnectionString(self: Config, allocator: std.mem.Allocator, password: []const u8) ![]u8 {
         const postgres = self.source.postgres orelse return error.PostgresNotConfigured;
-        const password = self.getPassword("postgres") orelse return error.PasswordNotLoaded;
 
         return std.fmt.allocPrint(
             allocator,
             "host={s} port={d} dbname={s} user={s} password={s} replication=database gssencmode=disable",
             .{ postgres.host, postgres.port, postgres.database, postgres.user, password },
         );
-    }
-
-    pub fn deinit(self: *Config, allocator: std.mem.Allocator) void {
-        // Free runtime passwords
-        var iterator = self.runtime_passwords.iterator();
-        while (iterator.next()) |entry| {
-            allocator.free(entry.value_ptr.*);
-        }
-        self.runtime_passwords.deinit();
-
-        // Free all allocated strings
-        for (self.allocated_strings[0..self.allocated_count]) |str| {
-            allocator.free(str);
-        }
-        if (self.allocated_strings.len > 0) {
-            allocator.free(self.allocated_strings);
-        }
-
-        // Free allocated arrays (only if they were dynamically allocated)
-        if (self.sink.kafka) |*kafka| {
-            if (kafka.brokers_allocated) {
-                // Free individual broker strings
-                for (kafka.brokers) |broker| {
-                    allocator.free(broker);
-                }
-                // Free the brokers array itself
-                allocator.free(kafka.brokers);
-            }
-        }
-
-        // Free streams array and individual stream operation arrays
-        if (self.streams.len > 0) {
-            for (self.streams) |stream| {
-                // Free operations array for each stream if it was allocated
-                if (stream.source.operations.len > 0) {
-                    for (stream.source.operations) |operation| {
-                        allocator.free(operation);
-                    }
-                    allocator.free(stream.source.operations);
-                }
-            }
-            allocator.free(self.streams);
-        }
     }
 
     // Helper validation functions
@@ -496,381 +423,5 @@ pub const Config = struct {
             return error.NoStreamsConfigured;
         }
         try validateStreams(allocator, self.streams);
-    }
-
-    /// Load configuration from TOML file
-    pub fn loadFromTomlFile(io: std.Io, allocator: std.mem.Allocator, file_path: []const u8) !Config {
-        var parser = ConfigParser.init(allocator);
-        return parser.parseFile(io, file_path);
-    }
-};
-
-// Internal configuration parser
-pub const ConfigParser = struct {
-    allocator: std.mem.Allocator,
-
-    pub fn init(allocator: std.mem.Allocator) ConfigParser {
-        return ConfigParser{
-            .allocator = allocator,
-        };
-    }
-
-    /// Parse TOML config file
-    pub fn parseFile(self: *ConfigParser, io: std.Io, file_path: []const u8) !Config {
-        const file_content = std.Io.Dir.cwd().readFileAlloc(io, file_path, self.allocator, .limited(1024 * 1024)) catch |err| {
-            std.log.warn("Failed to read config file: {}", .{err});
-            return err;
-        };
-        defer self.allocator.free(file_content);
-
-        return self.parseToml(file_content);
-    }
-
-    /// Parse TOML content string
-    pub fn parseToml(self: *ConfigParser, content: []const u8) !Config {
-        var result = Config.init(self.allocator);
-
-        // Simple line-by-line parser for our specific TOML structure
-        var lines = std.mem.splitSequence(u8, content, "\n");
-        var current_section: ?[]const u8 = null;
-        var current_subsection: ?[]const u8 = null;
-        var streams_list = std.ArrayList(Stream).empty;
-        defer streams_list.deinit(self.allocator);
-        var current_stream_index: ?usize = null;
-
-        while (lines.next()) |line| {
-            const trimmed = std.mem.trim(u8, line, " \t\r");
-
-            // Skip empty lines and comments
-            if (trimmed.len == 0 or trimmed[0] == '#') continue;
-
-            // Parse array of tables [[streams]]
-            if (trimmed.len >= 4 and std.mem.startsWith(u8, trimmed, "[[")) {
-                // Find closing ]] (may have comments after)
-                const closing_bracket = std.mem.find(u8, trimmed, "]]") orelse continue;
-                const array_section = trimmed[2..closing_bracket];
-
-                if (std.mem.eql(u8, array_section, "streams")) {
-                    // Create new stream entry
-                    try streams_list.append(self.allocator, Stream{
-                        .name = "",
-                        .source = StreamSource{
-                            .resource = "",
-                            .operations = &.{},
-                        },
-                        .flow = StreamFlow{
-                            .format = "",
-                        },
-                        .sink = StreamSink{
-                            .destination = "",
-                            .routing_key = null,
-                        },
-                    });
-                    current_stream_index = streams_list.items.len - 1;
-                    current_section = "streams";
-                    current_subsection = null;
-                }
-                continue;
-            }
-
-            // Parse sections [section]
-            if (trimmed[0] == '[' and trimmed[trimmed.len - 1] == ']') {
-                const section_name = trimmed[1 .. trimmed.len - 1];
-
-                if (std.mem.cut(u8, section_name, ".")) |parts| {
-                    current_section = parts[0];
-                    current_subsection = parts[1];
-                } else {
-                    current_section = section_name;
-                    current_subsection = null;
-                }
-                continue;
-            }
-
-            // Parse key-value pairs
-            if (std.mem.cut(u8, trimmed, "=")) |kv| {
-                const key = std.mem.trim(u8, kv[0], " \t");
-                const value_str = std.mem.trim(u8, kv[1], " \t");
-
-                const current_stream = if (current_stream_index) |idx| &streams_list.items[idx] else null;
-                try self.setConfigValue(&result, current_section, current_subsection, key, value_str, current_stream);
-            }
-        }
-
-        // Convert streams list to owned slice
-        if (streams_list.items.len > 0) {
-            result.streams = try self.allocator.dupe(Stream, streams_list.items);
-        }
-
-        return result;
-    }
-
-    fn setConfigValue(
-        self: *ConfigParser,
-        config: *Config,
-        section: ?[]const u8,
-        subsection: ?[]const u8,
-        key: []const u8,
-        value_str: []const u8,
-        current_stream: ?*Stream,
-    ) !void {
-        if (section == null) return;
-
-        if (std.mem.eql(u8, section.?, "metadata")) {
-            try self.parseMetadataValue(config, key, value_str);
-        } else if (std.mem.eql(u8, section.?, "source")) {
-            if (subsection == null) {
-                try self.parseSourceValue(config, key, value_str);
-            } else if (subsection != null) {
-                if (std.mem.eql(u8, subsection.?, "postgres")) {
-                    try self.parsePostgresValue(config, key, value_str);
-                } else if (std.mem.eql(u8, subsection.?, "mysql")) {
-                    try self.parseMysqlValue(config, key, value_str);
-                }
-            }
-        } else if (std.mem.eql(u8, section.?, "sink")) {
-            if (subsection == null) {
-                try self.parseSinkValue(config, key, value_str);
-            } else if (subsection != null) {
-                if (std.mem.eql(u8, subsection.?, "kafka")) {
-                    try self.parseKafkaValue(config, key, value_str);
-                }
-            }
-        } else if (std.mem.eql(u8, section.?, "streams")) {
-            if (current_stream) |stream| {
-                try self.parseStreamValue(stream, subsection, key, value_str, config);
-            }
-        }
-    }
-
-    fn parseMetadataValue(self: *ConfigParser, config: *Config, key: []const u8, value_str: []const u8) !void {
-        const value = try self.parseStringValue(config, value_str);
-
-        if (std.mem.eql(u8, key, "version")) {
-            config.metadata.version = value;
-        }
-    }
-
-    fn parseSourceValue(self: *ConfigParser, config: *Config, key: []const u8, value_str: []const u8) !void {
-        const value = try self.parseStringValue(config, value_str);
-
-        if (std.mem.eql(u8, key, "type")) {
-            config.source.type = value;
-        }
-    }
-
-    fn parseSinkValue(self: *ConfigParser, config: *Config, key: []const u8, value_str: []const u8) !void {
-        const value = try self.parseStringValue(config, value_str);
-
-        if (std.mem.eql(u8, key, "type")) {
-            config.sink.type = value;
-        }
-    }
-
-    fn parsePostgresValue(self: *ConfigParser, config: *Config, key: []const u8, value_str: []const u8) !void {
-        if (config.source.postgres == null) {
-            config.source.postgres = PostgresSource{
-                .host = "localhost",
-                .port = 5432,
-                .database = "outboxx_test",
-                .user = "postgres",
-                .password_env = "POSTGRES_PASSWORD",
-                .slot_name = "outboxx_slot",
-                .publication_name = "outboxx_publication",
-            };
-        }
-
-        var postgres = &config.source.postgres.?;
-
-        if (std.mem.eql(u8, key, "host")) {
-            postgres.host = try self.parseStringValue(config, value_str);
-        } else if (std.mem.eql(u8, key, "port")) {
-            postgres.port = self.parseIntValue(u16, value_str) catch |err| {
-                std.log.warn("Invalid postgres.port value '{s}': {}, using default 5432", .{ value_str, err });
-                return err;
-            };
-        } else if (std.mem.eql(u8, key, "database")) {
-            postgres.database = try self.parseStringValue(config, value_str);
-        } else if (std.mem.eql(u8, key, "user")) {
-            postgres.user = try self.parseStringValue(config, value_str);
-        } else if (std.mem.eql(u8, key, "password_env")) {
-            postgres.password_env = try self.parseStringValue(config, value_str);
-        } else if (std.mem.eql(u8, key, "slot_name")) {
-            postgres.slot_name = try self.parseStringValue(config, value_str);
-        } else if (std.mem.eql(u8, key, "publication_name")) {
-            postgres.publication_name = try self.parseStringValue(config, value_str);
-        }
-    }
-
-    fn parseMysqlValue(self: *ConfigParser, config: *Config, key: []const u8, value_str: []const u8) !void {
-        if (config.source.mysql == null) {
-            config.source.mysql = MysqlSource{
-                .host = "localhost",
-                .port = 3306,
-                .database = "myapp",
-                .user = "root",
-                .password_env = "MYSQL_PASSWORD",
-                .server_id = 1,
-                .binlog_format = "ROW",
-            };
-        }
-
-        var mysql = &config.source.mysql.?;
-
-        if (std.mem.eql(u8, key, "host")) {
-            mysql.host = try self.parseStringValue(config, value_str);
-        } else if (std.mem.eql(u8, key, "port")) {
-            mysql.port = self.parseIntValue(u16, value_str) catch |err| {
-                std.log.warn("Invalid mysql.port value '{s}': {}, using default 3306", .{ value_str, err });
-                return err;
-            };
-        } else if (std.mem.eql(u8, key, "database")) {
-            mysql.database = try self.parseStringValue(config, value_str);
-        } else if (std.mem.eql(u8, key, "user")) {
-            mysql.user = try self.parseStringValue(config, value_str);
-        } else if (std.mem.eql(u8, key, "password_env")) {
-            mysql.password_env = try self.parseStringValue(config, value_str);
-        } else if (std.mem.eql(u8, key, "server_id")) {
-            mysql.server_id = self.parseIntValue(u32, value_str) catch |err| {
-                std.log.warn("Invalid mysql.server_id value '{s}': {}, using default 1", .{ value_str, err });
-                return err;
-            };
-        } else if (std.mem.eql(u8, key, "binlog_format")) {
-            mysql.binlog_format = try self.parseStringValue(config, value_str);
-        }
-    }
-
-    fn parseKafkaValue(self: *ConfigParser, config: *Config, key: []const u8, value_str: []const u8) !void {
-        if (config.sink.kafka == null) {
-            config.sink.kafka = KafkaSink{
-                .brokers = &[_][]const u8{},
-                .brokers_allocated = false,
-            };
-        }
-
-        var kafka = &config.sink.kafka.?;
-
-        if (std.mem.eql(u8, key, "brokers")) {
-            kafka.brokers = try self.parseStringArray(value_str);
-            kafka.brokers_allocated = true;
-        }
-    }
-
-    fn parseIntValue(self: *ConfigParser, comptime T: type, value_str: []const u8) !T {
-        _ = self;
-
-        const clean_str = std.mem.trim(u8, value_str, " \t\"");
-        return std.fmt.parseInt(T, clean_str, 10);
-    }
-
-    fn parseStringArray(self: *ConfigParser, value_str: []const u8) ![]const []const u8 {
-        // Remove comments first
-        const value_without_comment = if (std.mem.cut(u8, value_str, "#")) |parts|
-            std.mem.trim(u8, parts[0], " \t")
-        else
-            value_str;
-
-        // Simple array parsing for ["item1", "item2"]
-        const clean_str = std.mem.trim(u8, value_without_comment, " \t");
-
-        if (clean_str.len < 2 or clean_str[0] != '[' or clean_str[clean_str.len - 1] != ']') {
-            return &[_][]const u8{};
-        }
-
-        const array_content = clean_str[1 .. clean_str.len - 1];
-
-        // Handle empty array
-        if (array_content.len == 0) {
-            return &[_][]const u8{};
-        }
-
-        // Count commas to estimate size
-        var count: usize = 1;
-        for (array_content) |c| {
-            if (c == ',') count += 1;
-        }
-
-        // Allocate array for items
-        const items = try self.allocator.alloc([]const u8, count);
-        var item_index: usize = 0;
-
-        var parts = std.mem.splitSequence(u8, array_content, ",");
-        while (parts.next()) |part| {
-            const trimmed_part = std.mem.trim(u8, part, " \t\"");
-            if (trimmed_part.len > 0 and item_index < items.len) {
-                // Duplicate the string so it stays valid
-                items[item_index] = try self.allocator.dupe(u8, trimmed_part);
-                item_index += 1;
-            }
-        }
-
-        // Resize to actual count
-        return self.allocator.realloc(items, item_index);
-    }
-
-    fn parseStreamValue(
-        self: *ConfigParser,
-        stream: *Stream,
-        subsection: ?[]const u8,
-        key: []const u8,
-        value_str: []const u8,
-        config: *Config,
-    ) !void {
-        if (subsection == null) {
-            // Direct stream properties
-            if (std.mem.eql(u8, key, "name")) {
-                stream.name = try self.parseStringValue(config, value_str);
-            }
-        } else if (std.mem.eql(u8, subsection.?, "source")) {
-            // Stream source properties
-            if (std.mem.eql(u8, key, "resource")) {
-                stream.source.resource = try self.parseStringValue(config, value_str);
-            } else if (std.mem.eql(u8, key, "operations")) {
-                stream.source.operations = try self.parseStringArray(value_str);
-            }
-        } else if (std.mem.eql(u8, subsection.?, "flow")) {
-            // Stream flow properties
-            if (std.mem.eql(u8, key, "format")) {
-                stream.flow.format = try self.parseStringValue(config, value_str);
-            }
-        } else if (std.mem.eql(u8, subsection.?, "sink")) {
-            // Stream sink properties
-            if (std.mem.eql(u8, key, "destination")) {
-                stream.sink.destination = try self.parseStringValue(config, value_str);
-            } else if (std.mem.eql(u8, key, "routing_key")) {
-                stream.sink.routing_key = try self.parseStringValue(config, value_str);
-            }
-        }
-    }
-
-    fn parseStringValue(self: *ConfigParser, target: anytype, value_str: []const u8) ![]const u8 {
-        // Remove comments first
-        const value_without_comment = if (std.mem.cut(u8, value_str, "#")) |parts|
-            std.mem.trim(u8, parts[0], " \t")
-        else
-            value_str;
-
-        // Remove quotes if present
-        const clean_value = if (value_without_comment.len >= 2 and value_without_comment[0] == '"' and value_without_comment[value_without_comment.len - 1] == '"')
-            value_without_comment[1 .. value_without_comment.len - 1]
-        else
-            value_without_comment;
-
-        // Make owned copy of the string
-        const owned_string = try self.allocator.dupe(u8, clean_value);
-
-        // Track for cleanup based on target type
-        if (@TypeOf(target) == *Config) {
-            const config = target;
-            // Track for cleanup - grow array if needed
-            if (config.allocated_count >= config.allocated_strings.len) {
-                const new_size = if (config.allocated_strings.len == 0) 10 else config.allocated_strings.len * 2;
-                config.allocated_strings = try config.allocator.realloc(config.allocated_strings, new_size);
-            }
-            config.allocated_strings[config.allocated_count] = owned_string;
-            config.allocated_count += 1;
-        }
-
-        return owned_string;
     }
 };

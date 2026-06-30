@@ -51,15 +51,18 @@ fn run(init: std.process.Init) !void {
     defer allocator.free(config_file_path);
 
     printStatus("Loading configuration from: {s}\n", .{config_file_path});
-    var config = try Config.loadFromTomlFile(init.io, allocator, config_file_path);
-    defer config.deinit(allocator);
+    var parsed = try Config.loadFromTomlFile(init.io, allocator, config_file_path);
+    defer parsed.deinit();
+    const config = parsed.value;
 
     try config.validate(allocator);
-    try config.loadPasswords(allocator, init.environ_map);
+
+    const pw = try config.loadPassword(allocator, init.environ_map);
+    defer allocator.free(pw);
 
     printConfigInfo(config);
 
-    try validatePostgres(allocator, config);
+    try validatePostgres(allocator, config, pw);
 
     const postgres = config.source.postgres.?;
 
@@ -69,7 +72,7 @@ fn run(init: std.process.Init) !void {
     printStatus("Starting processor for {} stream(s)...\n", .{config.streams.len});
     printStatus("Using PostgreSQL streaming replication (pgoutput protocol)\n", .{});
 
-    const conn_str = try config.postgresConnectionString(allocator);
+    const conn_str = try config.postgresConnectionString(allocator, pw);
     defer allocator.free(conn_str);
 
     var source = PostgresSource.init(allocator, postgres.slot_name, postgres.publication_name);
@@ -161,8 +164,8 @@ fn printConfigInfo(cfg: Config) void {
     printStatus("  Slot: {s}\n", .{postgres.slot_name});
 }
 
-fn validatePostgres(allocator: std.mem.Allocator, cfg: Config) !void {
-    const conn_str = try cfg.postgresConnectionString(allocator);
+fn validatePostgres(allocator: std.mem.Allocator, cfg: Config, pw: []const u8) !void {
+    const conn_str = try cfg.postgresConnectionString(allocator, pw);
     defer allocator.free(conn_str);
 
     printStatus("\nValidating PostgreSQL connection and settings...\n", .{});
