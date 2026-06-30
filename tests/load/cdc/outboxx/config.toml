@@ -10,10 +10,9 @@ host = "postgres"
 port = 5432
 database = "outboxx_load"
 user = "postgres"
-password = "POSTGRES_PASSWORD"
+password_env = "POSTGRES_PASSWORD"
 slot_name = "load_slot"
 publication_name = "outboxx_load_pub"
-engine = "streaming"
 
 [sink]
 type = "kafka"
