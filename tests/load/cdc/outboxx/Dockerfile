@@ -15,8 +15,8 @@ RUN nix develop --command echo "Dependencies cached"
 # Now copy the rest of the project
 COPY . .
 
-# Build using nix develop + zig build (ReleaseSafe for profiling with debug symbols)
-RUN nix develop --command zig build -Doptimize=ReleaseSafe
+# Build the load binary (ReleaseFast for max throughput, matching the product)
+RUN nix develop --command zig build -Doptimize=ReleaseFast
 
 # Patch binary to use system linker instead of Nix linker
 RUN nix develop --command bash -c " \

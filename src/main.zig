@@ -28,19 +28,18 @@ pub fn main(init: std.process.Init) void {
 }
 
 fn run(init: std.process.Init) !void {
-    var gpa = std.heap.DebugAllocator(.{
-        .safety = true,
-        .retain_metadata = true,
-    }){};
-    defer {
-        const deinit_status = gpa.deinit();
-        if (deinit_status == .leak) {
+    // Debug: DebugAllocator for leak detection. Release: libc allocator
+    // (already linked), much faster on the per-change hot path.
+    var debug_allocator = std.heap.DebugAllocator(.{}){};
+    const allocator, const is_debug = switch (builtin.mode) {
+        .Debug => .{ debug_allocator.allocator(), true },
+        else => .{ std.heap.c_allocator, false },
+    };
+    defer if (is_debug) {
+        if (debug_allocator.deinit() == .leak) {
             std.log.err("Memory leak detected!", .{});
-        } else {
-            std.log.debug("No memory leaks detected", .{});
         }
-    }
-    const allocator = gpa.allocator();
+    };
 
     printBanner();
 

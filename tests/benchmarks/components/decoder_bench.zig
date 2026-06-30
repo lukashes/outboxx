@@ -65,7 +65,7 @@ const BenchDecoderInsert = struct {
 
     pub fn run(self: *BenchDecoderInsert, allocator: std.mem.Allocator) void {
         var decoder = PgOutputDecoder.init(allocator);
-        var msg = decoder.decode(self.golden_data) catch unreachable;
+        var msg = decoder.decode(allocator, self.golden_data) catch unreachable;
         defer msg.deinit(allocator);
     }
 };

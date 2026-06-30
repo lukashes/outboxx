@@ -4,8 +4,12 @@ pub fn build(b: *std.Build) void {
     // Standard target options allow the person running zig build to pick the architecture and OS
     const target = b.standardTargetOptions(.{});
 
-    // Standard optimization options allow the person running zig build to pick the optimization level
-    const optimize = b.standardOptimizeOption(.{});
+    // Product binary: default to ReleaseFast, override with -Doptimize=Debug.
+    const optimize = b.option(
+        std.builtin.OptimizeMode,
+        "optimize",
+        "Prioritize performance, safety, or binary size (default: ReleaseFast)",
+    ) orelse .ReleaseFast;
 
     // Constants module (application-wide constants)
     const constants_module = b.createModule(.{
