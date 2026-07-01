@@ -1,4 +1,3 @@
-# Outboxx load testing configuration
 [metadata]
 version = "v0"
 
@@ -8,11 +7,11 @@ type = "postgres"
 [source.postgres]
 host = "postgres"
 port = 5432
-database = "outboxx_load"
+database = "bench"
 user = "postgres"
 password_env = "POSTGRES_PASSWORD"
-slot_name = "load_slot"
-publication_name = "outboxx_load_pub"
+slot_name = "outboxx_benchmark_slot"
+publication_name = "outboxx_benchmark_publication"
 
 [sink]
 type = "kafka"
@@ -21,15 +20,15 @@ type = "kafka"
 brokers = ["kafka:9092"]
 
 [[streams]]
-name = "load_stream"
+name = "benchmark-records"
 
 [streams.source]
-resource = "load_events"
+resource = "benchmark_records"
 operations = ["insert", "update", "delete"]
 
 [streams.flow]
 format = "json"
 
 [streams.sink]
-destination = "outboxx.load_events"
+destination = "outboxx.public.benchmark_records"
 routing_key = "id"

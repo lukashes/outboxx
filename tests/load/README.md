@@ -1,202 +1,135 @@
-# Load Testing for Outboxx CDC
+# Postgres -> Debezium/Outboxx -> Kafka benchmark
 
-Minimally-functional load testing infrastructure for comparing CDC solutions (Outboxx, Debezium, and future additions).
+Local stand for generating PostgreSQL WAL first, then starting CDC readers and watching catch-up in Grafana.
 
-## Quick Start
+## Flow
 
-```bash
-# Start with Outboxx
-make load-up CDC=outboxx
+```sh
+cd tests/load
 
-# Run load test
-make load-test-steady
-
-# View metrics in Grafana
-open http://localhost:3000
-
-# Switch to Debezium
-make load-switch CDC=debezium
-
-# Run another test
-make load-test-steady
-
-# Stop everything
-make load-down
+make infra
+make load
+make start-debezium
+make reset
 ```
 
-## Architecture
+What each command does:
 
-```
-PostgreSQL (source) ─→ CDC Solution ─→ Kafka (sink)
-                                          ↓
-                                  Kafka Exporter (metrics)
-                                          ↓
-                                     Prometheus
-                                          ↓
-                                       Grafana
-```
+- `make infra` starts PostgreSQL, Kafka, Kafka UI, Prometheus, Grafana, exporters, and cAdvisor. It stops Debezium/Outboxx if they exist and creates logical replication slots before any workload.
+- `make load` starts `infra` if needed and generates PostgreSQL writes while CDC readers are stopped, so WAL accumulates behind the slots.
+- `make start-debezium` starts only Debezium. Outboxx is stopped/removed first.
+- `make start-outboxx` starts only Outboxx. Debezium and connector-init are stopped/removed first.
+- `make start-all` starts Debezium and Outboxx together. Debezium is registered automatically.
+- `make reset` stops the stand and removes this stand's PostgreSQL, Kafka, Prometheus, and Grafana volumes.
 
-**Core infrastructure** (always running):
-- PostgreSQL (port 5433) - tuned for CDC
-- Kafka (KRaft mode, no ZooKeeper)
-- Prometheus (port 9090) - metrics storage
-- Grafana (port 3000) - visualization
-- cAdvisor (port 8080) - container metrics (CPU, Memory)
-- Kafka Exporter (port 8000) - CDC metrics parser
+Open:
 
-**CDC solutions** (one active at a time):
-- Outboxx (native Zig)
-- Debezium (JVM-based)
-- Future: add more via plugins (see `cdc/README.md`)
+- Grafana: http://localhost:3000 (`admin` / `admin`)
+- Prometheus: http://localhost:9090
+- Kafka UI: http://localhost:8080
+- Kafka Connect REST: http://localhost:8083
+- PostgreSQL: `localhost:5432`, database `bench`, user `postgres`, password `postgres`
 
-## Load Scenarios
+## Load Parameters
 
-**Baseline performance: ~60k events/sec**
+Default `make load` is insert-only and intended to generate a meaningful WAL backlog:
 
-### Steady Load
-```bash
-make load-test-steady
-```
-- **Rate**: 30,000 events/sec (50% capacity)
-- **Duration**: 120 seconds (3.6M events)
-- **Transactions**: 3,600 transactions × 1k events (30 tx/sec)
-- **Purpose**: Test sustained throughput stability with realistic transaction sizes
-
-### Burst Load
-```bash
-make load-test-burst
-```
-- **Rate**: Maximum (no throttling)
-- **Total**: 10,000,000 events in 1 transaction
-- **Purpose**: Test peak throughput and lag recovery under extreme load
-
-### Ramp Load
-```bash
-make load-test-ramp
-```
-- **Rate**: 10k → 20k → 40k → 60k → 80k → 100k → 120k → 140k → 160k → 180k → 200k evt/s
-- **Duration**: 30 seconds per step (5.5 minutes total)
-- **Transactions**: 1k events per transaction (10-200 tx/sec)
-- **Purpose**: Find breaking point where lag starts growing
-
-### Mixed Operations
-```bash
-make load-test-mixed
-```
-- **Distribution**: 60% INSERT, 30% UPDATE, 10% DELETE (shuffled)
-- **Total**: 1,000,000 operations
-- **Transactions**: 1,000 transactions × 1k ops (realistic batch size)
-- **Shuffling**: Operations shuffled within each transaction
-- **Purpose**: Test realistic production workload with mixed operation types
-
-## Key Metrics
-
-View in Grafana dashboard (auto-provisioned): http://localhost:3000
-
-### Replication Lag (seconds)
-- **Calculation**: `kafka_timestamp - event_timestamp`
-- **Target**: < 1 second (good), < 5 seconds (acceptable)
-- **Notes**: Uses Kafka message timestamp for accurate CDC performance measurement
-
-### Throughput (events/sec)
-- **Baseline**: ~60,000 evt/s sustained
-- **Target**: > 30,000 evt/s (50% capacity), > 100,000 evt/s burst
-- **Notes**: Counts only INSERT/UPDATE/DELETE (excludes BEGIN/COMMIT)
-
-### Memory Usage (MB)
-- **Target**: < 256 MB (good), < 512 MB (limit)
-
-### CPU Usage (%)
-- **Target**: < 50% sustained, < 80% during bursts
-
-## Commands
-
-### Infrastructure Management
-```bash
-make load-up CDC=outboxx      # Start with Outboxx (default)
-make load-up CDC=debezium     # Start with Debezium
-make load-switch CDC=debezium # Switch to different CDC
-make load-status              # Show current status
-make load-down                # Stop everything
+```text
+DURATION=120
+BATCH_SIZE=10000
+INTERVAL=0
+ROW_BYTES=128
+UPDATE_RATIO=0
+DELETE_RATIO=0
 ```
 
-### Running Tests
-```bash
-make load-test-steady   # 30k evt/s × 120s (3.6M events)
-make load-test-burst    # 10M events max speed
-make load-test-ramp     # 10k→200k evt/s (30s steps)
-make load-test-mixed    # 1M mixed ops (60% INSERT, 30% UPDATE, 10% DELETE)
+Override them inline:
+
+```sh
+make load DURATION=300 BATCH_SIZE=20000 INTERVAL=0 ROW_BYTES=256 UPDATE_RATIO=0 DELETE_RATIO=0
 ```
 
-### Monitoring
-```bash
-# Grafana dashboard
-open http://localhost:3000
-# Login: admin / admin
+The generator uses set-based SQL inside PostgreSQL, so rows are generated server-side instead of sending large JSON batches from Python.
 
-# Prometheus metrics
-open http://localhost:9090
+## Debezium Compression
 
-# cAdvisor (container metrics)
-open http://localhost:8080
+Debezium producer compression is disabled by default to keep Kafka storage and append-rate comparisons closer to current Outboxx behavior:
 
-# Check CDC logs
-docker logs -f load_outboxx
-docker logs -f load_debezium
-
-# Infrastructure status
-make load-status
+```text
+DEBEZIUM_COMPRESSION_TYPE=none
 ```
 
-## Comparing CDC Solutions
+To run Debezium with compression:
 
-### 1. Test Outboxx
-```bash
-make load-up CDC=outboxx
-make load-test-steady
-# Note metrics in Grafana
+```sh
+make start-debezium DEBEZIUM_COMPRESSION_TYPE=lz4
+make start-all DEBEZIUM_COMPRESSION_TYPE=lz4
 ```
 
-### 2. Switch to Debezium
-```bash
-make load-switch CDC=debezium
-make load-test-steady
-# Compare metrics in Grafana
+## Debezium Performance Profile
+
+Debezium is configured for catch-up throughput rather than full default envelopes:
+
+- `ExtractNewRecordState` unwraps events, so Kafka values contain the changed row instead of Debezium's full `before/after/source/op/ts_ms` envelope.
+- Delete events are kept as compact row records with `__deleted=true`; tombstones are dropped.
+- Schema change records, transaction metadata, and heartbeat messages are disabled.
+- Debezium and Kafka producer batches/queues are enlarged, and producer linger is increased.
+- Connect heap is fixed at 2 GB to avoid heap growth during catch-up.
+- Connect offset flush is set to 1 second by default to match Outboxx's explicit sync cadence more closely.
+
+This makes the Debezium topic less self-describing, but it is the right mode for maximum single-node throughput in this benchmark.
+
+To test a different Connect offset flush interval:
+
+```sh
+make start-debezium DEBEZIUM_OFFSET_FLUSH_INTERVAL_MS=30000
+make start-all DEBEZIUM_OFFSET_FLUSH_INTERVAL_MS=30000
 ```
 
-### 3. Key Differences
+## Operation Mix
 
-| Feature | Outboxx | Debezium |
-|---------|---------|----------|
-| **Language** | Zig (native) | Java (JVM) |
-| **Startup** | <1 second | ~30 seconds |
-| **Memory** | ~50-100 MB | ~250-300 MB |
-| **Topic** | `outboxx.load_events` | `debezium.public.load_events` |
-| **Metrics** | `outboxx_*` | `debezium_*` |
+`BATCH_SIZE` is the number of inserts per transaction. `UPDATE_RATIO` and `DELETE_RATIO` are relative to inserts:
 
-## Troubleshooting
-
-```bash
-# Check CDC logs
-docker logs load_outboxx
-docker logs load_debezium
-
-# Infrastructure status
-make load-status
+```text
+inserts = BATCH_SIZE
+updates = BATCH_SIZE * UPDATE_RATIO
+deletes = BATCH_SIZE * DELETE_RATIO
 ```
 
-**Note**: Load testing uses different ports: PostgreSQL 5433, Grafana 3000, Prometheus 9090
+Examples:
 
-## Performance Targets
+```sh
+# 100% INSERT
+make load BATCH_SIZE=10000 UPDATE_RATIO=0 DELETE_RATIO=0
 
-**Baseline: ~60k events/sec**
+# About 80% INSERT, 15% UPDATE, 5% DELETE
+# 10000 inserts + 1875 updates + 625 deletes = 12500 total ops
+make load BATCH_SIZE=10000 UPDATE_RATIO=0.1875 DELETE_RATIO=0.0625
 
-- **Replication Lag**: < 1s (good), < 5s (acceptable)
-- **Throughput**: > 30k evt/s sustained, > 100k evt/s burst
-- **Memory**: < 256 MB (good), < 512 MB (limit)
-- **CPU**: < 50% sustained, < 80% bursts
+# About 50% INSERT, 40% UPDATE, 10% DELETE
+# 10000 inserts + 8000 updates + 2000 deletes = 20000 total ops
+make load BATCH_SIZE=10000 UPDATE_RATIO=0.8 DELETE_RATIO=0.2
 
-## Extending
+# Update-heavy WAL with larger rows
+make load BATCH_SIZE=5000 ROW_BYTES=512 UPDATE_RATIO=1.5 DELETE_RATIO=0.1
+```
 
-- **Add CDC solutions**: See `cdc/README.md` for plugin spec
-- **Advanced profiling**: See `advanced/PROFILING.md` and `REBUILD.md`
+## Debug Commands
+
+```sh
+make ps       # containers
+make slots    # retained/unflushed WAL per logical slot
+make status   # Debezium connector status
+make topics   # Kafka topics
+make offsets  # Debezium and Outboxx topic offsets
+make logs     # follow relevant logs
+```
+
+Topics:
+
+```text
+debezium.public.benchmark_records         # Debezium
+outboxx.public.benchmark_records          # Outboxx
+```
+
+Grafana dashboard: **CDC / Debezium benchmark overview**.
