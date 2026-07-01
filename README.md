@@ -45,9 +45,11 @@ Outboxx is heavily inspired by [Debezium](https://debezium.io/), the industry st
 | **Runtime** | Native binary | JVM (Kafka Connect) |
 | **Memory Usage** | <10 MB | ~200-500 MB |
 | **Startup Time** | <1s | 10-30s |
-| **Throughput** | ~105k events/sec | ~150k events/sec |
+| **Throughput** | ~150k events/sec | ~100k events/sec |
 | **Configuration** | Simple TOML | Complex JSON/Properties |
 | **Deployment** | Single binary | Kafka Connect cluster |
+
+Measured on an Apple M1 against a throughput-tuned Debezium (2 GB heap, enlarged batches). Outboxx used a fraction of the CPU. Setup: [load-test stand](tests/load/), [Debezium config](tests/load/connector/register-postgres.json).
 
 **Choose Outboxx when:**
 - Memory is constrained (containers, edge computing, cost optimization)

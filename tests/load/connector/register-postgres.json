@@ -6,7 +6,7 @@
   "database.user": "postgres",
   "database.password": "postgres",
   "database.dbname": "bench",
-  "topic.prefix": "pgbench",
+  "topic.prefix": "debezium",
   "plugin.name": "pgoutput",
   "slot.name": "dbz_benchmark_slot",
   "publication.name": "dbz_benchmark_publication",
