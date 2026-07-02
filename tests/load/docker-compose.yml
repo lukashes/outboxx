@@ -161,8 +161,6 @@ services:
       - ./outboxx/config.toml:/app/config.toml:ro
     command: ["--config", "/app/config.toml"]
     restart: unless-stopped
-    mem_limit: 512m
-    cpus: 1
 
   smoke-consumer:
     image: quay.io/debezium/kafka:3.5.2.Final
