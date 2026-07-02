@@ -44,9 +44,12 @@ pub fn mapTextValue(allocator: std.mem.Allocator, oid: u32, text: []const u8) !F
             if (std.mem.eql(u8, text, "f")) return FieldValueHelpers.boolean(false);
             return FieldValueHelpers.text(allocator, text);
         },
-        // numeric carries arbitrary precision and can be NaN/Infinity; emitting it
-        // as a JSON number would either lose digits or produce invalid JSON, so we
-        // keep the exact text (same as Debezium's decimal.handling.mode=string).
+        // numeric carries arbitrary precision and can be NaN/Infinity, so a JSON
+        // number would lose digits or be invalid. Keep the raw Postgres text, in the
+        // spirit of Debezium's decimal.handling.mode=string (its default "precise"
+        // mode throws on NaN/Infinity). We pass Postgres's own spelling
+        // ("NaN"/"Infinity"), matching our float branch; Debezium's string mode
+        // instead emits enum names ("NAN"/"POSITIVE_INFINITY").
         .numeric, _ => return FieldValueHelpers.text(allocator, text),
     }
 }
