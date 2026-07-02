@@ -67,18 +67,22 @@ test "mapTextValue: integer types become JSON integers" {
 
 test "mapTextValue: float types become JSON floats" {
     const allocator = testing.allocator;
-    const v = try mapTextValue(allocator, 701, "3.5");
-    try testing.expect(v == .float);
-    try testing.expectEqual(@as(f64, 3.5), v.float);
+    for ([_]u32{ 700, 701 }) |oid| {
+        const v = try mapTextValue(allocator, oid, "3.5");
+        try testing.expect(v == .float);
+        try testing.expectEqual(@as(f64, 3.5), v.float);
+    }
 }
 
 test "mapTextValue: non-finite floats fall back to string" {
     const allocator = testing.allocator;
-    for ([_][]const u8{ "NaN", "Infinity", "-Infinity" }) |text| {
-        const v = try mapTextValue(allocator, 701, text);
-        defer allocator.free(v.string);
-        try testing.expect(v == .string);
-        try testing.expectEqualStrings(text, v.string);
+    for ([_]u32{ 700, 701 }) |oid| {
+        for ([_][]const u8{ "NaN", "Infinity", "-Infinity" }) |text| {
+            const v = try mapTextValue(allocator, oid, text);
+            defer allocator.free(v.string);
+            try testing.expect(v == .string);
+            try testing.expectEqualStrings(text, v.string);
+        }
     }
 }
 
