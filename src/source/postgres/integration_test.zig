@@ -7,6 +7,8 @@ const getTestConnectionString = test_helpers.getTestConnectionString;
 const domain = @import("domain");
 const ChangeOperation = domain.ChangeOperation;
 
+const constants = @import("constants");
+
 const source_mod = @import("source.zig");
 const PostgresSource = source_mod.PostgresSource;
 
@@ -76,6 +78,19 @@ fn cleanupTestEnvironment(
             execSQL(setup_conn, drop_table_sql) catch {};
         } else |_| {}
     } else |_| {}
+}
+
+// Return a string field's value by name, or null if absent / non-string.
+fn fieldValue(row: domain.RowData, name: []const u8) ?[]const u8 {
+    for (row) |field| {
+        if (std.mem.eql(u8, field.name, name)) {
+            return switch (field.value) {
+                .string => |s| s,
+                else => null,
+            };
+        }
+    }
+    return null;
 }
 
 test "Streaming source: receive and convert INSERT messages to ChangeEvents" {
@@ -321,6 +336,132 @@ test "Streaming source: UPDATE operation E2E with old and new tuples" {
     try source.sendFeedback(std.testing.io, batch.last_lsn);
 
     std.log.info("UPDATE E2E test passed!", .{});
+}
+
+test "Streaming source: unchanged TOAST column becomes the placeholder" {
+    const allocator = testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(@intCast(test_helpers.nowMicros(std.testing.io)));
+    const random_suffix = prng.random().int(u32);
+    const timestamp = test_helpers.nowSeconds(std.testing.io);
+    const table_name = try std.fmt.allocPrint(allocator, "stream_toast_test_{d}_{d}", .{ timestamp, random_suffix });
+    defer allocator.free(table_name);
+
+    const slot_name = try std.fmt.allocPrint(allocator, "slot_toast_{d}_{d}", .{ timestamp, random_suffix });
+    defer allocator.free(slot_name);
+
+    const pub_name = try std.fmt.allocPrint(allocator, "pub_toast_{d}_{d}", .{ timestamp, random_suffix });
+    defer allocator.free(pub_name);
+
+    std.log.info("TOAST E2E test: table={s}, slot={s}, pub={s}", .{ table_name, slot_name, pub_name });
+
+    const setup_conn = try createSetupConnection(allocator);
+    defer c.PQfinish(setup_conn);
+
+    // Cleanup defer - declared FIRST, executes LAST (after source.deinit)
+    defer cleanupTestEnvironment(allocator, setup_conn, table_name, slot_name, pub_name);
+
+    // Table with a large text column. STORAGE EXTERNAL disables compression, so a
+    // 4KB value is guaranteed to be stored out-of-line (TOAST) and reported as
+    // unchanged on an UPDATE that doesn't touch it. REPLICA IDENTITY FULL to get old tuples.
+    const create_table_sql_tmp = try std.fmt.allocPrint(allocator, "CREATE TABLE {s} (id SERIAL PRIMARY KEY, name TEXT, toast_field TEXT)", .{table_name});
+    defer allocator.free(create_table_sql_tmp);
+    const create_table_sql = try allocator.dupeZ(u8, create_table_sql_tmp);
+    defer allocator.free(create_table_sql);
+    try execSQL(setup_conn, create_table_sql);
+
+    const storage_sql_tmp = try std.fmt.allocPrint(allocator, "ALTER TABLE {s} ALTER COLUMN toast_field SET STORAGE EXTERNAL", .{table_name});
+    defer allocator.free(storage_sql_tmp);
+    const storage_sql = try allocator.dupeZ(u8, storage_sql_tmp);
+    defer allocator.free(storage_sql);
+    try execSQL(setup_conn, storage_sql);
+
+    const replica_identity_sql_tmp = try std.fmt.allocPrint(allocator, "ALTER TABLE {s} REPLICA IDENTITY FULL", .{table_name});
+    defer allocator.free(replica_identity_sql_tmp);
+    const replica_identity_sql = try allocator.dupeZ(u8, replica_identity_sql_tmp);
+    defer allocator.free(replica_identity_sql);
+    try execSQL(setup_conn, replica_identity_sql);
+
+    const create_pub_sql_tmp = try std.fmt.allocPrint(allocator, "CREATE PUBLICATION {s} FOR TABLE {s}", .{ pub_name, table_name });
+    defer allocator.free(create_pub_sql_tmp);
+    const create_pub_sql = try allocator.dupeZ(u8, create_pub_sql_tmp);
+    defer allocator.free(create_pub_sql);
+    try execSQL(setup_conn, create_pub_sql);
+
+    const create_slot_sql_tmp = try std.fmt.allocPrint(allocator, "SELECT pg_create_logical_replication_slot('{s}', 'pgoutput')", .{slot_name});
+    defer allocator.free(create_slot_sql_tmp);
+    const create_slot_sql = try allocator.dupeZ(u8, create_slot_sql_tmp);
+    defer allocator.free(create_slot_sql);
+    try execSQL(setup_conn, create_slot_sql);
+
+    const lsn_result = c.PQexec(setup_conn, "SELECT pg_current_wal_lsn()");
+    defer c.PQclear(lsn_result);
+    const lsn_cstr = c.PQgetvalue(lsn_result, 0, 0);
+    const start_lsn = try allocator.dupeZ(u8, std.mem.span(lsn_cstr));
+    defer allocator.free(start_lsn);
+
+    // 4000 bytes is comfortably above the ~2KB TOAST threshold.
+    const insert_sql_tmp = try std.fmt.allocPrint(allocator, "INSERT INTO {s} (id, name, toast_field) VALUES (1, 'Alice', repeat('x', 4000))", .{table_name});
+    defer allocator.free(insert_sql_tmp);
+    const insert_sql = try allocator.dupeZ(u8, insert_sql_tmp);
+    defer allocator.free(insert_sql);
+    try execSQL(setup_conn, insert_sql);
+
+    // Update only name: toast_field is unchanged, so Postgres sends the 'u' marker for it.
+    const update_sql_tmp = try std.fmt.allocPrint(allocator, "UPDATE {s} SET name = 'Bob' WHERE id = 1", .{table_name});
+    defer allocator.free(update_sql_tmp);
+    const update_sql = try allocator.dupeZ(u8, update_sql_tmp);
+    defer allocator.free(update_sql);
+    try execSQL(setup_conn, update_sql);
+
+    try execSQL(setup_conn, "SELECT pg_switch_wal()");
+
+    const conn_str = try getTestConnectionString(allocator);
+    defer allocator.free(conn_str);
+
+    var source = PostgresSource.init(allocator, slot_name, pub_name);
+    defer source.deinit();
+
+    try source.connect(conn_str, start_lsn);
+
+    const batch = try source.receiveBatch(std.testing.io, allocator, 10);
+    defer {
+        var mut_batch = batch;
+        mut_batch.deinit();
+    }
+
+    std.log.info("Received batch with {} changes", .{batch.changes.len});
+
+    var found_insert = false;
+    var found_update = false;
+    for (batch.changes) |change| {
+        if (std.mem.eql(u8, change.op, "INSERT")) {
+            found_insert = true;
+            // On INSERT the full value is present, not the placeholder.
+            const toast_val = fieldValue(change.data.insert, "toast_field");
+            try testing.expect(toast_val != null);
+            try testing.expectEqual(@as(usize, 4000), toast_val.?.len);
+        } else if (std.mem.eql(u8, change.op, "UPDATE")) {
+            found_update = true;
+            const new_data = change.data.update.new;
+            const name_val = fieldValue(new_data, "name");
+            const toast_val = fieldValue(new_data, "toast_field");
+
+            try testing.expect(name_val != null);
+            try testing.expectEqualStrings("Bob", name_val.?);
+
+            // Unchanged TOAST column stays in the payload as the placeholder.
+            try testing.expect(toast_val != null);
+            try testing.expectEqualStrings(constants.UNKNOWN_VALUE_PLACEHOLDER, toast_val.?);
+        }
+    }
+
+    try testing.expect(found_insert);
+    try testing.expect(found_update);
+
+    try source.sendFeedback(std.testing.io, batch.last_lsn);
+
+    std.log.info("TOAST E2E test passed!", .{});
 }
 
 test "Streaming source: DELETE operation E2E" {

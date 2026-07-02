@@ -6,6 +6,10 @@ pub const DESCRIPTION = "PostgreSQL Change Data Capture with Kafka";
 
 pub const BUILD_MODE = builtin.mode;
 
+// Placeholder for an unchanged TOAST value that Postgres didn't resend, so the
+// column stays in the event instead of being dropped or shown as a real NULL.
+pub const UNKNOWN_VALUE_PLACEHOLDER = "__outboxx_unknown_value__";
+
 // CDC Processing Configuration
 // Optimized for maximum throughput
 pub const CDC = struct {
