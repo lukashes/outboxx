@@ -21,6 +21,10 @@ pub const FieldValueHelpers = struct {
         return std.json.Value{ .string = try allocator.dupe(u8, str) };
     }
 
+    pub fn float(val: f64) std.json.Value {
+        return std.json.Value{ .float = val };
+    }
+
     pub fn boolean(val: bool) std.json.Value {
         return std.json.Value{ .bool = val };
     }

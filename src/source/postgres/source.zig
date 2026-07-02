@@ -20,6 +20,8 @@ const DecoderError = pg_output_decoder.DecoderError;
 const relation_registry = @import("relation_registry.zig");
 const RelationRegistryError = relation_registry.RelationRegistryError;
 
+const type_mapper = @import("type_mapper.zig");
+
 // Re-export types for benchmarks (public API)
 pub const PgOutputMessage = pg_output_decoder.PgOutputMessage;
 pub const InsertMessage = pg_output_decoder.InsertMessage;
@@ -154,7 +156,7 @@ pub const MessageProcessor = struct {
             const col_name = rel_info.columns[i].name;
 
             if (col.value) |val| {
-                const field_value = try FieldValueHelpers.text(batch_allocator, val);
+                const field_value = try type_mapper.mapTextValue(batch_allocator, rel_info.columns[i].data_type, val);
                 try RowDataHelpers.put(&builder, batch_allocator, col_name, field_value);
             } else if (col.column_type == .unchanged_toast) {
                 // Postgres didn't resend the unchanged TOAST value; emit a placeholder
@@ -474,8 +476,8 @@ test "convertInsert: basic INSERT message to ChangeEvent" {
 
     // Verify: field values
     try testing.expectEqualStrings("id", insert_data[0].name);
-    try testing.expect(insert_data[0].value == .string);
-    try testing.expectEqualStrings("1", insert_data[0].value.string);
+    try testing.expect(insert_data[0].value == .integer);
+    try testing.expectEqual(@as(i64, 1), insert_data[0].value.integer);
 
     try testing.expectEqualStrings("name", insert_data[1].name);
     try testing.expect(insert_data[1].value == .string);
@@ -567,14 +569,14 @@ test "convertUpdate: UPDATE message with old and new tuples" {
     // Verify: new_data
     try testing.expectEqual(@as(usize, 2), new_data.len);
     try testing.expectEqualStrings("id", new_data[0].name);
-    try testing.expectEqualStrings("1", new_data[0].value.string);
+    try testing.expectEqual(@as(i64, 1), new_data[0].value.integer);
     try testing.expectEqualStrings("name", new_data[1].name);
     try testing.expectEqualStrings("Bob", new_data[1].value.string);
 
     // Verify: old_data
     try testing.expectEqual(@as(usize, 2), old_data.len);
     try testing.expectEqualStrings("id", old_data[0].name);
-    try testing.expectEqualStrings("1", old_data[0].value.string);
+    try testing.expectEqual(@as(i64, 1), old_data[0].value.integer);
     try testing.expectEqualStrings("name", old_data[1].name);
     try testing.expectEqualStrings("Alice", old_data[1].value.string);
 }
@@ -646,7 +648,7 @@ test "convertDelete: DELETE message to ChangeEvent" {
     const delete_data = event.data.delete;
     try testing.expectEqual(@as(usize, 2), delete_data.len);
     try testing.expectEqualStrings("id", delete_data[0].name);
-    try testing.expectEqualStrings("1", delete_data[0].value.string);
+    try testing.expectEqual(@as(i64, 1), delete_data[0].value.integer);
     try testing.expectEqualStrings("name", delete_data[1].name);
     try testing.expectEqualStrings("Alice", delete_data[1].value.string);
 }
@@ -728,8 +730,8 @@ test "tupleToRowData: convert tuple with text values to RowData" {
 
     // Verify: field 0 (id)
     try testing.expectEqualStrings("id", row_data[0].name);
-    try testing.expect(row_data[0].value == .string);
-    try testing.expectEqualStrings("42", row_data[0].value.string);
+    try testing.expect(row_data[0].value == .integer);
+    try testing.expectEqual(@as(i64, 42), row_data[0].value.integer);
 
     // Verify: field 1 (name)
     try testing.expectEqualStrings("name", row_data[1].name);
@@ -819,8 +821,8 @@ test "tupleToRowData: handle NULL values in tuple" {
 
     // Verify: field 0 (id) - has value
     try testing.expectEqualStrings("id", row_data[0].name);
-    try testing.expect(row_data[0].value == .string);
-    try testing.expectEqualStrings("1", row_data[0].value.string);
+    try testing.expect(row_data[0].value == .integer);
+    try testing.expectEqual(@as(i64, 1), row_data[0].value.integer);
 
     // Verify: field 1 (name) - NULL
     try testing.expectEqualStrings("name", row_data[1].name);
