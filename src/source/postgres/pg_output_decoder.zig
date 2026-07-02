@@ -1,7 +1,5 @@
 const std = @import("std");
 
-const constants = @import("constants");
-
 pub const DecoderError = error{
     InvalidMessage,
     UnknownMessageType,
@@ -77,8 +75,6 @@ pub const TupleData = struct {
     value: ?[]const u8,
 
     pub fn deinit(self: *TupleData, allocator: std.mem.Allocator) void {
-        // The unchanged-TOAST placeholder is a borrowed static string, not owned.
-        if (self.column_type == .unchanged_toast) return;
         if (self.value) |v| {
             allocator.free(v);
         }
@@ -305,13 +301,9 @@ pub const PgOutputDecoder = struct {
                         .value = value,
                     };
                 },
-                .null => TupleData{
+                .null, .unchanged_toast => TupleData{
                     .column_type = col_type,
                     .value = null,
-                },
-                .unchanged_toast => TupleData{
-                    .column_type = col_type,
-                    .value = constants.UNKNOWN_VALUE_PLACEHOLDER,
                 },
                 else => return DecoderError.InvalidTupleData,
             };

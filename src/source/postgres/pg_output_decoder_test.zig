@@ -7,8 +7,6 @@ const PgOutputMessage = decoder_mod.PgOutputMessage;
 const MessageType = decoder_mod.MessageType;
 const TupleDataType = decoder_mod.TupleDataType;
 
-const constants = @import("constants");
-
 // Helper to build binary messages
 fn writeU64(buffer: []u8, value: u64) void {
     buffer[0] = @intCast((value >> 56) & 0xFF);
@@ -352,7 +350,7 @@ test "PgOutputDecoder: invalid message type" {
     try testing.expectError(decoder_mod.DecoderError.UnknownMessageType, result);
 }
 
-test "PgOutputDecoder: unchanged TOAST column decodes to the placeholder" {
+test "PgOutputDecoder: unchanged TOAST column decodes to null (no value sent)" {
     const allocator = testing.allocator;
     var pg_decoder = PgOutputDecoder.init(allocator);
 
@@ -391,6 +389,5 @@ test "PgOutputDecoder: unchanged TOAST column decodes to the placeholder" {
     try testing.expectEqual(@as(usize, 2), cols.len);
 
     try testing.expect(cols[1].column_type == .unchanged_toast);
-    try testing.expect(cols[1].value != null);
-    try testing.expectEqualStrings(constants.UNKNOWN_VALUE_PLACEHOLDER, cols[1].value.?);
+    try testing.expect(cols[1].value == null);
 }
