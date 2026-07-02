@@ -177,12 +177,13 @@ pub const ChangeEvent = struct {
 
         const field_value = RowDataHelpers.getField(row, field_name) orelse return null;
 
-        // Convert field value to string for Kafka partition key
+        // Convert field value to string for Kafka partition key.
+        // Ordered by how often a column of this type is used as a key.
         return switch (field_value) {
             .integer => |i| try std.fmt.allocPrint(allocator, "{d}", .{i}),
-            .float => |f| try std.fmt.allocPrint(allocator, "{d}", .{f}),
             .string => |s| try allocator.dupe(u8, s),
             .bool => |b| try allocator.dupe(u8, if (b) "true" else "false"),
+            .float => |f| try std.fmt.allocPrint(allocator, "{d}", .{f}),
             .null => try allocator.dupe(u8, "null"),
             else => null, // For complex types, return null
         };
