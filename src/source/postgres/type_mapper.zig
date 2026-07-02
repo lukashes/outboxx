@@ -4,8 +4,9 @@ const FieldValue = domain.FieldValue;
 const FieldValueHelpers = domain.FieldValueHelpers;
 
 /// PostgreSQL built-in type OIDs we upgrade from text to native JSON types.
-/// Values are stable, from pg_type.dat. Non-exhaustive: any OID we don't list
-/// stays a JSON string.
+/// Values are stable, hardcoded in Postgres itself:
+/// https://github.com/postgres/postgres/blob/master/src/include/catalog/pg_type.dat
+/// Non-exhaustive: any OID we don't list stays a JSON string.
 pub const Oid = enum(u32) {
     bool = 16,
     int8 = 20,
