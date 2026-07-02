@@ -40,11 +40,8 @@ pub fn mapTextValue(allocator: std.mem.Allocator, oid: u32, text: []const u8) !F
             if (!std.math.isFinite(f)) return FieldValueHelpers.text(allocator, text);
             return FieldValueHelpers.float(f);
         },
-        .bool => {
-            if (std.mem.eql(u8, text, "t")) return FieldValueHelpers.boolean(true);
-            if (std.mem.eql(u8, text, "f")) return FieldValueHelpers.boolean(false);
-            return FieldValueHelpers.text(allocator, text);
-        },
+        // pgoutput always sends bool as exactly "t" or "f".
+        .bool => return FieldValueHelpers.boolean(std.mem.eql(u8, text, "t")),
         // numeric carries arbitrary precision and can be NaN/Infinity, so a JSON
         // number would lose digits or be invalid. Keep the raw Postgres text, in the
         // spirit of Debezium's decimal.handling.mode=string (its default "precise"
