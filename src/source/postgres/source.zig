@@ -14,8 +14,8 @@ const DecoderError = pg_output_decoder.DecoderError;
 
 const relation_registry = @import("relation_registry.zig");
 
-const event_converter = @import("event_converter.zig");
-pub const EventConverter = event_converter.EventConverter;
+const converter = @import("converter.zig");
+pub const EventConverter = converter.EventConverter;
 
 // Re-export types for benchmarks (public API)
 pub const PgOutputMessage = pg_output_decoder.PgOutputMessage;

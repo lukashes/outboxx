@@ -6,6 +6,7 @@ const Metadata = domain.Metadata;
 const RowData = domain.RowData;
 const RowDataHelpers = domain.RowDataHelpers;
 const FieldValueHelpers = domain.FieldValueHelpers;
+const FieldValue = domain.FieldValue;
 const constants = @import("constants");
 
 const pg_output_decoder = @import("pg_output_decoder.zig");
@@ -14,16 +15,71 @@ const PgOutputMessage = pg_output_decoder.PgOutputMessage;
 const relation_registry = @import("relation_registry.zig");
 const RelationRegistry = relation_registry.RelationRegistry;
 
-const value_converter = @import("value_converter.zig");
-
 pub const ConversionError = error{ConversionFailed};
+
+// ============================================================================
+// Value level: a single column value (OID + text) -> domain FieldValue
+// ============================================================================
+
+/// PostgreSQL built-in type OIDs we upgrade from text to native JSON types.
+/// Values are stable, hardcoded in Postgres itself:
+/// https://github.com/postgres/postgres/blob/master/src/include/catalog/pg_type.dat
+/// Non-exhaustive: any OID we don't list stays a JSON string.
+const Oid = enum(u32) {
+    bool = 16,
+    int8 = 20,
+    int2 = 21,
+    int4 = 23,
+    float4 = 700,
+    float8 = 701,
+    numeric = 1700,
+    _,
+};
+
+/// Convert a text-format pgoutput value to a typed JSON value based on the column OID.
+///
+/// pgoutput always delivers values as text (`"1"`, `"t"`), so without this every
+/// field would serialize as a JSON string. Here we promote the common scalar types
+/// to real JSON numbers and booleans. Anything we can't map safely stays a string,
+/// which keeps the output valid JSON and never loses precision.
+///
+/// Only the `.string` branch allocates (it dupes into caller-owned memory); the
+/// numeric and boolean branches return by value.
+fn convertValue(allocator: std.mem.Allocator, oid: u32, text: []const u8) !FieldValue {
+    switch (@as(Oid, @enumFromInt(oid))) {
+        .int2, .int4, .int8 => {
+            const n = std.fmt.parseInt(i64, text, 10) catch return FieldValueHelpers.text(allocator, text);
+            return FieldValueHelpers.integer(n);
+        },
+        .float4, .float8 => {
+            const f = std.fmt.parseFloat(f64, text) catch return FieldValueHelpers.text(allocator, text);
+            // NaN and +/-Infinity are valid Postgres floats but not valid JSON
+            // numbers, so fall back to the text form for them.
+            if (!std.math.isFinite(f)) return FieldValueHelpers.text(allocator, text);
+            return FieldValueHelpers.float(f);
+        },
+        // pgoutput always sends bool as exactly "t" or "f".
+        .bool => return FieldValueHelpers.boolean(std.mem.eql(u8, text, "t")),
+        // numeric carries arbitrary precision and can be NaN/Infinity, so a JSON
+        // number would lose digits or be invalid. Keep the raw Postgres text, in the
+        // spirit of Debezium's decimal.handling.mode=string (its default "precise"
+        // mode throws on NaN/Infinity). We pass Postgres's own spelling
+        // ("NaN"/"Infinity"), matching our float branch; Debezium's string mode
+        // instead emits enum names ("NAN"/"POSITIVE_INFINITY").
+        .numeric, _ => return FieldValueHelpers.text(allocator, text),
+    }
+}
+
+// ============================================================================
+// Event level: a pgoutput message -> domain ChangeEvent
+// ============================================================================
 
 /// Converts pgoutput messages into domain ChangeEvents.
 ///
 /// This is the source adapter's conversion layer: it turns PostgreSQL-specific
 /// messages into the source-agnostic domain model. It performs no I/O, so it can
-/// be exercised in isolation from PostgresSource. Column values are delegated to
-/// `value_converter`, keeping the value-level and event-level concerns separate.
+/// be exercised in isolation from PostgresSource. Column values go through
+/// `convertValue`, keeping the value-level and event-level concerns separate.
 pub const EventConverter = struct {
     const Self = @This();
 
@@ -145,7 +201,7 @@ pub const EventConverter = struct {
             const col_name = rel_info.columns[i].name;
 
             if (col.value) |val| {
-                const field_value = try value_converter.convert(batch_allocator, rel_info.columns[i].data_type, val);
+                const field_value = try convertValue(batch_allocator, rel_info.columns[i].data_type, val);
                 try RowDataHelpers.put(&builder, batch_allocator, col_name, field_value);
             } else if (col.column_type == .unchanged_toast) {
                 // Postgres didn't resend the unchanged TOAST value; emit a placeholder
@@ -161,9 +217,90 @@ pub const EventConverter = struct {
     }
 };
 
-// Unit Tests
+// ============================================================================
+// Tests
+// ============================================================================
+
 const testing = std.testing;
 const RelationRegistryError = relation_registry.RelationRegistryError;
+
+// --- Value level ---
+
+test "convertValue: integer types become JSON integers" {
+    const allocator = testing.allocator;
+    for ([_]u32{ 21, 23, 20 }) |oid| {
+        const v = try convertValue(allocator, oid, "42");
+        try testing.expect(v == .integer);
+        try testing.expectEqual(@as(i64, 42), v.integer);
+    }
+
+    const neg = try convertValue(allocator, 20, "-9223372036854775808");
+    try testing.expectEqual(@as(i64, std.math.minInt(i64)), neg.integer);
+}
+
+test "convertValue: float types become JSON floats" {
+    const allocator = testing.allocator;
+    for ([_]u32{ 700, 701 }) |oid| {
+        const v = try convertValue(allocator, oid, "3.5");
+        try testing.expect(v == .float);
+        try testing.expectEqual(@as(f64, 3.5), v.float);
+    }
+}
+
+test "convertValue: non-finite floats fall back to string" {
+    const allocator = testing.allocator;
+    for ([_]u32{ 700, 701 }) |oid| {
+        for ([_][]const u8{ "NaN", "Infinity", "-Infinity" }) |text| {
+            const v = try convertValue(allocator, oid, text);
+            defer allocator.free(v.string);
+            try testing.expect(v == .string);
+            try testing.expectEqualStrings(text, v.string);
+        }
+    }
+}
+
+test "convertValue: bool maps t/f to JSON boolean" {
+    const allocator = testing.allocator;
+    const t = try convertValue(allocator, 16, "t");
+    try testing.expect(t == .bool and t.bool == true);
+    const f = try convertValue(allocator, 16, "f");
+    try testing.expect(f == .bool and f.bool == false);
+}
+
+test "convertValue: numeric stays a string" {
+    const allocator = testing.allocator;
+    const v = try convertValue(allocator, 1700, "12345.6789");
+    defer allocator.free(v.string);
+    try testing.expect(v == .string);
+    try testing.expectEqualStrings("12345.6789", v.string);
+}
+
+test "convertValue: unknown OID stays a string" {
+    const allocator = testing.allocator;
+    // 25 = text
+    const v = try convertValue(allocator, 25, "hello");
+    defer allocator.free(v.string);
+    try testing.expect(v == .string);
+    try testing.expectEqualStrings("hello", v.string);
+}
+
+test "convertValue: unparseable integer falls back to string" {
+    const allocator = testing.allocator;
+    const v = try convertValue(allocator, 23, "not-a-number");
+    defer allocator.free(v.string);
+    try testing.expect(v == .string);
+    try testing.expectEqualStrings("not-a-number", v.string);
+}
+
+test "convertValue: unparseable float falls back to string" {
+    const allocator = testing.allocator;
+    const v = try convertValue(allocator, 701, "not-a-float");
+    defer allocator.free(v.string);
+    try testing.expect(v == .string);
+    try testing.expectEqualStrings("not-a-float", v.string);
+}
+
+// --- Event level ---
 
 test "convertInsert: basic INSERT message to ChangeEvent" {
     const allocator = testing.allocator;
