@@ -91,7 +91,14 @@ pub const JsonSerializer = struct {
             .null => try writer.writeAll("null"),
             .bool => |b| try writer.writeAll(if (b) "true" else "false"),
             .integer => |i| try writer.print("{d}", .{i}),
-            .float => |f| try writer.print("{d}", .{f}),
+            .float => |f| {
+                // Defence in depth: NaN/Infinity are not valid JSON numbers. The
+                // Postgres type mapper already maps them to strings, so a non-finite
+                // float here means one slipped in from elsewhere. Fail loudly instead
+                // of emitting invalid JSON.
+                if (!std.math.isFinite(f)) return error.NonFiniteFloat;
+                try writer.print("{d}", .{f});
+            },
             .number_string => |ns| try writer.writeAll(ns),
             .string => |s| {
                 try writer.writeAll("\"");
@@ -229,6 +236,38 @@ test "JsonSerializer serialize UPDATE event" {
     try testing.expect(std.mem.find(u8, json_output, "\"data\":{\"status\":\"active\"}") != null);
     // Old data is NOT in JSON output (only in domain model)
     try testing.expect(std.mem.find(u8, json_output, "pending") == null);
+}
+
+test "JsonSerializer rejects non-finite float" {
+    const testing = std.testing;
+
+    var gpa = std.heap.DebugAllocator(.{}){};
+    defer {
+        const deinit_status = gpa.deinit();
+        if (deinit_status == .leak) {
+            std.debug.panic("Memory leak in test!", .{});
+        }
+    }
+    const allocator = gpa.allocator();
+
+    const metadata = Metadata{
+        .source = try allocator.dupe(u8, "postgres"),
+        .resource = try allocator.dupe(u8, "users"),
+        .schema = try allocator.dupe(u8, "public"),
+        .timestamp = 1234567890,
+        .lsn = null,
+    };
+
+    var event = ChangeEvent.init(ChangeOperation.INSERT, metadata);
+    defer event.deinit(allocator);
+
+    var builder = RowDataHelpers.createBuilder(allocator);
+    try RowDataHelpers.put(&builder, allocator, "ratio", FieldValueHelpers.float(std.math.inf(f64)));
+    const row = try RowDataHelpers.finalize(&builder, allocator);
+    event.setInsertData(row);
+
+    const serializer = JsonSerializer.init();
+    try testing.expectError(error.NonFiniteFloat, serializer.serialize(event, allocator));
 }
 
 test "JsonSerializer validate JSON output is parseable" {
