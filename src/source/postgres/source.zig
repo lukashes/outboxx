@@ -20,7 +20,7 @@ const DecoderError = pg_output_decoder.DecoderError;
 const relation_registry = @import("relation_registry.zig");
 const RelationRegistryError = relation_registry.RelationRegistryError;
 
-const type_mapper = @import("type_mapper.zig");
+const value_converter = @import("value_converter.zig");
 
 // Re-export types for benchmarks (public API)
 pub const PgOutputMessage = pg_output_decoder.PgOutputMessage;
@@ -156,7 +156,7 @@ pub const MessageProcessor = struct {
             const col_name = rel_info.columns[i].name;
 
             if (col.value) |val| {
-                const field_value = try type_mapper.mapTextValue(batch_allocator, rel_info.columns[i].data_type, val);
+                const field_value = try value_converter.convert(batch_allocator, rel_info.columns[i].data_type, val);
                 try RowDataHelpers.put(&builder, batch_allocator, col_name, field_value);
             } else if (col.column_type == .unchanged_toast) {
                 // Postgres didn't resend the unchanged TOAST value; emit a placeholder
