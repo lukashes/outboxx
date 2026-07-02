@@ -49,7 +49,7 @@ Outboxx is heavily inspired by [Debezium](https://debezium.io/), the industry st
 | **Configuration** | Simple TOML | Complex JSON/Properties |
 | **Deployment** | Single binary | Kafka Connect cluster |
 
-Measured on an Apple M1 against a throughput-tuned Debezium (2 GB heap, enlarged batches). Outboxx used a fraction of the CPU. Setup: [load-test stand](tests/load/), [Debezium config](tests/load/connector/register-postgres.json).
+For a measured run on the same WAL backlog (Apple M1, mixed workload), see the [benchmark results](tests/load/README.md#results).
 
 **Choose Outboxx when:**
 - Memory is constrained (containers, edge computing, cost optimization)

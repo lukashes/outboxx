@@ -30,6 +30,27 @@ Open:
 - Kafka Connect REST: http://localhost:8083
 - PostgreSQL: `localhost:5432`, database `bench`, user `postgres`, password `postgres`
 
+## Results
+
+`make results` reads Prometheus and prints the headline numbers for both readers draining the same WAL backlog: total events, drain time, effective throughput (events / drain window, so a short burst is not undercounted the way a 1m rate would be), and peak memory/CPU.
+
+Example (Apple M1, mixed insert/update/delete, neither reader resource-capped):
+
+```
+% make results MINUTES=200
+Window: last 200m
+tool             events   drain(s)      evt/s(eff)    mem_peak  cpu_peak
+debezium        9686883        190           50984     2.06 GB      1.17
+outboxx         8923995         70          127486     81.3 MB      0.36
+
+outboxx vs debezium:
+  throughput:  2.5x (outboxx / debezium)
+  memory:      26.0x less (debezium / outboxx)
+  cpu peak:    3.2x less (debezium / outboxx)
+```
+
+Set the lookback with `MINUTES=` (default 60). The window must bracket a single run, so `make reset` between runs to start each topic at 0. `mem_peak`/`cpu_peak` come from cAdvisor (container working set and cores).
+
 ## Load Parameters
 
 Default `make load` is insert-only and intended to generate a meaningful WAL backlog:
@@ -122,6 +143,7 @@ make slots    # retained/unflushed WAL per logical slot
 make status   # Debezium connector status
 make topics   # Kafka topics
 make offsets  # Debezium and Outboxx topic offsets
+make results  # headline numbers (throughput/mem/cpu) from Prometheus
 make logs     # follow relevant logs
 ```
 
