@@ -119,3 +119,11 @@ test "mapTextValue: unparseable integer falls back to string" {
     try testing.expect(v == .string);
     try testing.expectEqualStrings("not-a-number", v.string);
 }
+
+test "mapTextValue: unparseable float falls back to string" {
+    const allocator = testing.allocator;
+    const v = try mapTextValue(allocator, 701, "not-a-float");
+    defer allocator.free(v.string);
+    try testing.expect(v == .string);
+    try testing.expectEqualStrings("not-a-float", v.string);
+}
