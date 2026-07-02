@@ -203,6 +203,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    pg_output_decoder_tests.root_module.addImport("constants", constants_module);
 
     // RelationRegistry tests
     const relation_registry_tests = b.addTest(.{
@@ -403,6 +404,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = .ReleaseFast,
     });
+    pg_output_decoder_module.addImport("constants", constants_module);
 
     const bench_helpers_module = b.createModule(.{
         .root_source_file = b.path("tests/benchmarks/bench_helpers.zig"),
