@@ -1,4 +1,4 @@
-.PHONY: help build run test test-integration test-unit clean fmt lint dev install-deps check-deps env-up env-down env-restart env-logs env-status coverage load-up load-down load-switch load-test-steady load-test-burst load-test-ramp load-test-mixed load-status bench bench-collect bench-report bench-compare bench-save bench-ci
+.PHONY: help build run test test-integration test-unit clean fmt lint dev install-deps check-deps env-up env-down env-restart env-logs env-status coverage bench bench-collect bench-report bench-compare bench-save bench-ci
 
 # Use direnv to auto-load Nix environment for local development
 # This allows commands to work without 'nix develop' wrapper
@@ -53,15 +53,8 @@ help:
 	@echo "  make env-logs      - Show PostgreSQL logs"
 	@echo "  make env-status    - Show environment status"
 	@echo ""
-	@echo "Load Testing (baseline: ~60k evt/s):"
-	@echo "  make load-up CDC=<cdc>     - Start infrastructure with CDC (outboxx|debezium|both)"
-	@echo "  make load-switch CDC=<cdc> - Switch to different CDC solution"
-	@echo "  make load-test-steady      - Steady load (30k evt/s × 120s = 3.6M events)"
-	@echo "  make load-test-burst       - Burst load (10M events max speed)"
-	@echo "  make load-test-ramp        - Ramp load (10k→200k evt/s, find limit)"
-	@echo "  make load-test-mixed       - Mixed ops (1M: 60% INS, 30% UPD, 10% DEL)"
-	@echo "  make load-status           - Show infrastructure status"
-	@echo "  make load-down             - Stop load testing infrastructure"
+	@echo "Load Testing (Outboxx vs Debezium stand):"
+	@echo "  cd tests/load && make help - Postgres -> CDC -> Kafka benchmark with Grafana"
 	@echo ""
 	@echo "Component Benchmarks:"
 	@echo "  make bench         - Run component benchmarks (view results in terminal)"
@@ -177,37 +170,8 @@ env-status:
 	@echo "Development environment status:"
 	docker-compose ps
 
-# Load Testing (Plugin-based CDC comparison)
-CDC ?= outboxx
-
-load-up:
-	@tests/load/scripts/start.sh $(CDC)
-
-load-switch:
-	@if [ -z "$(CDC)" ]; then \
-		echo "Usage: make load-switch CDC=<cdc-name>"; \
-		echo "Available: outboxx, debezium"; \
-		exit 1; \
-	fi
-	@tests/load/scripts/switch.sh $(CDC)
-
-load-test-steady:
-	@tests/load/scripts/run-scenario.sh steady
-
-load-test-burst:
-	@tests/load/scripts/run-scenario.sh burst
-
-load-test-ramp:
-	@tests/load/scripts/run-scenario.sh ramp
-
-load-test-mixed:
-	@tests/load/scripts/run-scenario.sh mixed
-
-load-status:
-	@tests/load/scripts/status.sh
-
-load-down:
-	@tests/load/scripts/stop.sh
+# Load Testing (Outboxx vs Debezium stand)
+# The stand lives in tests/load/ with its own Makefile: cd tests/load && make help
 
 # Component Benchmarks (zbench)
 bench:

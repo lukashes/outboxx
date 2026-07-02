@@ -1,0 +1,41 @@
+startDelaySeconds: 0
+ssl: false
+lowercaseOutputName: true
+lowercaseOutputLabelNames: true
+
+rules:
+  - pattern: 'debezium.([^:]+)<type=connector-metrics, context=([^,]+), server=([^>]+)><>(MilliSecondsBehindSource|TotalNumberOfEventsSeen|NumberOfEventsFiltered|NumberOfErroneousEvents|QueueTotalCapacity|QueueRemainingCapacity|Connected|Running|LastEvent|MilliSecondsSinceLastEvent)'
+    name: debezium_$1_$2_$4
+    labels:
+      server: "$3"
+
+  - pattern: 'debezium.([^:]+)<type=connector-metrics, context=([^,]+), server=([^,]+), task=([^>]+)><>(MilliSecondsBehindSource|TotalNumberOfEventsSeen|NumberOfEventsFiltered|NumberOfErroneousEvents|QueueTotalCapacity|QueueRemainingCapacity|Connected|Running|MilliSecondsSinceLastEvent)'
+    name: debezium_$1_$2_$5
+    labels:
+      server: "$3"
+      task: "$4"
+
+  - pattern: 'kafka.connect<type=connect-worker-metrics><>(connector-count|connector-startup-attempts-total|connector-startup-success-total|connector-startup-failure-total|task-count|task-startup-attempts-total|task-startup-success-total|task-startup-failure-total)'
+    name: kafka_connect_worker_$1
+
+  - pattern: 'kafka.connect<type=connect-worker-metrics, connector=([^>]+)><>(connector-status|connector-destroyed-task-count|connector-failed-task-count|connector-paused-task-count|connector-running-task-count|connector-total-task-count|connector-unassigned-task-count)'
+    name: kafka_connect_connector_$2
+    labels:
+      connector: "$1"
+
+  - pattern: 'kafka.connect<type=source-task-metrics, connector=([^,]+), task=([^>]+)><>(source-record-poll-rate|source-record-poll-total|source-record-write-rate|source-record-write-total|poll-batch-max-time-ms|poll-batch-avg-time-ms)'
+    name: kafka_connect_source_task_$3
+    labels:
+      connector: "$1"
+      task: "$2"
+
+  - pattern: 'java.lang<type=Memory><HeapMemoryUsage>(used|committed|max)'
+    name: jvm_memory_heap_$1_bytes
+
+  - pattern: 'java.lang<type=Memory><NonHeapMemoryUsage>(used|committed|max)'
+    name: jvm_memory_nonheap_$1_bytes
+
+  - pattern: 'java.lang<type=GarbageCollector, name=([^>]+)><>(CollectionCount|CollectionTime)'
+    name: jvm_gc_$2
+    labels:
+      collector: "$1"
