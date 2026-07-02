@@ -287,10 +287,6 @@ pub const PgOutputDecoder = struct {
             pos += 1;
 
             const tuple_data = switch (col_type) {
-                .null, .unchanged_toast => TupleData{
-                    .column_type = col_type,
-                    .value = null,
-                },
                 .text, .binary => blk: {
                     if (pos + 4 > data.len) return DecoderError.InvalidTupleData;
                     const length = readU32(data[pos .. pos + 4]);
@@ -304,6 +300,10 @@ pub const PgOutputDecoder = struct {
                         .column_type = col_type,
                         .value = value,
                     };
+                },
+                .null, .unchanged_toast => TupleData{
+                    .column_type = col_type,
+                    .value = null,
                 },
                 else => return DecoderError.InvalidTupleData,
             };

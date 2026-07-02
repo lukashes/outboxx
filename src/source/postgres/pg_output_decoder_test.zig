@@ -349,3 +349,45 @@ test "PgOutputDecoder: invalid message type" {
     const result = pg_decoder.decode(allocator, &data);
     try testing.expectError(decoder_mod.DecoderError.UnknownMessageType, result);
 }
+
+test "PgOutputDecoder: unchanged TOAST column decodes to null (no value sent)" {
+    const allocator = testing.allocator;
+    var pg_decoder = PgOutputDecoder.init(allocator);
+
+    // UPDATE with a new-tuple-only body where the second column is an unchanged
+    // TOAST ('u'): Postgres sends no value for it.
+    var data = std.ArrayList(u8).empty;
+    defer data.deinit(allocator);
+
+    try data.append(allocator, 'U');
+
+    var buf: [4]u8 = undefined;
+    writeU32(&buf, 12345);
+    try data.appendSlice(allocator, &buf);
+
+    // 'N' = new tuple only
+    try data.append(allocator, 'N');
+
+    var col_count_buf: [2]u8 = undefined;
+    writeU16(&col_count_buf, 2);
+    try data.appendSlice(allocator, &col_count_buf);
+
+    // Column 1: text value "42"
+    try data.append(allocator, 't');
+    writeU32(&buf, 2);
+    try data.appendSlice(allocator, &buf);
+    try data.appendSlice(allocator, "42");
+
+    // Column 2: unchanged TOAST
+    try data.append(allocator, 'u');
+
+    var msg = try pg_decoder.decode(allocator, data.items);
+    defer msg.deinit(allocator);
+
+    try testing.expect(msg == .update);
+    const cols = msg.update.new_tuple.columns;
+    try testing.expectEqual(@as(usize, 2), cols.len);
+
+    try testing.expect(cols[1].column_type == .unchanged_toast);
+    try testing.expect(cols[1].value == null);
+}

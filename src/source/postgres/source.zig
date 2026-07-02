@@ -156,6 +156,11 @@ pub const MessageProcessor = struct {
             if (col.value) |val| {
                 const field_value = try FieldValueHelpers.text(batch_allocator, val);
                 try RowDataHelpers.put(&builder, batch_allocator, col_name, field_value);
+            } else if (col.column_type == .unchanged_toast) {
+                // Postgres didn't resend the unchanged TOAST value; emit a placeholder
+                // so the column stays in the payload instead of looking like a real NULL.
+                const placeholder = try FieldValueHelpers.text(batch_allocator, constants.UNKNOWN_VALUE_PLACEHOLDER);
+                try RowDataHelpers.put(&builder, batch_allocator, col_name, placeholder);
             } else {
                 try RowDataHelpers.put(&builder, batch_allocator, col_name, FieldValueHelpers.null_value());
             }
@@ -825,6 +830,58 @@ test "tupleToRowData: handle NULL values in tuple" {
     try testing.expectEqualStrings("email", row_data[2].name);
     try testing.expect(row_data[2].value == .string);
     try testing.expectEqualStrings("test@example.com", row_data[2].value.string);
+}
+
+test "tupleToRowData: unchanged TOAST column becomes the placeholder" {
+    const allocator = testing.allocator;
+
+    var source = PostgresSource.init(allocator, "test_slot", "test_pub");
+    defer source.deinit();
+
+    var rel_msg = pg_output_decoder.RelationMessage{
+        .relation_id = 400,
+        .namespace = try allocator.dupe(u8, "public"),
+        .relation_name = try allocator.dupe(u8, "articles"),
+        .replica_identity = 'd',
+        .columns = try allocator.alloc(pg_output_decoder.RelationMessageColumn, 3),
+    };
+    defer rel_msg.deinit(allocator);
+
+    rel_msg.columns[0] = .{ .flags = 1, .name = try allocator.dupe(u8, "id"), .data_type = 23, .type_modifier = -1 };
+    rel_msg.columns[1] = .{ .flags = 0, .name = try allocator.dupe(u8, "body"), .data_type = 25, .type_modifier = -1 };
+    rel_msg.columns[2] = .{ .flags = 0, .name = try allocator.dupe(u8, "title"), .data_type = 25, .type_modifier = -1 };
+
+    try source.registry.register(rel_msg);
+
+    // UPDATE that didn't touch body: the decoder yields a null value with the
+    // unchanged-TOAST marker, which tupleToRowData turns into the placeholder.
+    var tuple = pg_output_decoder.TupleMessage{
+        .columns = try allocator.alloc(pg_output_decoder.TupleData, 3),
+    };
+    defer tuple.deinit(allocator);
+
+    tuple.columns[0] = .{ .column_type = .text, .value = try allocator.dupe(u8, "1") };
+    tuple.columns[1] = .{ .column_type = .unchanged_toast, .value = null };
+    tuple.columns[2] = .{ .column_type = .text, .value = try allocator.dupe(u8, "Hello") };
+
+    const rel_info = try source.registry.get(400);
+
+    const row_data = try source.message_processor.tupleToRowData(allocator, tuple, rel_info);
+    defer {
+        for (row_data) |field| {
+            allocator.free(field.name);
+            if (field.value == .string) {
+                allocator.free(field.value.string);
+            }
+        }
+        allocator.free(row_data);
+    }
+
+    // body stays in the row as the placeholder, keeping the schema stable.
+    try testing.expectEqual(@as(usize, 3), row_data.len);
+    try testing.expectEqualStrings("body", row_data[1].name);
+    try testing.expect(row_data[1].value == .string);
+    try testing.expectEqualStrings(constants.UNKNOWN_VALUE_PLACEHOLDER, row_data[1].value.string);
 }
 
 test "convertInsert: error when relation not found in registry" {
