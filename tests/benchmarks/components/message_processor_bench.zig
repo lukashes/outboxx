@@ -3,7 +3,6 @@ const zbench = @import("zbench");
 const postgres_source = @import("postgres_source");
 const bench_helpers = @import("bench_helpers");
 
-const EventConverter = postgres_source.EventConverter;
 const PgOutputMessage = postgres_source.PgOutputMessage;
 const InsertMessage = postgres_source.InsertMessage;
 const UpdateMessage = postgres_source.UpdateMessage;
@@ -86,15 +85,14 @@ fn buildInsertMessage(allocator: std.mem.Allocator) !InsertMessage {
     return insert_msg;
 }
 
-// EventConverter.init() is lightweight (no allocations), created inside to track processMessage() allocations.
+// processMessage is a free function; all its allocations are tracked per run.
 // RelationRegistry setup is heavy (table registration), prepared outside
 const BenchProcessInsert = struct {
     registry: *RelationRegistry,
     message: PgOutputMessage,
 
     pub fn run(self: *BenchProcessInsert, allocator: std.mem.Allocator) void {
-        var processor = EventConverter.init();
-        var event = processor.processMessage(std.testing.io, allocator, self.message, self.registry) catch unreachable;
+        var event = postgres_source.processMessage(std.testing.io, allocator, self.message, self.registry) catch unreachable;
         if (event) |*e| {
             e.deinit(allocator);
         }
@@ -154,8 +152,7 @@ const BenchProcessUpdate = struct {
     message: PgOutputMessage,
 
     pub fn run(self: *BenchProcessUpdate, allocator: std.mem.Allocator) void {
-        var processor = EventConverter.init();
-        var event = processor.processMessage(std.testing.io, allocator, self.message, self.registry) catch unreachable;
+        var event = postgres_source.processMessage(std.testing.io, allocator, self.message, self.registry) catch unreachable;
         if (event) |*e| {
             e.deinit(allocator);
         }
@@ -195,8 +192,7 @@ const BenchProcessDelete = struct {
     message: PgOutputMessage,
 
     pub fn run(self: *BenchProcessDelete, allocator: std.mem.Allocator) void {
-        var processor = EventConverter.init();
-        var event = processor.processMessage(std.testing.io, allocator, self.message, self.registry) catch unreachable;
+        var event = postgres_source.processMessage(std.testing.io, allocator, self.message, self.registry) catch unreachable;
         if (event) |*e| {
             e.deinit(allocator);
         }
