@@ -16,7 +16,9 @@ UPDATE_RATIO ?= 0
 DELETE_RATIO ?= 0
 REPORT_INTERVAL ?= 5
 
-.PHONY: infra load start-debezium start-outboxx start-all reset create-slots slots status topics offsets logs ps
+MINUTES ?= 60
+
+.PHONY: infra load start-debezium start-outboxx start-all reset create-slots slots status topics offsets results logs ps
 
 infra:
 	$(COMPOSE) up -d --remove-orphans $(INFRA_SERVICES)
@@ -73,6 +75,9 @@ topics:
 offsets:
 	-$(COMPOSE) exec kafka /kafka/bin/kafka-get-offsets.sh --bootstrap-server kafka:9092 --topic debezium.public.benchmark_records
 	-$(COMPOSE) exec kafka /kafka/bin/kafka-get-offsets.sh --bootstrap-server kafka:9092 --topic outboxx.public.benchmark_records
+
+results:
+	@MINUTES=$(MINUTES) bash scripts/results.sh
 
 logs:
 	$(COMPOSE) logs -f postgres kafka debezium outboxx connector-init workload prometheus grafana
