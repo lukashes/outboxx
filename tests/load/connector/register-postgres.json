@@ -12,7 +12,7 @@
   "publication.name": "dbz_benchmark_publication",
   "publication.autocreate.mode": "disabled",
   "table.include.list": "public.benchmark_records",
-  "snapshot.mode": "never",
+  "snapshot.mode": "no_data",
   "heartbeat.interval.ms": "0",
   "include.schema.changes": "false",
   "tombstones.on.delete": "false",

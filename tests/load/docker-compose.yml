@@ -38,7 +38,7 @@ services:
       retries: 30
 
   kafka:
-    image: quay.io/debezium/kafka:2.7
+    image: quay.io/debezium/kafka:3.5.2.Final
     container_name: cdc-kafka
     ports:
       - "9092:9092"
@@ -67,7 +67,7 @@ services:
     build:
       context: ./connect
       args:
-        DEBEZIUM_VERSION: "2.7"
+        DEBEZIUM_VERSION: "3.5.2.Final"
         JMX_AGENT_VERSION: "0.20.0"
     container_name: cdc-debezium
     depends_on:
@@ -165,7 +165,7 @@ services:
     cpus: 1
 
   smoke-consumer:
-    image: quay.io/debezium/kafka:2.7
+    image: quay.io/debezium/kafka:3.5.2.Final
     container_name: cdc-smoke-consumer
     profiles: ["smoke"]
     depends_on:
