@@ -17,13 +17,10 @@ const RelationRegistry = relation_registry.RelationRegistry;
 
 pub const ConversionError = error{ConversionFailed};
 
-// ============================================================================
-// Event level: a pgoutput message -> domain ChangeEvent
-//
-// The source adapter's conversion layer: it turns PostgreSQL-specific messages
-// into the source-agnostic domain model. Pure (no I/O), so it can be exercised
-// in isolation from PostgresSource. Column values go through the value level below.
-// ============================================================================
+// Event level: a pgoutput message -> domain ChangeEvent.
+// The source adapter's conversion layer: turns PostgreSQL-specific messages into
+// the source-agnostic domain model. Pure (no I/O), so it can be exercised in
+// isolation from PostgresSource. Column values go through the value level below.
 
 /// Process a PgOutputMessage and convert it to a ChangeEvent.
 /// Returns null for messages that don't produce ChangeEvents (BEGIN, COMMIT, RELATION).
@@ -129,9 +126,7 @@ fn tupleToRowData(batch_allocator: std.mem.Allocator, tuple: anytype, rel_info: 
     return try RowDataHelpers.finalize(&builder, batch_allocator);
 }
 
-// ============================================================================
-// Value level: a single column value (OID + text) -> domain FieldValue
-// ============================================================================
+// Value level: a single column value (OID + text) -> domain FieldValue.
 
 /// PostgreSQL built-in type OIDs we upgrade from text to native JSON types.
 /// Values are stable, hardcoded in Postgres itself:
@@ -182,14 +177,12 @@ fn convertValue(allocator: std.mem.Allocator, oid: u32, text: []const u8) !Field
     }
 }
 
-// ============================================================================
 // Tests
-// ============================================================================
 
 const testing = std.testing;
 const RelationRegistryError = relation_registry.RelationRegistryError;
 
-// --- Value level ---
+// Value level
 
 test "convertValue: integer types become JSON integers" {
     const allocator = testing.allocator;
@@ -265,7 +258,7 @@ test "convertValue: unparseable float falls back to string" {
     try testing.expectEqualStrings("not-a-float", v.string);
 }
 
-// --- Event level ---
+// Event level
 
 test "convertInsert: basic INSERT message to ChangeEvent" {
     const allocator = testing.allocator;
