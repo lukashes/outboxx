@@ -18,9 +18,7 @@ const RelationRegistry = relation_registry.RelationRegistry;
 pub const ConversionError = error{ConversionFailed};
 
 // Event level: a pgoutput message -> domain ChangeEvent.
-// The source adapter's conversion layer: turns PostgreSQL-specific messages into
-// the source-agnostic domain model. Pure (no I/O), so it can be exercised in
-// isolation from PostgresSource. Column values go through the value level below.
+// Pure (no I/O), so it can be tested in isolation from PostgresSource.
 
 /// Process a PgOutputMessage and convert it to a ChangeEvent.
 /// Returns null for messages that don't produce ChangeEvents (BEGIN, COMMIT, RELATION).
@@ -291,7 +289,6 @@ test "convertInsert: basic INSERT message to ChangeEvent" {
 
     try registry.register(rel_msg);
 
-    // Create INSERT message
     var insert_msg = pg_output_decoder.InsertMessage{
         .relation_id = 100,
         .new_tuple = pg_output_decoder.TupleMessage{
@@ -366,7 +363,6 @@ test "convertUpdate: UPDATE message with old and new tuples" {
 
     try registry.register(rel_msg);
 
-    // Create UPDATE message with old and new tuples
     var update_msg = pg_output_decoder.UpdateMessage{
         .relation_id = 100,
         .old_tuple = pg_output_decoder.TupleMessage{
@@ -461,7 +457,6 @@ test "convertDelete: DELETE message to ChangeEvent" {
 
     try registry.register(rel_msg);
 
-    // Create DELETE message
     var delete_msg = pg_output_decoder.DeleteMessage{
         .relation_id = 100,
         .old_tuple = pg_output_decoder.TupleMessage{
@@ -537,7 +532,6 @@ test "tupleToRowData: convert tuple with text values to RowData" {
 
     try registry.register(rel_msg);
 
-    // Create tuple with text values
     var tuple = pg_output_decoder.TupleMessage{
         .columns = try allocator.alloc(pg_output_decoder.TupleData, 3),
     };
