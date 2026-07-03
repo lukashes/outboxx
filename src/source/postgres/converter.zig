@@ -81,8 +81,8 @@ fn convertDelete(io: std.Io, batch_allocator: std.mem.Allocator, delete_msg: any
     return event;
 }
 
-/// Build event metadata from the relation. Strings are duped into the batch
-/// allocator so the event owns them independently of the relation registry.
+// Build event metadata from the relation. Strings are duped into the batch
+// allocator so the event owns them independently of the relation registry.
 fn buildMetadata(io: std.Io, batch_allocator: std.mem.Allocator, rel_info: anytype) !Metadata {
     return .{
         .source = try batch_allocator.dupe(u8, "postgres"),
@@ -126,10 +126,10 @@ fn tupleToRowData(batch_allocator: std.mem.Allocator, tuple: anytype, rel_info: 
 
 // Value level: a single column value (OID + text) -> domain FieldValue.
 
-/// PostgreSQL built-in type OIDs we upgrade from text to native JSON types.
-/// Values are stable, hardcoded in Postgres itself:
-/// https://github.com/postgres/postgres/blob/master/src/include/catalog/pg_type.dat
-/// Non-exhaustive: any OID we don't list stays a JSON string.
+// PostgreSQL built-in type OIDs we upgrade from text to native JSON types.
+// Values are stable, hardcoded in Postgres itself:
+// https://github.com/postgres/postgres/blob/master/src/include/catalog/pg_type.dat
+// Non-exhaustive: any OID we don't list stays a JSON string.
 const Oid = enum(u32) {
     bool = 16,
     int8 = 20,
@@ -141,15 +141,15 @@ const Oid = enum(u32) {
     _,
 };
 
-/// Convert a text-format pgoutput value to a typed JSON value based on the column OID.
-///
-/// pgoutput always delivers values as text (`"1"`, `"t"`), so without this every
-/// field would serialize as a JSON string. Here we promote the common scalar types
-/// to real JSON numbers and booleans. Anything we can't map safely stays a string,
-/// which keeps the output valid JSON and never loses precision.
-///
-/// Only the `.string` branch allocates (it dupes into caller-owned memory); the
-/// numeric and boolean branches return by value.
+// Convert a text-format pgoutput value to a typed JSON value based on the column OID.
+//
+// pgoutput always delivers values as text (`"1"`, `"t"`), so without this every
+// field would serialize as a JSON string. Here we promote the common scalar types
+// to real JSON numbers and booleans. Anything we can't map safely stays a string,
+// which keeps the output valid JSON and never loses precision.
+//
+// Only the `.string` branch allocates (it dupes into caller-owned memory); the
+// numeric and boolean branches return by value.
 fn convertValue(allocator: std.mem.Allocator, oid: u32, text: []const u8) !FieldValue {
     switch (@as(Oid, @enumFromInt(oid))) {
         .int2, .int4, .int8 => {
