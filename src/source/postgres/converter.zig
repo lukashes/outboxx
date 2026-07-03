@@ -10,44 +10,67 @@ const FieldValue = domain.FieldValue;
 const constants = @import("constants");
 
 const pg_output_decoder = @import("pg_output_decoder.zig");
+const PgOutputMessage = pg_output_decoder.PgOutputMessage;
 
 const relation_registry = @import("relation_registry.zig");
 const RelationRegistry = relation_registry.RelationRegistry;
 
-// Event level: a pgoutput data message -> domain ChangeEvent.
-// Pure conversion: reads column types from the registry, never mutates it. The
-// message processor owns the registry and handles BEGIN/COMMIT/RELATION.
+/// Consumer engine: turns decoded pgoutput messages into domain ChangeEvents.
+///
+/// Owns the relation registry, kept current from RELATION messages and read when
+/// converting data messages. Does no I/O, so it can run on a worker thread draining
+/// a buffer later.
+pub const Converter = struct {
+    registry: RelationRegistry,
 
-/// Convert an INSERT message to a ChangeEvent.
-pub fn convertInsert(io: std.Io, allocator: std.mem.Allocator, insert_msg: anytype, registry: *RelationRegistry) !ChangeEvent {
-    const rel_info = try registry.get(insert_msg.relation_id);
-    var event = ChangeEvent.init(ChangeOperation.INSERT, try buildMetadata(io, allocator, rel_info));
-    event.setInsertData(try tupleToRowData(allocator, insert_msg.new_tuple, rel_info));
-    return event;
-}
+    const Self = @This();
 
-/// Convert an UPDATE message to a ChangeEvent (new row, plus the old row when present).
-pub fn convertUpdate(io: std.Io, allocator: std.mem.Allocator, update_msg: anytype, registry: *RelationRegistry) !ChangeEvent {
-    const rel_info = try registry.get(update_msg.relation_id);
-    var event = ChangeEvent.init(ChangeOperation.UPDATE, try buildMetadata(io, allocator, rel_info));
+    pub fn init(allocator: std.mem.Allocator) Self {
+        return .{ .registry = RelationRegistry.init(allocator) };
+    }
 
-    const new_row = try tupleToRowData(allocator, update_msg.new_tuple, rel_info);
-    const old_row = if (update_msg.old_tuple) |old_tuple|
-        try tupleToRowData(allocator, old_tuple, rel_info)
-    else
-        try allocator.alloc(domain.FieldData, 0);
+    pub fn deinit(self: *Self) void {
+        self.registry.deinit();
+    }
 
-    event.setUpdateData(new_row, old_row);
-    return event;
-}
+    /// Convert one decoded pgoutput message to a ChangeEvent, or null when it
+    /// carries no row change (BEGIN, COMMIT, RELATION). RELATION updates the
+    /// registry in place; data messages read column types from it.
+    pub fn convert(self: *Self, io: std.Io, allocator: std.mem.Allocator, pg_msg: PgOutputMessage) !?ChangeEvent {
+        switch (pg_msg) {
+            .begin, .commit => return null,
+            .relation => |rel| {
+                try self.registry.register(rel);
+                return null;
+            },
+            .insert => |ins| {
+                const rel_info = try self.registry.get(ins.relation_id);
+                var event = ChangeEvent.init(ChangeOperation.INSERT, try buildMetadata(io, allocator, rel_info));
+                event.setInsertData(try tupleToRowData(allocator, ins.new_tuple, rel_info));
+                return event;
+            },
+            .update => |upd| {
+                const rel_info = try self.registry.get(upd.relation_id);
+                var event = ChangeEvent.init(ChangeOperation.UPDATE, try buildMetadata(io, allocator, rel_info));
 
-/// Convert a DELETE message to a ChangeEvent.
-pub fn convertDelete(io: std.Io, allocator: std.mem.Allocator, delete_msg: anytype, registry: *RelationRegistry) !ChangeEvent {
-    const rel_info = try registry.get(delete_msg.relation_id);
-    var event = ChangeEvent.init(ChangeOperation.DELETE, try buildMetadata(io, allocator, rel_info));
-    event.setDeleteData(try tupleToRowData(allocator, delete_msg.old_tuple, rel_info));
-    return event;
-}
+                const new_row = try tupleToRowData(allocator, upd.new_tuple, rel_info);
+                const old_row = if (upd.old_tuple) |old_tuple|
+                    try tupleToRowData(allocator, old_tuple, rel_info)
+                else
+                    try allocator.alloc(domain.FieldData, 0);
+
+                event.setUpdateData(new_row, old_row);
+                return event;
+            },
+            .delete => |del| {
+                const rel_info = try self.registry.get(del.relation_id);
+                var event = ChangeEvent.init(ChangeOperation.DELETE, try buildMetadata(io, allocator, rel_info));
+                event.setDeleteData(try tupleToRowData(allocator, del.old_tuple, rel_info));
+                return event;
+            },
+        }
+    }
+};
 
 // Strings are duped so the event owns them independently of the relation registry.
 fn buildMetadata(io: std.Io, allocator: std.mem.Allocator, rel_info: anytype) !Metadata {
@@ -225,11 +248,26 @@ test "mapValue: unparseable float falls back to string" {
 
 // Event level
 
-test "convertInsert: basic INSERT message to ChangeEvent" {
+test "convert: BEGIN and COMMIT yield no event" {
     const allocator = testing.allocator;
 
-    var registry = RelationRegistry.init(allocator);
-    defer registry.deinit();
+    var converter = Converter.init(allocator);
+    defer converter.deinit();
+
+    var begin = PgOutputMessage{ .begin = .{ .final_lsn = 0, .commit_time = 0, .xid = 1 } };
+    defer begin.deinit(allocator);
+    try testing.expect((try converter.convert(std.testing.io, allocator, begin)) == null);
+
+    var commit = PgOutputMessage{ .commit = .{ .flags = 0, .commit_lsn = 0, .end_lsn = 0, .commit_time = 0 } };
+    defer commit.deinit(allocator);
+    try testing.expect((try converter.convert(std.testing.io, allocator, commit)) == null);
+}
+
+test "convert INSERT: basic message to ChangeEvent" {
+    const allocator = testing.allocator;
+
+    var converter = Converter.init(allocator);
+    defer converter.deinit();
 
     // Register test relation (id=100, public.users, columns: id, name)
     var rel_msg = pg_output_decoder.RelationMessage{
@@ -254,7 +292,7 @@ test "convertInsert: basic INSERT message to ChangeEvent" {
         .type_modifier = -1,
     };
 
-    try registry.register(rel_msg);
+    try testing.expect((try converter.convert(std.testing.io, allocator, .{ .relation = rel_msg })) == null);
 
     var insert_msg = pg_output_decoder.InsertMessage{
         .relation_id = 100,
@@ -272,7 +310,7 @@ test "convertInsert: basic INSERT message to ChangeEvent" {
     };
     defer insert_msg.new_tuple.deinit(allocator);
 
-    var event = try convertInsert(std.testing.io, allocator, insert_msg, &registry);
+    var event = (try converter.convert(std.testing.io, allocator, .{ .insert = insert_msg })).?;
     defer event.deinit(allocator);
 
     // Verify: operation type
@@ -299,11 +337,11 @@ test "convertInsert: basic INSERT message to ChangeEvent" {
     try testing.expectEqualStrings("Alice", insert_data[1].value.string);
 }
 
-test "convertUpdate: UPDATE message with old and new tuples" {
+test "convert UPDATE: message with old and new tuples" {
     const allocator = testing.allocator;
 
-    var registry = RelationRegistry.init(allocator);
-    defer registry.deinit();
+    var converter = Converter.init(allocator);
+    defer converter.deinit();
 
     // Register test relation (id=100, public.users, columns: id, name)
     var rel_msg = pg_output_decoder.RelationMessage{
@@ -328,7 +366,7 @@ test "convertUpdate: UPDATE message with old and new tuples" {
         .type_modifier = -1,
     };
 
-    try registry.register(rel_msg);
+    try testing.expect((try converter.convert(std.testing.io, allocator, .{ .relation = rel_msg })) == null);
 
     var update_msg = pg_output_decoder.UpdateMessage{
         .relation_id = 100,
@@ -361,7 +399,7 @@ test "convertUpdate: UPDATE message with old and new tuples" {
         .value = try allocator.dupe(u8, "Bob"),
     };
 
-    var event = try convertUpdate(std.testing.io, allocator, update_msg, &registry);
+    var event = (try converter.convert(std.testing.io, allocator, .{ .update = update_msg })).?;
     defer event.deinit(allocator);
 
     // Verify: operation type
@@ -393,11 +431,11 @@ test "convertUpdate: UPDATE message with old and new tuples" {
     try testing.expectEqualStrings("Alice", old_data[1].value.string);
 }
 
-test "convertDelete: DELETE message to ChangeEvent" {
+test "convert DELETE: message to ChangeEvent" {
     const allocator = testing.allocator;
 
-    var registry = RelationRegistry.init(allocator);
-    defer registry.deinit();
+    var converter = Converter.init(allocator);
+    defer converter.deinit();
 
     // Register test relation
     var rel_msg = pg_output_decoder.RelationMessage{
@@ -422,7 +460,7 @@ test "convertDelete: DELETE message to ChangeEvent" {
         .type_modifier = -1,
     };
 
-    try registry.register(rel_msg);
+    try testing.expect((try converter.convert(std.testing.io, allocator, .{ .relation = rel_msg })) == null);
 
     var delete_msg = pg_output_decoder.DeleteMessage{
         .relation_id = 100,
@@ -441,7 +479,7 @@ test "convertDelete: DELETE message to ChangeEvent" {
         .value = try allocator.dupe(u8, "Alice"),
     };
 
-    var event = try convertDelete(std.testing.io, allocator, delete_msg, &registry);
+    var event = (try converter.convert(std.testing.io, allocator, .{ .delete = delete_msg })).?;
     defer event.deinit(allocator);
 
     // Verify: operation type
@@ -688,12 +726,12 @@ test "tupleToRowData: unchanged TOAST column becomes the placeholder" {
     try testing.expectEqualStrings(constants.UNKNOWN_VALUE_PLACEHOLDER, row_data[1].value.string);
 }
 
-test "convertInsert: error when relation not found in registry" {
+test "convert INSERT: error when relation not found in registry" {
     const allocator = testing.allocator;
 
     // Empty registry (no relations registered)
-    var registry = RelationRegistry.init(allocator);
-    defer registry.deinit();
+    var converter = Converter.init(allocator);
+    defer converter.deinit();
 
     // Create INSERT message for non-existent relation (id=999)
     var insert_msg = pg_output_decoder.InsertMessage{
@@ -709,7 +747,7 @@ test "convertInsert: error when relation not found in registry" {
         .value = try allocator.dupe(u8, "test"),
     };
 
-    const result = convertInsert(std.testing.io, allocator, insert_msg, &registry);
+    const result = converter.convert(std.testing.io, allocator, .{ .insert = insert_msg });
 
     // Verify: error is RelationNotFound
     try testing.expectError(RelationRegistryError.RelationNotFound, result);

@@ -15,12 +15,7 @@ const DecoderError = pg_output_decoder.DecoderError;
 const relation_registry = @import("relation_registry.zig");
 
 const converter = @import("converter.zig");
-pub const convertInsert = converter.convertInsert;
-pub const convertUpdate = converter.convertUpdate;
-pub const convertDelete = converter.convertDelete;
-
-const message_processor = @import("message_processor.zig");
-pub const MessageProcessor = message_processor.MessageProcessor;
+pub const Converter = converter.Converter;
 
 // Re-export types for benchmarks (public API)
 pub const PgOutputMessage = pg_output_decoder.PgOutputMessage;
@@ -70,7 +65,7 @@ pub const PostgresSource = struct {
     allocator: std.mem.Allocator,
     protocol: ReplicationProtocol,
     decoder: PgOutputDecoder,
-    message_processor: MessageProcessor,
+    converter: Converter,
     last_lsn: u64, // Last confirmed LSN (starting point for next batch)
 
     const Self = @This();
@@ -85,14 +80,14 @@ pub const PostgresSource = struct {
             .allocator = allocator,
             .protocol = ReplicationProtocol.init(allocator, slot_name, publication_name),
             .decoder = PgOutputDecoder.init(allocator),
-            .message_processor = MessageProcessor.init(allocator),
+            .converter = Converter.init(allocator),
             .last_lsn = 0,
         };
     }
 
     pub fn deinit(self: *Self) void {
         self.protocol.deinit();
-        self.message_processor.deinit();
+        self.converter.deinit();
     }
 
     /// Connect to PostgreSQL and start replication
@@ -216,8 +211,8 @@ pub const PostgresSource = struct {
                 };
                 defer pg_msg.deinit(batch_allocator);
 
-                const change_opt = self.message_processor.process(io, batch_allocator, pg_msg) catch |err| {
-                    std.log.warn("Failed to process message to ChangeEvent at LSN {}: {}", .{ xlog.server_wal_end, err });
+                const change_opt = self.converter.convert(io, batch_allocator, pg_msg) catch |err| {
+                    std.log.warn("Failed to convert message to ChangeEvent at LSN {}: {}", .{ xlog.server_wal_end, err });
                     return PostgresSourceError.ConversionFailed; // Propagate error up
                 };
 

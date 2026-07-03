@@ -11,13 +11,14 @@ const TupleMessage = postgres_source.TupleMessage;
 const TupleData = postgres_source.TupleData;
 const RelationMessage = postgres_source.RelationMessage;
 const RelationMessageColumn = postgres_source.RelationMessageColumn;
-const RelationRegistry = postgres_source.RelationRegistry;
+const Converter = postgres_source.Converter;
 const CountingAllocator = bench_helpers.CountingAllocator;
 
 const iterations = 100000;
 
-fn setupRegistry(allocator: std.mem.Allocator) !RelationRegistry {
-    var registry = RelationRegistry.init(allocator);
+fn setupConverter(allocator: std.mem.Allocator) !Converter {
+    var converter = Converter.init(allocator);
+    errdefer converter.deinit();
 
     // Register test relation (id=100, public.users, columns: id, name, email, active)
     var rel_msg = RelationMessage{
@@ -52,9 +53,10 @@ fn setupRegistry(allocator: std.mem.Allocator) !RelationRegistry {
         .data_type = 16, // bool
         .type_modifier = -1,
     };
+    defer rel_msg.deinit(allocator);
 
-    try registry.register(rel_msg);
-    return registry;
+    _ = try converter.convert(std.testing.io, allocator, .{ .relation = rel_msg });
+    return converter;
 }
 
 fn buildInsertMessage(allocator: std.mem.Allocator) !InsertMessage {
@@ -85,14 +87,14 @@ fn buildInsertMessage(allocator: std.mem.Allocator) !InsertMessage {
     return insert_msg;
 }
 
-// convert* are free functions; all their allocations are tracked per run.
-// RelationRegistry setup is heavy (table registration), prepared outside
-const BenchProcessInsert = struct {
-    registry: *RelationRegistry,
+// Converter.convert allocates the event per run (tracked). The registry is
+// populated once in setup, outside the measured loop.
+const BenchConvertInsert = struct {
+    converter: *Converter,
     message: PgOutputMessage,
 
-    pub fn run(self: *BenchProcessInsert, allocator: std.mem.Allocator) void {
-        var event = postgres_source.convertInsert(std.testing.io, allocator, self.message.insert, self.registry) catch unreachable;
+    pub fn run(self: *BenchConvertInsert, allocator: std.mem.Allocator) void {
+        var event = (self.converter.convert(std.testing.io, allocator, self.message) catch unreachable).?;
         event.deinit(allocator);
     }
 };
@@ -145,12 +147,12 @@ fn buildUpdateMessage(allocator: std.mem.Allocator) !UpdateMessage {
     return update_msg;
 }
 
-const BenchProcessUpdate = struct {
-    registry: *RelationRegistry,
+const BenchConvertUpdate = struct {
+    converter: *Converter,
     message: PgOutputMessage,
 
-    pub fn run(self: *BenchProcessUpdate, allocator: std.mem.Allocator) void {
-        var event = postgres_source.convertUpdate(std.testing.io, allocator, self.message.update, self.registry) catch unreachable;
+    pub fn run(self: *BenchConvertUpdate, allocator: std.mem.Allocator) void {
+        var event = (self.converter.convert(std.testing.io, allocator, self.message) catch unreachable).?;
         event.deinit(allocator);
     }
 };
@@ -183,22 +185,22 @@ fn buildDeleteMessage(allocator: std.mem.Allocator) !DeleteMessage {
     return delete_msg;
 }
 
-const BenchProcessDelete = struct {
-    registry: *RelationRegistry,
+const BenchConvertDelete = struct {
+    converter: *Converter,
     message: PgOutputMessage,
 
-    pub fn run(self: *BenchProcessDelete, allocator: std.mem.Allocator) void {
-        var event = postgres_source.convertDelete(std.testing.io, allocator, self.message.delete, self.registry) catch unreachable;
+    pub fn run(self: *BenchConvertDelete, allocator: std.mem.Allocator) void {
+        var event = (self.converter.convert(std.testing.io, allocator, self.message) catch unreachable).?;
         event.deinit(allocator);
     }
 };
 
-test "benchmark MessageProcessor INSERT" {
+test "benchmark Converter INSERT" {
     var insert_msg = try buildInsertMessage(std.testing.allocator);
     defer insert_msg.deinit(std.testing.allocator);
 
-    var registry = try setupRegistry(std.testing.allocator);
-    defer registry.deinit();
+    var converter = try setupConverter(std.testing.allocator);
+    defer converter.deinit();
 
     var alloc_count: usize = 0;
     var counting_alloc = CountingAllocator{
@@ -213,12 +215,12 @@ test "benchmark MessageProcessor INSERT" {
 
     const insert_pg_msg = PgOutputMessage{ .insert = insert_msg };
 
-    const bench_insert = BenchProcessInsert{
-        .registry = &registry,
+    const bench_insert = BenchConvertInsert{
+        .converter = &converter,
         .message = insert_pg_msg,
     };
 
-    try bench.addParam("MessageProcessor.processMessage (INSERT)", &bench_insert, .{
+    try bench.addParam("Converter.convert (INSERT)", &bench_insert, .{
         .iterations = iterations,
         .track_allocations = true,
     });
@@ -229,12 +231,12 @@ test "benchmark MessageProcessor INSERT" {
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
 }
 
-test "benchmark MessageProcessor UPDATE" {
+test "benchmark Converter UPDATE" {
     var update_msg = try buildUpdateMessage(std.testing.allocator);
     defer update_msg.deinit(std.testing.allocator);
 
-    var registry = try setupRegistry(std.testing.allocator);
-    defer registry.deinit();
+    var converter = try setupConverter(std.testing.allocator);
+    defer converter.deinit();
 
     var alloc_count: usize = 0;
     var counting_alloc = CountingAllocator{
@@ -249,12 +251,12 @@ test "benchmark MessageProcessor UPDATE" {
 
     const update_pg_msg = PgOutputMessage{ .update = update_msg };
 
-    const bench_update = BenchProcessUpdate{
-        .registry = &registry,
+    const bench_update = BenchConvertUpdate{
+        .converter = &converter,
         .message = update_pg_msg,
     };
 
-    try bench.addParam("MessageProcessor.processMessage (UPDATE)", &bench_update, .{
+    try bench.addParam("Converter.convert (UPDATE)", &bench_update, .{
         .iterations = iterations,
         .track_allocations = true,
     });
@@ -265,12 +267,12 @@ test "benchmark MessageProcessor UPDATE" {
     std.debug.print("\nAllocations per operation: {d}\n", .{allocations_per_iter});
 }
 
-test "benchmark MessageProcessor DELETE" {
+test "benchmark Converter DELETE" {
     var delete_msg = try buildDeleteMessage(std.testing.allocator);
     defer delete_msg.old_tuple.deinit(std.testing.allocator);
 
-    var registry = try setupRegistry(std.testing.allocator);
-    defer registry.deinit();
+    var converter = try setupConverter(std.testing.allocator);
+    defer converter.deinit();
 
     var alloc_count: usize = 0;
     var counting_alloc = CountingAllocator{
@@ -285,12 +287,12 @@ test "benchmark MessageProcessor DELETE" {
 
     const delete_pg_msg = PgOutputMessage{ .delete = delete_msg };
 
-    const bench_delete = BenchProcessDelete{
-        .registry = &registry,
+    const bench_delete = BenchConvertDelete{
+        .converter = &converter,
         .message = delete_pg_msg,
     };
 
-    try bench.addParam("MessageProcessor.processMessage (DELETE)", &bench_delete, .{
+    try bench.addParam("Converter.convert (DELETE)", &bench_delete, .{
         .iterations = iterations,
         .track_allocations = true,
     });

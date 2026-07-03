@@ -63,19 +63,19 @@
       "allocations": 1
     }
 ,
-    "MessageProcessor INSERT": {
+    "Converter INSERT": {
       "time_avg_us": 131.665,
       "memory_bytes": 643,
       "allocations": 15
     }
 ,
-    "MessageProcessor UPDATE": {
+    "Converter UPDATE": {
       "time_avg_us": 230.735,
       "memory_bytes": 976,
       "allocations": 27
     }
 ,
-    "MessageProcessor DELETE": {
+    "Converter DELETE": {
       "time_avg_us": 131.48,
       "memory_bytes": 643,
       "allocations": 15
