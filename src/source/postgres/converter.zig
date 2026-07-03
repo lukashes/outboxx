@@ -18,11 +18,10 @@ const RelationRegistry = relation_registry.RelationRegistry;
 pub const ConversionError = error{ConversionFailed};
 
 // Event level: a pgoutput message -> domain ChangeEvent.
-// Pure (no I/O), so it can be tested in isolation from PostgresSource.
 
 /// Process a PgOutputMessage and convert it to a ChangeEvent.
 /// Returns null for messages that don't produce ChangeEvents (BEGIN, COMMIT, RELATION).
-pub fn processMessage(io: std.Io, batch_allocator: std.mem.Allocator, pg_msg: PgOutputMessage, registry: *RelationRegistry) ConversionError!?ChangeEvent {
+pub fn processMessage(io: std.Io, allocator: std.mem.Allocator, pg_msg: PgOutputMessage, registry: *RelationRegistry) ConversionError!?ChangeEvent {
     switch (pg_msg) {
         .begin, .commit => return null,
         .relation => |rel| {
@@ -33,19 +32,19 @@ pub fn processMessage(io: std.Io, batch_allocator: std.mem.Allocator, pg_msg: Pg
             return null;
         },
         .insert => |ins| {
-            return convertInsert(io, batch_allocator, ins, registry) catch |err| {
+            return convertInsert(io, allocator, ins, registry) catch |err| {
                 std.log.warn("Failed to convert INSERT: {}", .{err});
                 return ConversionError.ConversionFailed;
             };
         },
         .update => |upd| {
-            return convertUpdate(io, batch_allocator, upd, registry) catch |err| {
+            return convertUpdate(io, allocator, upd, registry) catch |err| {
                 std.log.warn("Failed to convert UPDATE: {}", .{err});
                 return ConversionError.ConversionFailed;
             };
         },
         .delete => |del| {
-            return convertDelete(io, batch_allocator, del, registry) catch |err| {
+            return convertDelete(io, allocator, del, registry) catch |err| {
                 std.log.warn("Failed to convert DELETE: {}", .{err});
                 return ConversionError.ConversionFailed;
             };
@@ -53,75 +52,74 @@ pub fn processMessage(io: std.Io, batch_allocator: std.mem.Allocator, pg_msg: Pg
     }
 }
 
-fn convertInsert(io: std.Io, batch_allocator: std.mem.Allocator, insert_msg: anytype, registry: *RelationRegistry) !ChangeEvent {
+fn convertInsert(io: std.Io, allocator: std.mem.Allocator, insert_msg: anytype, registry: *RelationRegistry) !ChangeEvent {
     const rel_info = try registry.get(insert_msg.relation_id);
-    var event = ChangeEvent.init(ChangeOperation.INSERT, try buildMetadata(io, batch_allocator, rel_info));
-    event.setInsertData(try tupleToRowData(batch_allocator, insert_msg.new_tuple, rel_info));
+    var event = ChangeEvent.init(ChangeOperation.INSERT, try buildMetadata(io, allocator, rel_info));
+    event.setInsertData(try tupleToRowData(allocator, insert_msg.new_tuple, rel_info));
     return event;
 }
 
-fn convertUpdate(io: std.Io, batch_allocator: std.mem.Allocator, update_msg: anytype, registry: *RelationRegistry) !ChangeEvent {
+fn convertUpdate(io: std.Io, allocator: std.mem.Allocator, update_msg: anytype, registry: *RelationRegistry) !ChangeEvent {
     const rel_info = try registry.get(update_msg.relation_id);
-    var event = ChangeEvent.init(ChangeOperation.UPDATE, try buildMetadata(io, batch_allocator, rel_info));
+    var event = ChangeEvent.init(ChangeOperation.UPDATE, try buildMetadata(io, allocator, rel_info));
 
-    const new_row = try tupleToRowData(batch_allocator, update_msg.new_tuple, rel_info);
+    const new_row = try tupleToRowData(allocator, update_msg.new_tuple, rel_info);
     const old_row = if (update_msg.old_tuple) |old_tuple|
-        try tupleToRowData(batch_allocator, old_tuple, rel_info)
+        try tupleToRowData(allocator, old_tuple, rel_info)
     else
-        try batch_allocator.alloc(domain.FieldData, 0);
+        try allocator.alloc(domain.FieldData, 0);
 
     event.setUpdateData(new_row, old_row);
     return event;
 }
 
-fn convertDelete(io: std.Io, batch_allocator: std.mem.Allocator, delete_msg: anytype, registry: *RelationRegistry) !ChangeEvent {
+fn convertDelete(io: std.Io, allocator: std.mem.Allocator, delete_msg: anytype, registry: *RelationRegistry) !ChangeEvent {
     const rel_info = try registry.get(delete_msg.relation_id);
-    var event = ChangeEvent.init(ChangeOperation.DELETE, try buildMetadata(io, batch_allocator, rel_info));
-    event.setDeleteData(try tupleToRowData(batch_allocator, delete_msg.old_tuple, rel_info));
+    var event = ChangeEvent.init(ChangeOperation.DELETE, try buildMetadata(io, allocator, rel_info));
+    event.setDeleteData(try tupleToRowData(allocator, delete_msg.old_tuple, rel_info));
     return event;
 }
 
-// Build event metadata from the relation. Strings are duped into the batch
-// allocator so the event owns them independently of the relation registry.
-fn buildMetadata(io: std.Io, batch_allocator: std.mem.Allocator, rel_info: anytype) !Metadata {
+// Strings are duped so the event owns them independently of the relation registry.
+fn buildMetadata(io: std.Io, allocator: std.mem.Allocator, rel_info: anytype) !Metadata {
     return .{
-        .source = try batch_allocator.dupe(u8, "postgres"),
-        .resource = try batch_allocator.dupe(u8, rel_info.relation_name),
-        .schema = try batch_allocator.dupe(u8, rel_info.namespace),
+        .source = try allocator.dupe(u8, "postgres"),
+        .resource = try allocator.dupe(u8, rel_info.relation_name),
+        .schema = try allocator.dupe(u8, rel_info.namespace),
         .timestamp = std.Io.Timestamp.now(io, .real).toSeconds(),
         .lsn = null,
     };
 }
 
-fn tupleToRowData(batch_allocator: std.mem.Allocator, tuple: anytype, rel_info: anytype) !RowData {
-    var builder = RowDataHelpers.createBuilder(batch_allocator);
+fn tupleToRowData(allocator: std.mem.Allocator, tuple: anytype, rel_info: anytype) !RowData {
+    var builder = RowDataHelpers.createBuilder(allocator);
     errdefer {
         for (builder.items) |field| {
-            batch_allocator.free(field.name);
+            allocator.free(field.name);
             if (field.value == .string) {
-                batch_allocator.free(field.value.string);
+                allocator.free(field.value.string);
             }
         }
-        builder.deinit(batch_allocator);
+        builder.deinit(allocator);
     }
 
     for (tuple.columns, 0..) |col, i| {
         const col_name = rel_info.columns[i].name;
 
         if (col.value) |val| {
-            const field_value = try convertValue(batch_allocator, rel_info.columns[i].data_type, val);
-            try RowDataHelpers.put(&builder, batch_allocator, col_name, field_value);
+            const field_value = try mapValue(allocator, rel_info.columns[i].data_type, val);
+            try RowDataHelpers.put(&builder, allocator, col_name, field_value);
         } else if (col.column_type == .unchanged_toast) {
             // Postgres didn't resend the unchanged TOAST value; emit a placeholder
             // so the column stays in the payload instead of looking like a real NULL.
-            const placeholder = try FieldValueHelpers.text(batch_allocator, constants.UNKNOWN_VALUE_PLACEHOLDER);
-            try RowDataHelpers.put(&builder, batch_allocator, col_name, placeholder);
+            const placeholder = try FieldValueHelpers.text(allocator, constants.UNKNOWN_VALUE_PLACEHOLDER);
+            try RowDataHelpers.put(&builder, allocator, col_name, placeholder);
         } else {
-            try RowDataHelpers.put(&builder, batch_allocator, col_name, FieldValueHelpers.null_value());
+            try RowDataHelpers.put(&builder, allocator, col_name, FieldValueHelpers.null_value());
         }
     }
 
-    return try RowDataHelpers.finalize(&builder, batch_allocator);
+    return try RowDataHelpers.finalize(&builder, allocator);
 }
 
 // Value level: a single column value (OID + text) -> domain FieldValue.
@@ -141,7 +139,7 @@ const Oid = enum(u32) {
     _,
 };
 
-// Convert a text-format pgoutput value to a typed JSON value based on the column OID.
+// Map a text-format pgoutput value to a typed JSON value based on the column OID.
 //
 // pgoutput always delivers values as text (`"1"`, `"t"`), so without this every
 // field would serialize as a JSON string. Here we promote the common scalar types
@@ -150,7 +148,7 @@ const Oid = enum(u32) {
 //
 // Only the `.string` branch allocates (it dupes into caller-owned memory); the
 // numeric and boolean branches return by value.
-fn convertValue(allocator: std.mem.Allocator, oid: u32, text: []const u8) !FieldValue {
+fn mapValue(allocator: std.mem.Allocator, oid: u32, text: []const u8) !FieldValue {
     switch (@as(Oid, @enumFromInt(oid))) {
         .int2, .int4, .int8 => {
             const n = std.fmt.parseInt(i64, text, 10) catch return FieldValueHelpers.text(allocator, text);
@@ -182,32 +180,32 @@ const RelationRegistryError = relation_registry.RelationRegistryError;
 
 // Value level
 
-test "convertValue: integer types become JSON integers" {
+test "mapValue: integer types become JSON integers" {
     const allocator = testing.allocator;
     for ([_]u32{ 21, 23, 20 }) |oid| {
-        const v = try convertValue(allocator, oid, "42");
+        const v = try mapValue(allocator, oid, "42");
         try testing.expect(v == .integer);
         try testing.expectEqual(@as(i64, 42), v.integer);
     }
 
-    const neg = try convertValue(allocator, 20, "-9223372036854775808");
+    const neg = try mapValue(allocator, 20, "-9223372036854775808");
     try testing.expectEqual(@as(i64, std.math.minInt(i64)), neg.integer);
 }
 
-test "convertValue: float types become JSON floats" {
+test "mapValue: float types become JSON floats" {
     const allocator = testing.allocator;
     for ([_]u32{ 700, 701 }) |oid| {
-        const v = try convertValue(allocator, oid, "3.5");
+        const v = try mapValue(allocator, oid, "3.5");
         try testing.expect(v == .float);
         try testing.expectEqual(@as(f64, 3.5), v.float);
     }
 }
 
-test "convertValue: non-finite floats fall back to string" {
+test "mapValue: non-finite floats fall back to string" {
     const allocator = testing.allocator;
     for ([_]u32{ 700, 701 }) |oid| {
         for ([_][]const u8{ "NaN", "Infinity", "-Infinity" }) |text| {
-            const v = try convertValue(allocator, oid, text);
+            const v = try mapValue(allocator, oid, text);
             defer allocator.free(v.string);
             try testing.expect(v == .string);
             try testing.expectEqualStrings(text, v.string);
@@ -215,42 +213,42 @@ test "convertValue: non-finite floats fall back to string" {
     }
 }
 
-test "convertValue: bool maps t/f to JSON boolean" {
+test "mapValue: bool maps t/f to JSON boolean" {
     const allocator = testing.allocator;
-    const t = try convertValue(allocator, 16, "t");
+    const t = try mapValue(allocator, 16, "t");
     try testing.expect(t == .bool and t.bool == true);
-    const f = try convertValue(allocator, 16, "f");
+    const f = try mapValue(allocator, 16, "f");
     try testing.expect(f == .bool and f.bool == false);
 }
 
-test "convertValue: numeric stays a string" {
+test "mapValue: numeric stays a string" {
     const allocator = testing.allocator;
-    const v = try convertValue(allocator, 1700, "12345.6789");
+    const v = try mapValue(allocator, 1700, "12345.6789");
     defer allocator.free(v.string);
     try testing.expect(v == .string);
     try testing.expectEqualStrings("12345.6789", v.string);
 }
 
-test "convertValue: unknown OID stays a string" {
+test "mapValue: unknown OID stays a string" {
     const allocator = testing.allocator;
     // 25 = text
-    const v = try convertValue(allocator, 25, "hello");
+    const v = try mapValue(allocator, 25, "hello");
     defer allocator.free(v.string);
     try testing.expect(v == .string);
     try testing.expectEqualStrings("hello", v.string);
 }
 
-test "convertValue: unparseable integer falls back to string" {
+test "mapValue: unparseable integer falls back to string" {
     const allocator = testing.allocator;
-    const v = try convertValue(allocator, 23, "not-a-number");
+    const v = try mapValue(allocator, 23, "not-a-number");
     defer allocator.free(v.string);
     try testing.expect(v == .string);
     try testing.expectEqualStrings("not-a-number", v.string);
 }
 
-test "convertValue: unparseable float falls back to string" {
+test "mapValue: unparseable float falls back to string" {
     const allocator = testing.allocator;
-    const v = try convertValue(allocator, 701, "not-a-float");
+    const v = try mapValue(allocator, 701, "not-a-float");
     defer allocator.free(v.string);
     try testing.expect(v == .string);
     try testing.expectEqualStrings("not-a-float", v.string);
