@@ -85,17 +85,15 @@ fn buildInsertMessage(allocator: std.mem.Allocator) !InsertMessage {
     return insert_msg;
 }
 
-// processMessage is a free function; all its allocations are tracked per run.
+// convert* are free functions; all their allocations are tracked per run.
 // RelationRegistry setup is heavy (table registration), prepared outside
 const BenchProcessInsert = struct {
     registry: *RelationRegistry,
     message: PgOutputMessage,
 
     pub fn run(self: *BenchProcessInsert, allocator: std.mem.Allocator) void {
-        var event = postgres_source.processMessage(std.testing.io, allocator, self.message, self.registry) catch unreachable;
-        if (event) |*e| {
-            e.deinit(allocator);
-        }
+        var event = postgres_source.convertInsert(std.testing.io, allocator, self.message.insert, self.registry) catch unreachable;
+        event.deinit(allocator);
     }
 };
 
@@ -152,10 +150,8 @@ const BenchProcessUpdate = struct {
     message: PgOutputMessage,
 
     pub fn run(self: *BenchProcessUpdate, allocator: std.mem.Allocator) void {
-        var event = postgres_source.processMessage(std.testing.io, allocator, self.message, self.registry) catch unreachable;
-        if (event) |*e| {
-            e.deinit(allocator);
-        }
+        var event = postgres_source.convertUpdate(std.testing.io, allocator, self.message.update, self.registry) catch unreachable;
+        event.deinit(allocator);
     }
 };
 
@@ -192,10 +188,8 @@ const BenchProcessDelete = struct {
     message: PgOutputMessage,
 
     pub fn run(self: *BenchProcessDelete, allocator: std.mem.Allocator) void {
-        var event = postgres_source.processMessage(std.testing.io, allocator, self.message, self.registry) catch unreachable;
-        if (event) |*e| {
-            e.deinit(allocator);
-        }
+        var event = postgres_source.convertDelete(std.testing.io, allocator, self.message.delete, self.registry) catch unreachable;
+        event.deinit(allocator);
     }
 };
 

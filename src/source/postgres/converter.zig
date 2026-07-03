@@ -10,56 +10,24 @@ const FieldValue = domain.FieldValue;
 const constants = @import("constants");
 
 const pg_output_decoder = @import("pg_output_decoder.zig");
-const PgOutputMessage = pg_output_decoder.PgOutputMessage;
 
 const relation_registry = @import("relation_registry.zig");
 const RelationRegistry = relation_registry.RelationRegistry;
 
-pub const ConversionError = error{ConversionFailed};
+// Event level: a pgoutput data message -> domain ChangeEvent.
+// Pure conversion: reads column types from the registry, never mutates it. The
+// message processor owns the registry and handles BEGIN/COMMIT/RELATION.
 
-// Event level: a pgoutput message -> domain ChangeEvent.
-
-/// Process a PgOutputMessage and convert it to a ChangeEvent.
-/// Returns null for messages that don't produce ChangeEvents (BEGIN, COMMIT, RELATION).
-pub fn processMessage(io: std.Io, allocator: std.mem.Allocator, pg_msg: PgOutputMessage, registry: *RelationRegistry) ConversionError!?ChangeEvent {
-    switch (pg_msg) {
-        .begin, .commit => return null,
-        .relation => |rel| {
-            registry.register(rel) catch |err| {
-                std.log.warn("Failed to register relation: {}", .{err});
-                return ConversionError.ConversionFailed;
-            };
-            return null;
-        },
-        .insert => |ins| {
-            return convertInsert(io, allocator, ins, registry) catch |err| {
-                std.log.warn("Failed to convert INSERT: {}", .{err});
-                return ConversionError.ConversionFailed;
-            };
-        },
-        .update => |upd| {
-            return convertUpdate(io, allocator, upd, registry) catch |err| {
-                std.log.warn("Failed to convert UPDATE: {}", .{err});
-                return ConversionError.ConversionFailed;
-            };
-        },
-        .delete => |del| {
-            return convertDelete(io, allocator, del, registry) catch |err| {
-                std.log.warn("Failed to convert DELETE: {}", .{err});
-                return ConversionError.ConversionFailed;
-            };
-        },
-    }
-}
-
-fn convertInsert(io: std.Io, allocator: std.mem.Allocator, insert_msg: anytype, registry: *RelationRegistry) !ChangeEvent {
+/// Convert an INSERT message to a ChangeEvent.
+pub fn convertInsert(io: std.Io, allocator: std.mem.Allocator, insert_msg: anytype, registry: *RelationRegistry) !ChangeEvent {
     const rel_info = try registry.get(insert_msg.relation_id);
     var event = ChangeEvent.init(ChangeOperation.INSERT, try buildMetadata(io, allocator, rel_info));
     event.setInsertData(try tupleToRowData(allocator, insert_msg.new_tuple, rel_info));
     return event;
 }
 
-fn convertUpdate(io: std.Io, allocator: std.mem.Allocator, update_msg: anytype, registry: *RelationRegistry) !ChangeEvent {
+/// Convert an UPDATE message to a ChangeEvent (new row, plus the old row when present).
+pub fn convertUpdate(io: std.Io, allocator: std.mem.Allocator, update_msg: anytype, registry: *RelationRegistry) !ChangeEvent {
     const rel_info = try registry.get(update_msg.relation_id);
     var event = ChangeEvent.init(ChangeOperation.UPDATE, try buildMetadata(io, allocator, rel_info));
 
@@ -73,7 +41,8 @@ fn convertUpdate(io: std.Io, allocator: std.mem.Allocator, update_msg: anytype, 
     return event;
 }
 
-fn convertDelete(io: std.Io, allocator: std.mem.Allocator, delete_msg: anytype, registry: *RelationRegistry) !ChangeEvent {
+/// Convert a DELETE message to a ChangeEvent.
+pub fn convertDelete(io: std.Io, allocator: std.mem.Allocator, delete_msg: anytype, registry: *RelationRegistry) !ChangeEvent {
     const rel_info = try registry.get(delete_msg.relation_id);
     var event = ChangeEvent.init(ChangeOperation.DELETE, try buildMetadata(io, allocator, rel_info));
     event.setDeleteData(try tupleToRowData(allocator, delete_msg.old_tuple, rel_info));
