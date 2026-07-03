@@ -150,11 +150,9 @@ test "E2E: INSERT operation - full pipeline verification" {
         // Verify data values
         try test_helpers.assertJsonField(msg, "data.name", expected_names[i]);
 
-        // Note: pgoutput sends values as strings, need to parse
+        // INT column is emitted as a real JSON number, not a quoted string
         const data_obj = msg.value.object.get("data").?.object;
-        const value_str = data_obj.get("value").?.string;
-        const value = try std.fmt.parseInt(i64, value_str, 10);
-        try testing.expectEqual(expected_values[i], value);
+        try testing.expectEqual(expected_values[i], data_obj.get("value").?.integer);
     }
 
     std.debug.print("=== TEST COMPLETED SUCCESSFULLY ===\n", .{});
@@ -285,19 +283,14 @@ test "E2E: UPDATE operation - full pipeline verification" {
     try test_helpers.assertJsonField(messages[1], "meta.resource", table_name);
     try test_helpers.assertJsonField(messages[1], "data.name", "Alice Updated");
 
-    // Note: pgoutput sends values as strings
     const data_obj_1 = messages[1].value.object.get("data").?.object;
-    const value_str_1 = data_obj_1.get("value").?.string;
-    const value_1 = try std.fmt.parseInt(i64, value_str_1, 10);
-    try testing.expectEqual(@as(i64, 200), value_1);
+    try testing.expectEqual(@as(i64, 200), data_obj_1.get("value").?.integer);
 
     try test_helpers.assertJsonField(messages[2], "op", "UPDATE");
     try test_helpers.assertJsonField(messages[2], "data.name", "Alice Updated");
 
     const data_obj_2 = messages[2].value.object.get("data").?.object;
-    const value_str_2 = data_obj_2.get("value").?.string;
-    const value_2 = try std.fmt.parseInt(i64, value_str_2, 10);
-    try testing.expectEqual(@as(i64, 300), value_2);
+    try testing.expectEqual(@as(i64, 300), data_obj_2.get("value").?.integer);
 
     std.debug.print("=== TEST COMPLETED SUCCESSFULLY ===\n", .{});
     std.debug.print("✓ 2 UPDATE operations resulted in 2 UPDATE messages\n", .{});

@@ -485,20 +485,20 @@ pub fn build(b: *std.Build) void {
 
     const install_kafka_bench = b.addInstallArtifact(kafka_bench, .{});
 
-    const message_processor_bench = b.addTest(.{
-        .name = "message_processor_bench",
+    const converter_bench = b.addTest(.{
+        .name = "converter_bench",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("tests/benchmarks/components/message_processor_bench.zig"),
+            .root_source_file = b.path("tests/benchmarks/components/converter_bench.zig"),
             .target = target,
             .optimize = .ReleaseFast,
         }),
     });
-    message_processor_bench.root_module.addImport("zbench", zbench_module);
-    message_processor_bench.root_module.addImport("postgres_source", postgres_source_module);
-    message_processor_bench.root_module.addImport("domain", domain_module);
-    message_processor_bench.root_module.addImport("bench_helpers", bench_helpers_module);
+    converter_bench.root_module.addImport("zbench", zbench_module);
+    converter_bench.root_module.addImport("postgres_source", postgres_source_module);
+    converter_bench.root_module.addImport("domain", domain_module);
+    converter_bench.root_module.addImport("bench_helpers", bench_helpers_module);
 
-    const install_message_processor_bench = b.addInstallArtifact(message_processor_bench, .{});
+    const install_converter_bench = b.addInstallArtifact(converter_bench, .{});
 
     const bench_step = b.step("bench", "Compile component benchmarks");
     bench_step.dependOn(&install_serializer_bench.step);
@@ -506,7 +506,7 @@ pub fn build(b: *std.Build) void {
     bench_step.dependOn(&install_match_streams_bench.step);
     bench_step.dependOn(&install_partition_key_bench.step);
     bench_step.dependOn(&install_kafka_bench.step);
-    bench_step.dependOn(&install_message_processor_bench.step);
+    bench_step.dependOn(&install_converter_bench.step);
 }
 
 /// Point a translate-c step at the system headers, from C_INCLUDE_PATH (set by

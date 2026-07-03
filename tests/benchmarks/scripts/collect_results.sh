@@ -11,7 +11,7 @@ BIN_DIR="$BENCH_DIR/../../zig-out/bin"
 #   BENCH_RUNS=9 make bench-save
 BENCH_RUNS="${BENCH_RUNS:-5}"
 
-BENCHES=(serializer_bench decoder_bench match_streams_bench partition_key_bench kafka_bench message_processor_bench)
+BENCHES=(serializer_bench decoder_bench match_streams_bench partition_key_bench kafka_bench converter_bench)
 
 # Colors
 GREEN='\033[0;32m'

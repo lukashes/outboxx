@@ -21,6 +21,10 @@ pub const FieldValueHelpers = struct {
         return std.json.Value{ .string = try allocator.dupe(u8, str) };
     }
 
+    pub fn float(val: f64) std.json.Value {
+        return std.json.Value{ .float = val };
+    }
+
     pub fn boolean(val: bool) std.json.Value {
         return std.json.Value{ .bool = val };
     }
@@ -173,11 +177,13 @@ pub const ChangeEvent = struct {
 
         const field_value = RowDataHelpers.getField(row, field_name) orelse return null;
 
-        // Convert field value to string for Kafka partition key
+        // Convert field value to string for Kafka partition key.
+        // Ordered by how often a column of this type is used as a key.
         return switch (field_value) {
             .integer => |i| try std.fmt.allocPrint(allocator, "{d}", .{i}),
             .string => |s| try allocator.dupe(u8, s),
             .bool => |b| try allocator.dupe(u8, if (b) "true" else "false"),
+            .float => |f| try std.fmt.allocPrint(allocator, "{d}", .{f}),
             .null => try allocator.dupe(u8, "null"),
             else => null, // For complex types, return null
         };
@@ -324,6 +330,7 @@ test "getPartitionKeyValue extracts field values" {
         var builder = RowDataHelpers.createBuilder(allocator);
         try RowDataHelpers.put(&builder, allocator, "id", FieldValueHelpers.integer(42));
         try RowDataHelpers.put(&builder, allocator, "email", try FieldValueHelpers.text(allocator, "test@example.com"));
+        try RowDataHelpers.put(&builder, allocator, "ratio", FieldValueHelpers.float(2.5));
         const row = try RowDataHelpers.finalize(&builder, allocator);
         event.setInsertData(row);
 
@@ -338,6 +345,12 @@ test "getPartitionKeyValue extracts field values" {
         try testing.expect(key2 != null);
         defer allocator.free(key2.?);
         try testing.expectEqualStrings("test@example.com", key2.?);
+
+        // Get float partition key
+        const key_float = try event.getPartitionKeyValue(allocator, "ratio");
+        try testing.expect(key_float != null);
+        defer allocator.free(key_float.?);
+        try testing.expectEqualStrings("2.5", key_float.?);
 
         // Non-existent field
         const key3 = try event.getPartitionKeyValue(allocator, "nonexistent");

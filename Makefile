@@ -188,7 +188,7 @@ bench:
 	@echo ""
 	@./zig-out/bin/kafka_bench
 	@echo ""
-	@./zig-out/bin/message_processor_bench
+	@./zig-out/bin/converter_bench
 
 # Build the benchmark binaries and collect one set of results into
 # tests/benchmarks/results/current.json (min of BENCH_RUNS passes). This is the
