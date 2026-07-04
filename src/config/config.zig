@@ -178,7 +178,7 @@ pub const Config = struct {
         const kafka = self.sink.kafka orelse return null;
         const sasl = kafka.sasl orelse return null;
 
-        return sasl.loadPassword(allocator, environ_map);
+        return try sasl.loadPassword(allocator, environ_map);
     }
 
     /// Build the libpq connection string for the configured PostgreSQL source.

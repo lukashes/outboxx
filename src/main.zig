@@ -3,6 +3,8 @@ const config_mod = @import("config");
 const Config = config_mod.Config;
 const Processor = @import("processor/processor.zig").Processor;
 const PostgresSource = @import("postgres_source").PostgresSource;
+const kafka_producer = @import("kafka_producer");
+const KafkaProducer = kafka_producer.KafkaProducer;
 const PostgresValidator = @import("source/postgres/validator.zig").PostgresValidator;
 const builtin = @import("builtin");
 const posix = std.posix;
@@ -83,10 +85,11 @@ fn run(init: std.process.Init) !void {
     printStatus("Connecting to PostgreSQL streaming replication...\n", .{});
     try source.connect(conn_str, "0/0");
 
-    var processor = Processor.init(allocator, source, config.streams, config.sink.kafka.?, kafka_sasl_pw);
-    defer processor.deinit();
+    const producer = try initKafkaProducer(allocator, config.sink.kafka.?, kafka_sasl_pw);
+    // NOTE: producer will be deinit'd by processor.deinit()
 
-    try processor.initialize();
+    var processor = Processor.init(allocator, source, producer, config.streams);
+    defer processor.deinit();
 
     printStatus("\nProcessor initialized successfully with slot: {s}\n", .{postgres.slot_name});
     printStatus("\nCDC processor started successfully!\n", .{});
@@ -98,6 +101,29 @@ fn run(init: std.process.Init) !void {
     printStatus("Press Ctrl+C to stop gracefully.\n\n", .{});
 
     try processor.startStreaming(init.io, &shutdown_requested);
+}
+
+/// Build the Kafka sink from config, deriving librdkafka's security.protocol from the
+/// tls/sasl axes, and fail fast if the broker is unreachable at startup. The returned
+/// producer is owned by the caller (handed to the processor, which deinits it).
+fn initKafkaProducer(allocator: std.mem.Allocator, kafka: config_mod.KafkaSink, sasl_password: ?[]const u8) !KafkaProducer {
+    const brokers_str = try std.mem.join(allocator, ",", kafka.brokers);
+    defer allocator.free(brokers_str);
+
+    // SASL creds and the CA are forwarded only when their axis is active.
+    const security: kafka_producer.Security = .{
+        .protocol = kafka.securityProtocol(),
+        .sasl_mechanism = if (kafka.sasl) |s| s.mechanism else null,
+        .sasl_username = if (kafka.sasl) |s| s.username else null,
+        .sasl_password = sasl_password,
+        .ssl_ca_location = if (kafka.tls) kafka.tls_ca_location else null,
+    };
+
+    var producer = try KafkaProducer.init(allocator, brokers_str, security);
+    errdefer producer.deinit();
+
+    try producer.testConnection();
+    return producer;
 }
 
 /// Print user-facing messages to stdout

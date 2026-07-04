@@ -4,7 +4,7 @@ const test_helpers = @import("test_helpers");
 
 const Processor = @import("cdc_processor").Processor;
 const PostgresSource = @import("postgres_source").PostgresSource;
-const KafkaSink = @import("config").KafkaSink;
+const KafkaProducer = @import("kafka_producer").KafkaProducer;
 const Stream = @import("config").Stream;
 const c = test_helpers.c;
 
@@ -56,12 +56,6 @@ test "E2E: INSERT operation - full pipeline verification" {
     defer allocator.free(replica_sql);
     _ = c.PQexec(conn, replica_sql.ptr);
 
-    // Kafka configuration
-    const kafka_config = KafkaSink{
-        .brokers = &[_][]const u8{"localhost:9092"},
-        .tls = false,
-    };
-
     // Create stream configuration
     const stream_config = try test_helpers.createTestStreamConfig(allocator, table_name, topic_name);
     defer allocator.free(stream_config.name);
@@ -87,10 +81,11 @@ test "E2E: INSERT operation - full pipeline verification" {
     defer allocator.free(streams);
     streams[0] = stream_config;
 
-    var processor = Processor.init(allocator, source, streams, kafka_config, null);
-    defer processor.deinit();
+    var producer = try KafkaProducer.init(allocator, "localhost:9092", null);
+    try producer.testConnection();
 
-    try processor.initialize();
+    var processor = Processor.init(allocator, source, producer, streams);
+    defer processor.deinit();
 
     std.debug.print("\n=== E2E INSERT TEST ===\n", .{});
 
@@ -199,12 +194,6 @@ test "E2E: UPDATE operation - full pipeline verification" {
     defer allocator.free(replica_sql);
     _ = c.PQexec(conn, replica_sql.ptr);
 
-    // Kafka configuration
-    const kafka_config = KafkaSink{
-        .brokers = &[_][]const u8{"localhost:9092"},
-        .tls = false,
-    };
-
     // Create stream configuration
     const stream_config = try test_helpers.createTestStreamConfig(allocator, table_name, topic_name);
     defer allocator.free(stream_config.name);
@@ -229,10 +218,11 @@ test "E2E: UPDATE operation - full pipeline verification" {
     defer allocator.free(streams);
     streams[0] = stream_config;
 
-    var processor = Processor.init(allocator, source, streams, kafka_config, null);
-    defer processor.deinit();
+    var producer = try KafkaProducer.init(allocator, "localhost:9092", null);
+    try producer.testConnection();
 
-    try processor.initialize();
+    var processor = Processor.init(allocator, source, producer, streams);
+    defer processor.deinit();
 
     std.debug.print("\n=== E2E UPDATE TEST ===\n", .{});
 
@@ -334,12 +324,6 @@ test "E2E: DELETE operation - full pipeline verification" {
     defer allocator.free(replica_sql);
     _ = c.PQexec(conn, replica_sql.ptr);
 
-    // Kafka configuration
-    const kafka_config = KafkaSink{
-        .brokers = &[_][]const u8{"localhost:9092"},
-        .tls = false,
-    };
-
     // Create stream configuration
     const stream_config = try test_helpers.createTestStreamConfig(allocator, table_name, topic_name);
     defer allocator.free(stream_config.name);
@@ -364,10 +348,11 @@ test "E2E: DELETE operation - full pipeline verification" {
     defer allocator.free(streams);
     streams[0] = stream_config;
 
-    var processor = Processor.init(allocator, source, streams, kafka_config, null);
-    defer processor.deinit();
+    var producer = try KafkaProducer.init(allocator, "localhost:9092", null);
+    try producer.testConnection();
 
-    try processor.initialize();
+    var processor = Processor.init(allocator, source, producer, streams);
+    defer processor.deinit();
 
     std.debug.print("\n=== E2E DELETE TEST ===\n", .{});
 
