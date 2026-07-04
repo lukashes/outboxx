@@ -4,7 +4,7 @@ const KafkaProducer = @import("producer.zig").KafkaProducer;
 const c = @import("c"); // C bindings (build-system translate-c)
 
 // Simple function to verify message was written to Kafka
-fn verifyMessageWritten(allocator: std.mem.Allocator, brokers: []const u8, topic: []const u8, expected_payload: []const u8) !bool {
+fn verifyMessageWritten(allocator: std.mem.Allocator, brokers: []const u8, topic: []const u8, expected_payload: []const u8, ca: ?[]const u8) !bool {
     var errstr: [512]u8 = undefined;
 
     // Create simple consumer configuration
@@ -16,6 +16,14 @@ fn verifyMessageWritten(allocator: std.mem.Allocator, brokers: []const u8, topic
     _ = c.rd_kafka_conf_set(conf, "bootstrap.servers", brokers_cstr.ptr, &errstr, errstr.len);
     _ = c.rd_kafka_conf_set(conf, "group.id", "test-verify-group", &errstr, errstr.len);
     _ = c.rd_kafka_conf_set(conf, "auto.offset.reset", "earliest", &errstr, errstr.len);
+
+    // Match the broker's transport so the consumer can read back over TLS too.
+    if (ca) |ca_path| {
+        const ca_cstr = try allocator.dupeZ(u8, ca_path);
+        defer allocator.free(ca_cstr);
+        _ = c.rd_kafka_conf_set(conf, "security.protocol", "ssl", &errstr, errstr.len);
+        _ = c.rd_kafka_conf_set(conf, "ssl.ca.location", ca_cstr.ptr, &errstr, errstr.len);
+    }
 
     const consumer = c.rd_kafka_new(c.RD_KAFKA_CONSUMER, conf, &errstr, errstr.len);
     if (consumer == null) {
@@ -106,7 +114,7 @@ test "KafkaProducer can send message to topic" {
     try producer.flush(5000);
 
     // Verify the message was actually written to Kafka
-    const message_written = verifyMessageWritten(allocator, "localhost:9092", test_topic, test_message) catch false;
+    const message_written = verifyMessageWritten(allocator, "localhost:9092", test_topic, test_message, null) catch false;
     if (message_written) {
         std.debug.print("Successfully sent and verified message in topic: {s}\n", .{test_topic});
     } else {
@@ -147,7 +155,7 @@ test "KafkaProducer can send messages to multiple topics" {
     const expected_message = try std.fmt.allocPrint(allocator, "{{\"operation\":\"INSERT\",\"table\":\"{s}\",\"id\":1}}", .{first_topic});
     defer allocator.free(expected_message);
 
-    const message_written = verifyMessageWritten(allocator, "localhost:9092", first_topic, expected_message) catch false;
+    const message_written = verifyMessageWritten(allocator, "localhost:9092", first_topic, expected_message, null) catch false;
     if (message_written) {
         std.debug.print("Successfully sent and verified messages to {} topics\n", .{topics.len});
     } else {
@@ -210,4 +218,65 @@ test "KafkaProducer memory management" {
     }
 
     std.debug.print("Memory management test completed successfully\n", .{});
+}
+
+// Broker and CA for the TLS listener. Default to the local compose setup; CI overrides
+// them to point at secret-provided cert files. See dev/kafka-tls/gen-certs.sh.
+fn tlsBrokers() []const u8 {
+    return if (std.c.getenv("KAFKA_TLS_BROKERS")) |v| std.mem.span(v) else "localhost:9093";
+}
+
+fn tlsCaPath() []const u8 {
+    return if (std.c.getenv("KAFKA_TLS_CA")) |v| std.mem.span(v) else "dev/kafka-tls/certs/ca.crt";
+}
+
+test "KafkaProducer connects over TLS and verifies the broker with a CA" {
+    var gpa = std.heap.DebugAllocator(.{}){};
+    defer {
+        if (gpa.deinit() == .leak) {
+            std.debug.panic("Memory leak in test!", .{});
+        }
+    }
+    const allocator = gpa.allocator();
+
+    const brokers = tlsBrokers();
+    const ca = tlsCaPath();
+
+    var producer = try KafkaProducer.init(allocator, brokers, .{
+        .protocol = "ssl",
+        .ssl_ca_location = ca,
+    });
+    defer producer.deinit();
+
+    // Fails here unless the TLS handshake succeeds and the broker cert verifies against the CA.
+    try producer.testConnection();
+
+    const topic = "test.kafka.tls";
+    const message = "{\"operation\":\"INSERT\",\"table\":\"tls_table\",\"data\":\"tls_data\"}";
+    try producer.sendMessage(topic, "tls_key", message);
+    try producer.flush(5000);
+
+    const written = verifyMessageWritten(allocator, brokers, topic, message, ca) catch false;
+    if (written) {
+        std.debug.print("Verified TLS message in topic: {s}\n", .{topic});
+    } else {
+        std.debug.print("TLS message sent to topic: {s} (verification skipped - may need more time)\n", .{topic});
+    }
+}
+
+test "KafkaProducer over TLS rejects a broker it cannot verify" {
+    var gpa = std.heap.DebugAllocator(.{}){};
+    defer {
+        if (gpa.deinit() == .leak) {
+            std.debug.panic("Memory leak in test!", .{});
+        }
+    }
+    const allocator = gpa.allocator();
+
+    // No CA: the client falls back to the system trust store, which does not contain our
+    // self-signed CA, so verification must fail. Proves verification is actually enforced.
+    var producer = try KafkaProducer.init(allocator, tlsBrokers(), .{ .protocol = "ssl" });
+    defer producer.deinit();
+
+    try testing.expectError(error.ConnectionTestFailed, producer.testConnection());
 }
