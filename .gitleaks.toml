@@ -7,10 +7,15 @@ title = "outboxx"
 useDefault = true
 
 [allowlist]
-description = "Config placeholders: credentials are referenced by env-var name, never inlined"
+description = "Env-var name references are not secrets; dev/CI stacks ship throwaway credentials"
 regexTarget = "line"
 regexes = [
-  # Env-var names, not secrets (e.g. password_env = "POSTGRES_PASSWORD").
-  '''(?i)(password_env|sasl_password_env)''',
-  '''(?i)(POSTGRES_PASSWORD|MYSQL_PASSWORD|KAFKA_PASSWORD)''',
+  # An env-var NAME reference, not a secret: password_env = "POSTGRES_PASSWORD".
+  '''password_env\s*=\s*"[A-Z0-9_]+"''',
+]
+paths = [
+  # Dev/CI scaffolding uses disposable credentials, never real secrets.
+  '''^docker-compose\.yml$''',
+  '''^dev/''',
+  '''^tests/load/docker-compose\.yml$''',
 ]

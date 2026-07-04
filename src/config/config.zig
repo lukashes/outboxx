@@ -58,6 +58,15 @@ pub const SourceConfig = struct {
     mysql: ?MysqlSource = null,
 };
 
+// Read a password from the named environment variable; caller owns the result.
+fn readEnvPassword(allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map, env_name: []const u8) ![]u8 {
+    const value = environ_map.get(env_name) orelse {
+        std.log.warn("Environment variable '{s}' not found", .{env_name});
+        return error.EnvironmentVariableNotFound;
+    };
+    return allocator.dupe(u8, value);
+}
+
 // SASL authentication for the Kafka broker. Its presence enables SASL; all fields
 // are required once present. The password is read from the environment
 // (password_env), never stored in the config file, mirroring the source password.
@@ -68,7 +77,7 @@ pub const KafkaSasl = struct {
 
     /// Read the SASL password from its configured environment variable; caller owns the result.
     pub fn loadPassword(self: KafkaSasl, allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map) ![]u8 {
-        return Config.loadPassword(allocator, environ_map, self.password_env);
+        return readEnvPassword(allocator, environ_map, self.password_env);
     }
 };
 
@@ -151,17 +160,8 @@ pub const Config = struct {
         return parser.parseString(content);
     }
 
-    /// Read a password from the named environment variable; caller owns the result.
-    pub fn loadPassword(allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map, env_name: []const u8) ![]u8 {
-        const value = environ_map.get(env_name) orelse {
-            std.log.warn("Environment variable '{s}' not found", .{env_name});
-            return error.EnvironmentVariableNotFound;
-        };
-        return allocator.dupe(u8, value);
-    }
-
     /// Read the configured source's password from the environment; caller owns the result.
-    pub fn loadSourcePassword(self: Config, allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map) ![]u8 {
+    pub fn loadPassword(self: Config, allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map) ![]u8 {
         const env_name = if (self.source.postgres) |postgres|
             postgres.password_env
         else if (self.source.mysql) |mysql|
@@ -169,7 +169,7 @@ pub const Config = struct {
         else
             return error.PasswordNotConfigured;
 
-        return loadPassword(allocator, environ_map, env_name);
+        return readEnvPassword(allocator, environ_map, env_name);
     }
 
     /// Read the Kafka SASL password from the environment; caller owns the result.
@@ -178,7 +178,7 @@ pub const Config = struct {
         const kafka = self.sink.kafka orelse return null;
         const sasl = kafka.sasl orelse return null;
 
-        return try sasl.loadPassword(allocator, environ_map);
+        return sasl.loadPassword(allocator, environ_map);
     }
 
     /// Build the libpq connection string for the configured PostgreSQL source.

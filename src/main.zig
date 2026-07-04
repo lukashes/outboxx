@@ -56,7 +56,7 @@ fn run(init: std.process.Init) !void {
 
     try config.validate(allocator);
 
-    const pw = try config.loadSourcePassword(allocator, init.environ_map);
+    const pw = try config.loadPassword(allocator, init.environ_map);
     defer allocator.free(pw);
 
     const kafka_sasl_pw = try config.loadKafkaSaslPassword(allocator, init.environ_map);
