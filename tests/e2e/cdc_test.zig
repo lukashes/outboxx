@@ -59,6 +59,7 @@ test "E2E: INSERT operation - full pipeline verification" {
     // Kafka configuration
     const kafka_config = KafkaSink{
         .brokers = &[_][]const u8{"localhost:9092"},
+        .security_protocol = "plaintext",
     };
 
     // Create stream configuration
@@ -86,7 +87,7 @@ test "E2E: INSERT operation - full pipeline verification" {
     defer allocator.free(streams);
     streams[0] = stream_config;
 
-    var processor = Processor.init(allocator, source, streams, kafka_config);
+    var processor = Processor.init(allocator, source, streams, kafka_config, null);
     defer processor.deinit();
 
     try processor.initialize();
@@ -201,6 +202,7 @@ test "E2E: UPDATE operation - full pipeline verification" {
     // Kafka configuration
     const kafka_config = KafkaSink{
         .brokers = &[_][]const u8{"localhost:9092"},
+        .security_protocol = "plaintext",
     };
 
     // Create stream configuration
@@ -227,7 +229,7 @@ test "E2E: UPDATE operation - full pipeline verification" {
     defer allocator.free(streams);
     streams[0] = stream_config;
 
-    var processor = Processor.init(allocator, source, streams, kafka_config);
+    var processor = Processor.init(allocator, source, streams, kafka_config, null);
     defer processor.deinit();
 
     try processor.initialize();
@@ -335,6 +337,7 @@ test "E2E: DELETE operation - full pipeline verification" {
     // Kafka configuration
     const kafka_config = KafkaSink{
         .brokers = &[_][]const u8{"localhost:9092"},
+        .security_protocol = "plaintext",
     };
 
     // Create stream configuration
@@ -361,7 +364,7 @@ test "E2E: DELETE operation - full pipeline verification" {
     defer allocator.free(streams);
     streams[0] = stream_config;
 
-    var processor = Processor.init(allocator, source, streams, kafka_config);
+    var processor = Processor.init(allocator, source, streams, kafka_config, null);
     defer processor.deinit();
 
     try processor.initialize();

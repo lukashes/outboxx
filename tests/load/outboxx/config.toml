@@ -18,6 +18,8 @@ type = "kafka"
 
 [sink.kafka]
 brokers = ["kafka:9092"]
+# Security is required. The benchmark broker is plaintext, so opt in explicitly.
+security_protocol = "plaintext"
 
 [[streams]]
 name = "benchmark-records"

@@ -97,6 +97,7 @@ pub const Processor = struct {
     source: PostgresSource,
     kafka_producer: ?KafkaProducer,
     kafka_config: KafkaConfig,
+    kafka_sasl_password: ?[]const u8,
     streams: []const Stream,
     serializer: JsonSerializer,
 
@@ -105,12 +106,13 @@ pub const Processor = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, source: PostgresSource, streams: []const Stream, kafka_config: KafkaConfig) Self {
+    pub fn init(allocator: std.mem.Allocator, source: PostgresSource, streams: []const Stream, kafka_config: KafkaConfig, kafka_sasl_password: ?[]const u8) Self {
         return Self{
             .allocator = allocator,
             .source = source,
             .kafka_producer = null,
             .kafka_config = kafka_config,
+            .kafka_sasl_password = kafka_sasl_password,
             .streams = streams,
             .serializer = JsonSerializer.init(),
             .events_processed = 0,
@@ -129,7 +131,18 @@ pub const Processor = struct {
         const brokers_str = try std.mem.join(self.allocator, ",", self.kafka_config.brokers);
         defer self.allocator.free(brokers_str);
 
-        self.kafka_producer = KafkaProducer.init(self.allocator, brokers_str) catch |err| {
+        // Only forward SASL credentials for protocols that negotiate SASL, so
+        // leftover sasl_* fields under a plaintext/ssl protocol are ignored.
+        const kafka = self.kafka_config;
+        const security: kafka_producer.Security = .{
+            .protocol = kafka.security_protocol,
+            .sasl_mechanism = if (kafka.usesSasl()) kafka.sasl_mechanism else null,
+            .sasl_username = if (kafka.usesSasl()) kafka.sasl_username else null,
+            .sasl_password = if (kafka.usesSasl()) self.kafka_sasl_password else null,
+            .ssl_ca_location = kafka.ssl_ca_location,
+        };
+
+        self.kafka_producer = KafkaProducer.init(self.allocator, brokers_str, security) catch |err| {
             std.log.warn("Failed to initialize Kafka producer: {}", .{err});
             return ProcessorError.ConnectionFailed;
         };

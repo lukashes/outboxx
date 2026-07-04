@@ -59,6 +59,9 @@ fn run(init: std.process.Init) !void {
     const pw = try config.loadPassword(allocator, init.environ_map);
     defer allocator.free(pw);
 
+    const kafka_sasl_pw = try config.loadKafkaSaslPassword(allocator, init.environ_map);
+    defer if (kafka_sasl_pw) |p| allocator.free(p);
+
     printConfigInfo(config);
 
     try validatePostgres(allocator, config, pw);
@@ -80,7 +83,7 @@ fn run(init: std.process.Init) !void {
     printStatus("Connecting to PostgreSQL streaming replication...\n", .{});
     try source.connect(conn_str, "0/0");
 
-    var processor = Processor.init(allocator, source, config.streams, config.sink.kafka.?);
+    var processor = Processor.init(allocator, source, config.streams, config.sink.kafka.?, kafka_sasl_pw);
     defer processor.deinit();
 
     try processor.initialize();

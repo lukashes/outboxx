@@ -75,7 +75,7 @@ test "KafkaProducer can initialize and connect to Kafka" {
     }
     const allocator = gpa.allocator();
 
-    var producer = try KafkaProducer.init(allocator, "localhost:9092");
+    var producer = try KafkaProducer.init(allocator, "localhost:9092", null);
     defer producer.deinit();
 
     // If we get here, producer was created successfully
@@ -92,7 +92,7 @@ test "KafkaProducer can send message to topic" {
     }
     const allocator = gpa.allocator();
 
-    var producer = try KafkaProducer.init(allocator, "localhost:9092");
+    var producer = try KafkaProducer.init(allocator, "localhost:9092", null);
     defer producer.deinit();
 
     const test_topic = "test.kafka.integration";
@@ -124,7 +124,7 @@ test "KafkaProducer can send messages to multiple topics" {
     }
     const allocator = gpa.allocator();
 
-    var producer = try KafkaProducer.init(allocator, "localhost:9092");
+    var producer = try KafkaProducer.init(allocator, "localhost:9092", null);
     defer producer.deinit();
 
     const topics = [_][]const u8{ "public.users", "public.orders", "public.products" };
@@ -166,7 +166,7 @@ test "KafkaProducer handles invalid broker gracefully" {
     const allocator = gpa.allocator();
 
     // Try to connect to invalid broker
-    const result = KafkaProducer.init(allocator, "invalid-broker:9092");
+    const result = KafkaProducer.init(allocator, "invalid-broker:9092", null);
 
     // Should fail gracefully
     if (result) |producer| {
@@ -194,7 +194,7 @@ test "KafkaProducer memory management" {
     // Create and destroy multiple producers to test memory management
     var i: u32 = 0;
     while (i < 3) : (i += 1) {
-        var producer = try KafkaProducer.init(allocator, "localhost:9092");
+        var producer = try KafkaProducer.init(allocator, "localhost:9092", null);
         defer producer.deinit();
 
         // Send a test message

@@ -55,6 +55,15 @@ brokers = ["localhost:9092"]         # Kafka broker addresses
 topic_prefix = "cdc"                 # DESIGN: Prefix for auto-generated topic names (not yet used)
 acks = "all"                         # DESIGN: Kafka producer acknowledgment setting (not yet implemented)
 
+# Broker security, passed through to librdkafka. security_protocol is required;
+# use "plaintext" only for local/dev. SASL protocols need the sasl_* fields
+# (required for managed brokers: MSK, Confluent Cloud, any SASL/TLS cluster).
+security_protocol = "sasl_ssl"       # plaintext | ssl | sasl_plaintext | sasl_ssl
+sasl_mechanism = "SCRAM-SHA-512"     # PLAIN | SCRAM-SHA-256 | SCRAM-SHA-512 (SASL only)
+sasl_username = "app_user"           # SASL only
+sasl_password_env = "KAFKA_PASSWORD" # Env var holding the SASL password (never stored in the config)
+ssl_ca_location = "/etc/ssl/certs/ca.pem"  # CA bundle to verify the broker (ssl/sasl_ssl)
+
 # DESIGN: Webhook sink configuration (not yet implemented)
 [sink.webhook]
 url = "https://api.example.com/webhooks/cdc"    # DESIGN: Webhook endpoint URL
