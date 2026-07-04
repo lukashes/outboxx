@@ -65,6 +65,11 @@ pub const KafkaSasl = struct {
     mechanism: []const u8, // PLAIN | SCRAM-SHA-256 | SCRAM-SHA-512
     username: []const u8,
     password_env: []const u8,
+
+    /// Read the SASL password from its configured environment variable; caller owns the result.
+    pub fn loadPassword(self: KafkaSasl, allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map) ![]u8 {
+        return Config.loadPassword(allocator, environ_map, self.password_env);
+    }
 };
 
 pub const KafkaSink = struct {
@@ -173,7 +178,7 @@ pub const Config = struct {
         const kafka = self.sink.kafka orelse return null;
         const sasl = kafka.sasl orelse return null;
 
-        return try loadPassword(allocator, environ_map, sasl.password_env);
+        return try sasl.loadPassword(allocator, environ_map);
     }
 
     /// Build the libpq connection string for the configured PostgreSQL source.
