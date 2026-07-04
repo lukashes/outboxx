@@ -1,0 +1,16 @@
+# Gitleaks configuration for outboxx.
+# Starts from the bundled ruleset and only carves out known placeholders so real
+# secrets still fail the build. See https://github.com/gitleaks/gitleaks.
+title = "outboxx"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Config placeholders: credentials are referenced by env-var name, never inlined"
+regexTarget = "line"
+regexes = [
+  # Env-var names, not secrets (e.g. password_env = "POSTGRES_PASSWORD").
+  '''(?i)(password_env|sasl_password_env)''',
+  '''(?i)(POSTGRES_PASSWORD|MYSQL_PASSWORD|KAFKA_PASSWORD)''',
+]
