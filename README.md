@@ -88,9 +88,8 @@ type = "kafka"
 
 [sink.kafka]
 brokers = ["localhost:9092"]
-# Security is required; use "plaintext" only for local/dev.
-# Managed brokers (MSK, Confluent Cloud) also take sasl_mechanism/sasl_username/sasl_password_env/ssl_ca_location.
-security_protocol = "plaintext"
+tls = false  # encryption is on by default; false for local plaintext
+# For managed brokers add a [sink.kafka.sasl] section (mechanism/username/password_env).
 
 # Multiple streams for different tables
 [[streams]]

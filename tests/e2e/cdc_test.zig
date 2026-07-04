@@ -59,7 +59,7 @@ test "E2E: INSERT operation - full pipeline verification" {
     // Kafka configuration
     const kafka_config = KafkaSink{
         .brokers = &[_][]const u8{"localhost:9092"},
-        .security_protocol = "plaintext",
+        .tls = false,
     };
 
     // Create stream configuration
@@ -202,7 +202,7 @@ test "E2E: UPDATE operation - full pipeline verification" {
     // Kafka configuration
     const kafka_config = KafkaSink{
         .brokers = &[_][]const u8{"localhost:9092"},
-        .security_protocol = "plaintext",
+        .tls = false,
     };
 
     // Create stream configuration
@@ -337,7 +337,7 @@ test "E2E: DELETE operation - full pipeline verification" {
     // Kafka configuration
     const kafka_config = KafkaSink{
         .brokers = &[_][]const u8{"localhost:9092"},
-        .security_protocol = "plaintext",
+        .tls = false,
     };
 
     // Create stream configuration

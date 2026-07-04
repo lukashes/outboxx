@@ -131,15 +131,15 @@ pub const Processor = struct {
         const brokers_str = try std.mem.join(self.allocator, ",", self.kafka_config.brokers);
         defer self.allocator.free(brokers_str);
 
-        // Only forward SASL credentials for protocols that negotiate SASL, so
-        // leftover sasl_* fields under a plaintext/ssl protocol are ignored.
+        // Derive the librdkafka protocol from the tls/sasl axes; SASL creds and the
+        // CA are forwarded only when their axis is active.
         const kafka = self.kafka_config;
         const security: kafka_producer.Security = .{
-            .protocol = kafka.security_protocol,
-            .sasl_mechanism = if (kafka.usesSasl()) kafka.sasl_mechanism else null,
-            .sasl_username = if (kafka.usesSasl()) kafka.sasl_username else null,
-            .sasl_password = if (kafka.usesSasl()) self.kafka_sasl_password else null,
-            .ssl_ca_location = kafka.ssl_ca_location,
+            .protocol = kafka.securityProtocol(),
+            .sasl_mechanism = if (kafka.sasl) |s| s.mechanism else null,
+            .sasl_username = if (kafka.sasl) |s| s.username else null,
+            .sasl_password = self.kafka_sasl_password,
+            .ssl_ca_location = if (kafka.tls) kafka.tls_ca_location else null,
         };
 
         self.kafka_producer = KafkaProducer.init(self.allocator, brokers_str, security) catch |err| {

@@ -22,7 +22,6 @@ pub const SupportedValues = struct {
     pub const SINK_TYPES = [_][]const u8{ "kafka", "webhook" };
     pub const OPERATIONS = [_][]const u8{ "insert", "update", "delete" };
     pub const FORMATS = [_][]const u8{"json"};
-    pub const KAFKA_SECURITY_PROTOCOLS = [_][]const u8{ "plaintext", "ssl", "sasl_plaintext", "sasl_ssl" };
     // Only username/password mechanisms; GSSAPI/OAUTHBEARER need auth plumbing we don't expose yet.
     pub const KAFKA_SASL_MECHANISMS = [_][]const u8{ "PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512" };
 };
@@ -59,22 +58,28 @@ pub const SourceConfig = struct {
     mysql: ?MysqlSource = null,
 };
 
-// Broker security is passed through to librdkafka. security_protocol is required
-// so plaintext is never a silent default. The SASL password is read from the
-// environment (sasl_password_env), never stored in the config file, mirroring
-// the source password handling.
+// SASL authentication for the Kafka broker. Its presence enables SASL; all fields
+// are required once present. The password is read from the environment
+// (password_env), never stored in the config file, mirroring the source password.
+pub const KafkaSasl = struct {
+    mechanism: []const u8, // PLAIN | SCRAM-SHA-256 | SCRAM-SHA-512
+    username: []const u8,
+    password_env: []const u8,
+};
+
 pub const KafkaSink = struct {
     brokers: []const []const u8,
-    security_protocol: []const u8, // plaintext | ssl | sasl_plaintext | sasl_ssl
-    sasl_mechanism: ?[]const u8 = null, // PLAIN | SCRAM-SHA-256 | SCRAM-SHA-512
-    sasl_username: ?[]const u8 = null,
-    sasl_password_env: ?[]const u8 = null,
-    ssl_ca_location: ?[]const u8 = null,
+    // Encryption on the wire; on by default, set false only for local/dev.
+    tls: bool = true,
+    tls_ca_location: ?[]const u8 = null, // CA bundle to verify the broker
+    sasl: ?KafkaSasl = null,
 
-    /// Whether the selected protocol negotiates SASL (and thus needs credentials).
-    pub fn usesSasl(self: KafkaSink) bool {
-        return std.mem.eql(u8, self.security_protocol, "sasl_plaintext") or
-            std.mem.eql(u8, self.security_protocol, "sasl_ssl");
+    /// librdkafka security.protocol derived from the tls/sasl axes.
+    pub fn securityProtocol(self: KafkaSink) []const u8 {
+        if (self.sasl != null) {
+            return if (self.tls) "sasl_ssl" else "sasl_plaintext";
+        }
+        return if (self.tls) "ssl" else "plaintext";
     }
 };
 
@@ -141,8 +146,8 @@ pub const Config = struct {
         return parser.parseString(content);
     }
 
-    // Look up an environment variable and dupe its value; caller owns the result.
-    fn readEnvVar(allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map, env_name: []const u8) ![]u8 {
+    /// Read a password from the named environment variable; caller owns the result.
+    pub fn loadPassword(allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map, env_name: []const u8) ![]u8 {
         const value = environ_map.get(env_name) orelse {
             std.log.warn("Environment variable '{s}' not found", .{env_name});
             return error.EnvironmentVariableNotFound;
@@ -151,7 +156,7 @@ pub const Config = struct {
     }
 
     /// Read the configured source's password from the environment; caller owns the result.
-    pub fn loadPassword(self: Config, allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map) ![]u8 {
+    pub fn loadSourcePassword(self: Config, allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map) ![]u8 {
         const env_name = if (self.source.postgres) |postgres|
             postgres.password_env
         else if (self.source.mysql) |mysql|
@@ -159,17 +164,16 @@ pub const Config = struct {
         else
             return error.PasswordNotConfigured;
 
-        return readEnvVar(allocator, environ_map, env_name);
+        return loadPassword(allocator, environ_map, env_name);
     }
 
     /// Read the Kafka SASL password from the environment; caller owns the result.
     /// Returns null unless the sink actually negotiates SASL.
     pub fn loadKafkaSaslPassword(self: Config, allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map) !?[]u8 {
         const kafka = self.sink.kafka orelse return null;
-        if (!kafka.usesSasl()) return null;
-        const env_name = kafka.sasl_password_env orelse return null;
+        const sasl = kafka.sasl orelse return null;
 
-        return try readEnvVar(allocator, environ_map, env_name);
+        return try loadPassword(allocator, environ_map, sasl.password_env);
     }
 
     /// Build the libpq connection string for the configured PostgreSQL source.
@@ -320,34 +324,11 @@ pub const Config = struct {
         }
     }
 
-    /// Validate Kafka broker security settings
-    fn validateKafkaSecurity(allocator: std.mem.Allocator, kafka: KafkaSink) !void {
-        try validateEnum(allocator, kafka.security_protocol, &SupportedValues.KAFKA_SECURITY_PROTOCOLS, "kafka.security_protocol");
-
-        if (kafka.sasl_mechanism) |mechanism| {
-            try validateEnum(allocator, mechanism, &SupportedValues.KAFKA_SASL_MECHANISMS, "kafka.sasl_mechanism");
-        }
-        if (kafka.sasl_username) |username| {
-            try validateStringLength(username, ValidationLimits.MAX_HOSTNAME_LEN, "kafka.sasl_username");
-        }
-        if (kafka.sasl_password_env) |password_env| {
-            try validateStringLength(password_env, ValidationLimits.MAX_IDENTIFIER_LEN, "kafka.sasl_password_env");
-        }
-        if (kafka.ssl_ca_location) |ca_location| {
-            try validateStringLength(ca_location, ValidationLimits.MAX_URL_LEN, "kafka.ssl_ca_location");
-        }
-
-        // SASL protocols need a mechanism and credentials to be usable.
-        if (kafka.usesSasl()) {
-            if (kafka.sasl_mechanism == null) {
-                std.log.warn("kafka.security_protocol '{s}' requires sasl_mechanism", .{kafka.security_protocol});
-                return error.MissingSaslMechanism;
-            }
-            if (kafka.sasl_username == null or kafka.sasl_password_env == null) {
-                std.log.warn("kafka.security_protocol '{s}' requires sasl_username and sasl_password_env", .{kafka.security_protocol});
-                return error.MissingSaslCredentials;
-            }
-        }
+    /// Validate Kafka SASL settings
+    fn validateKafkaSasl(allocator: std.mem.Allocator, sasl: KafkaSasl) !void {
+        try validateEnum(allocator, sasl.mechanism, &SupportedValues.KAFKA_SASL_MECHANISMS, "kafka.sasl.mechanism");
+        try validateStringLength(sasl.username, ValidationLimits.MAX_HOSTNAME_LEN, "kafka.sasl.username");
+        try validateStringLength(sasl.password_env, ValidationLimits.MAX_IDENTIFIER_LEN, "kafka.sasl.password_env");
     }
 
     /// Validate individual stream configuration
@@ -440,12 +421,6 @@ pub const Config = struct {
             }
             const kafka = self.sink.kafka.?;
             if (kafka.brokers.len == 0) return error.MissingKafkaBrokers;
-            // security_protocol is mandatory so plaintext is never a silent default;
-            // local and CI setups must opt in explicitly with security_protocol = "plaintext".
-            if (kafka.security_protocol.len == 0) {
-                std.log.warn("kafka.security_protocol is required (use \"plaintext\" only for local/dev)", .{});
-                return error.MissingKafkaSecurity;
-            }
         } else if (std.mem.eql(u8, self.sink.type, "webhook")) {
             if (self.sink.webhook == null) {
                 return error.MissingWebhookConfig;
@@ -480,7 +455,12 @@ pub const Config = struct {
             for (kafka.brokers) |broker| {
                 try validateStringLength(broker, ValidationLimits.MAX_HOSTNAME_LEN, "kafka.broker");
             }
-            try validateKafkaSecurity(allocator, kafka);
+            if (kafka.tls_ca_location) |ca_location| {
+                try validateStringLength(ca_location, ValidationLimits.MAX_URL_LEN, "kafka.tls_ca_location");
+            }
+            if (kafka.sasl) |sasl| {
+                try validateKafkaSasl(allocator, sasl);
+            }
         } else if (std.mem.eql(u8, self.sink.type, "webhook")) {
             const webhook = self.sink.webhook.?;
             try validateStringLength(webhook.url, ValidationLimits.MAX_URL_LEN, "webhook.url");
