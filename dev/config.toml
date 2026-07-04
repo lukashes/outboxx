@@ -27,6 +27,7 @@ type = "kafka" # Reference to the "sink.kafka"
 
 [sink.kafka]
 brokers = ["localhost:9092"]
+tls = false  # local Kafka has no TLS; encryption is on by default otherwise
 
 # Multiple streams can be defined to capture changes from different resources
 [[streams]]

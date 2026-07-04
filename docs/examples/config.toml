@@ -52,8 +52,16 @@ type = "kafka"  # Available: "kafka", "webhook" (webhook implementation pending)
 
 [sink.kafka]
 brokers = ["localhost:9092"]         # Kafka broker addresses
+tls = true                           # encryption; on by default, set false for local plaintext
+tls_ca_location = "/etc/ssl/certs/ca.pem"  # optional: CA bundle to verify the broker
 topic_prefix = "cdc"                 # DESIGN: Prefix for auto-generated topic names (not yet used)
 acks = "all"                         # DESIGN: Kafka producer acknowledgment setting (not yet implemented)
+
+# SASL authentication (optional). Required for managed brokers (MSK, Confluent Cloud).
+[sink.kafka.sasl]
+mechanism = "SCRAM-SHA-512"          # PLAIN | SCRAM-SHA-256 | SCRAM-SHA-512
+username = "app_user"
+password_env = "KAFKA_PASSWORD"      # env var with the password
 
 # DESIGN: Webhook sink configuration (not yet implemented)
 [sink.webhook]

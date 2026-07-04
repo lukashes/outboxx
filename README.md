@@ -88,6 +88,8 @@ type = "kafka"
 
 [sink.kafka]
 brokers = ["localhost:9092"]
+tls = false  # encryption is on by default; false for local plaintext
+# For managed brokers add a [sink.kafka.sasl] section (mechanism/username/password_env).
 
 # Multiple streams for different tables
 [[streams]]

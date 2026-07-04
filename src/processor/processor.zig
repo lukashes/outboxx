@@ -3,23 +3,14 @@ const std = @import("std");
 const PostgresSource = @import("postgres_source").PostgresSource;
 const Batch = @import("postgres_source").Batch;
 
-const kafka_producer = @import("kafka_producer");
-const KafkaProducer = kafka_producer.KafkaProducer;
-const config_module = @import("config");
-const KafkaConfig = config_module.KafkaSink;
-const Stream = config_module.Stream;
+const KafkaProducer = @import("kafka_producer").KafkaProducer;
+const Stream = @import("config").Stream;
 
 const domain = @import("domain");
 const ChangeEvent = domain.ChangeEvent;
 const json_serializer = @import("json_serialization");
 const JsonSerializer = json_serializer.JsonSerializer;
 const constants = @import("constants");
-
-pub const ProcessorError = error{
-    ConnectionFailed,
-    InitializationFailed,
-    OutOfMemory,
-};
 
 pub fn matchStreams(allocator: std.mem.Allocator, streams: []const Stream, table_name: []const u8, operation: []const u8) !std.ArrayList(Stream) {
     var matched = std.ArrayList(Stream).empty;
@@ -95,8 +86,7 @@ fn flushCommitWorker(
 pub const Processor = struct {
     allocator: std.mem.Allocator,
     source: PostgresSource,
-    kafka_producer: ?KafkaProducer,
-    kafka_config: KafkaConfig,
+    producer: KafkaProducer,
     streams: []const Stream,
     serializer: JsonSerializer,
 
@@ -105,12 +95,11 @@ pub const Processor = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, source: PostgresSource, streams: []const Stream, kafka_config: KafkaConfig) Self {
+    pub fn init(allocator: std.mem.Allocator, source: PostgresSource, producer: KafkaProducer, streams: []const Stream) Self {
         return Self{
             .allocator = allocator,
             .source = source,
-            .kafka_producer = null,
-            .kafka_config = kafka_config,
+            .producer = producer,
             .streams = streams,
             .serializer = JsonSerializer.init(),
             .events_processed = 0,
@@ -119,36 +108,15 @@ pub const Processor = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        if (self.kafka_producer) |*producer| {
-            producer.deinit();
-        }
+        self.producer.deinit();
         self.source.deinit();
-    }
-
-    pub fn initialize(self: *Self) ProcessorError!void {
-        const brokers_str = try std.mem.join(self.allocator, ",", self.kafka_config.brokers);
-        defer self.allocator.free(brokers_str);
-
-        self.kafka_producer = KafkaProducer.init(self.allocator, brokers_str) catch |err| {
-            std.log.warn("Failed to initialize Kafka producer: {}", .{err});
-            return ProcessorError.ConnectionFailed;
-        };
-
-        // Test Kafka connection at startup (fail-fast if unavailable)
-        var producer = &self.kafka_producer.?;
-        producer.testConnection() catch |err| {
-            std.log.warn("Kafka connection test failed: {}", .{err});
-            return ProcessorError.ConnectionFailed;
-        };
-
-        std.log.info("Processor initialized successfully", .{});
     }
 
     pub fn processChangesToKafka(self: *Self, io: std.Io, batch_allocator: std.mem.Allocator, limit: u32) !void {
         var batch = try self.source.receiveBatch(io, batch_allocator, limit);
         defer batch.deinit();
 
-        var producer = &(self.kafka_producer orelse return ProcessorError.ConnectionFailed);
+        const producer = &self.producer;
 
         if (batch.changes.len == 0) {
             self.pending_lsn.store(batch.last_lsn, .release);
@@ -218,7 +186,7 @@ pub const Processor = struct {
     }
 
     pub fn startStreaming(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !void {
-        const producer = &(self.kafka_producer orelse return ProcessorError.ConnectionFailed);
+        const producer = &self.producer;
 
         // Background flush/commit loop. `concurrent` not `async`: it must run
         // alongside the receive loop, and `async` may defer the call until await.

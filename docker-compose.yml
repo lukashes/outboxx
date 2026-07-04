@@ -38,16 +38,21 @@ services:
     restart: unless-stopped
     ports:
       - "9092:9092"
+      - "9093:9093"
     environment:
       # KRaft mode configuration
       KAFKA_CFG_NODE_ID: 1
       KAFKA_CFG_PROCESS_ROLES: broker,controller
       KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@kafka:19093
-      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:19093
-      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:19093,SSL://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,SSL://localhost:9093
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,SSL:SSL
       KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_KRAFT_CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
       ALLOW_PLAINTEXT_LISTENER: "yes"
+      # Server-side TLS: PEM keystore/truststore mounted below, no client cert (mTLS off).
+      KAFKA_TLS_TYPE: PEM
+      KAFKA_TLS_CLIENT_AUTH: none
       # Auto-create topics for CDC
       KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_CFG_NUM_PARTITIONS: 3
@@ -61,6 +66,7 @@ services:
       retries: 5
     volumes:
       - kafka_data:/bitnami/kafka
+      - ./dev/kafka-tls/certs:/bitnami/kafka/config/certs:ro
 
 volumes:
   postgres_data:

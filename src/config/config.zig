@@ -22,6 +22,8 @@ pub const SupportedValues = struct {
     pub const SINK_TYPES = [_][]const u8{ "kafka", "webhook" };
     pub const OPERATIONS = [_][]const u8{ "insert", "update", "delete" };
     pub const FORMATS = [_][]const u8{"json"};
+    // Only username/password mechanisms; GSSAPI/OAUTHBEARER need auth plumbing we don't expose yet.
+    pub const KAFKA_SASL_MECHANISMS = [_][]const u8{ "PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512" };
 };
 
 // Configuration structures matching TOML format
@@ -56,8 +58,43 @@ pub const SourceConfig = struct {
     mysql: ?MysqlSource = null,
 };
 
+// Read a password from the named environment variable; caller owns the result.
+fn readEnvPassword(allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map, env_name: []const u8) ![]u8 {
+    const value = environ_map.get(env_name) orelse {
+        std.log.warn("Environment variable '{s}' not found", .{env_name});
+        return error.EnvironmentVariableNotFound;
+    };
+    return allocator.dupe(u8, value);
+}
+
+// SASL authentication for the Kafka broker. Its presence enables SASL; all fields
+// are required once present. The password is read from the environment
+// (password_env), never stored in the config file, mirroring the source password.
+pub const KafkaSasl = struct {
+    mechanism: []const u8, // PLAIN | SCRAM-SHA-256 | SCRAM-SHA-512
+    username: []const u8,
+    password_env: []const u8,
+
+    /// Read the SASL password from its configured environment variable; caller owns the result.
+    pub fn loadPassword(self: KafkaSasl, allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map) ![]u8 {
+        return readEnvPassword(allocator, environ_map, self.password_env);
+    }
+};
+
 pub const KafkaSink = struct {
     brokers: []const []const u8,
+    // Encryption on the wire; on by default, set false only for local/dev.
+    tls: bool = true,
+    tls_ca_location: ?[]const u8 = null, // CA bundle to verify the broker
+    sasl: ?KafkaSasl = null,
+
+    /// librdkafka security.protocol derived from the tls/sasl axes.
+    pub fn securityProtocol(self: KafkaSink) []const u8 {
+        if (self.sasl != null) {
+            return if (self.tls) "sasl_ssl" else "sasl_plaintext";
+        }
+        return if (self.tls) "ssl" else "plaintext";
+    }
 };
 
 pub const WebhookSink = struct {
@@ -132,11 +169,16 @@ pub const Config = struct {
         else
             return error.PasswordNotConfigured;
 
-        const value = environ_map.get(env_name) orelse {
-            std.log.warn("Environment variable '{s}' not found", .{env_name});
-            return error.EnvironmentVariableNotFound;
-        };
-        return allocator.dupe(u8, value);
+        return readEnvPassword(allocator, environ_map, env_name);
+    }
+
+    /// Read the Kafka SASL password from the environment; caller owns the result.
+    /// Returns null unless the sink actually negotiates SASL.
+    pub fn loadKafkaSaslPassword(self: Config, allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map) !?[]u8 {
+        const kafka = self.sink.kafka orelse return null;
+        const sasl = kafka.sasl orelse return null;
+
+        return try sasl.loadPassword(allocator, environ_map);
     }
 
     /// Build the libpq connection string for the configured PostgreSQL source.
@@ -287,6 +329,13 @@ pub const Config = struct {
         }
     }
 
+    /// Validate Kafka SASL settings
+    fn validateKafkaSasl(allocator: std.mem.Allocator, sasl: KafkaSasl) !void {
+        try validateEnum(allocator, sasl.mechanism, &SupportedValues.KAFKA_SASL_MECHANISMS, "kafka.sasl.mechanism");
+        try validateStringLength(sasl.username, ValidationLimits.MAX_HOSTNAME_LEN, "kafka.sasl.username");
+        try validateStringLength(sasl.password_env, ValidationLimits.MAX_IDENTIFIER_LEN, "kafka.sasl.password_env");
+    }
+
     /// Validate individual stream configuration
     fn validateStream(allocator: std.mem.Allocator, stream: Stream) !void {
         // Stream name validation (allow dashes)
@@ -410,6 +459,12 @@ pub const Config = struct {
             try validateArraySize(kafka.brokers.len, ValidationLimits.MAX_BROKERS_COUNT, "kafka.brokers");
             for (kafka.brokers) |broker| {
                 try validateStringLength(broker, ValidationLimits.MAX_HOSTNAME_LEN, "kafka.broker");
+            }
+            if (kafka.tls_ca_location) |ca_location| {
+                try validateStringLength(ca_location, ValidationLimits.MAX_URL_LEN, "kafka.tls_ca_location");
+            }
+            if (kafka.sasl) |sasl| {
+                try validateKafkaSasl(allocator, sasl);
             }
         } else if (std.mem.eql(u8, self.sink.type, "webhook")) {
             const webhook = self.sink.webhook.?;

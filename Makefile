@@ -142,6 +142,8 @@ check-deps:
 
 # Development environment management
 env-up:
+	@echo "Generating Kafka TLS test certs (if missing)..."
+	./dev/kafka-tls/gen-certs.sh
 	@echo "Starting PostgreSQL development environment..."
 	docker-compose up -d
 	@echo "Waiting for PostgreSQL to be ready..."

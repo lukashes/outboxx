@@ -18,6 +18,7 @@ type = "kafka"
 
 [sink.kafka]
 brokers = ["kafka:9092"]
+tls = false  # the benchmark broker is plaintext
 
 [[streams]]
 name = "benchmark-records"

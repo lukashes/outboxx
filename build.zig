@@ -300,6 +300,7 @@ pub fn build(b: *std.Build) void {
     e2e_streaming_test.root_module.addImport("cdc_processor", cdc_processor_module);
     e2e_streaming_test.root_module.addImport("config", config_module);
     e2e_streaming_test.root_module.addImport("postgres_source", postgres_source_module);
+    e2e_streaming_test.root_module.addImport("kafka_producer", kafka_producer_module);
     e2e_streaming_test.root_module.link_libc = true;
     e2e_streaming_test.root_module.linkSystemLibrary("pq", .{});
     e2e_streaming_test.root_module.linkSystemLibrary("rdkafka", .{});

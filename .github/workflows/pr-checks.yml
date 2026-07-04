@@ -29,28 +29,9 @@ jobs:
         ports:
           - 5432:5432
 
-      kafka:
-        image: bitnamilegacy/kafka:latest
-        env:
-          KAFKA_CFG_NODE_ID: 1
-          KAFKA_CFG_PROCESS_ROLES: broker,controller
-          KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@localhost:19093
-          KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:19093
-          KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
-          KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
-          KAFKA_KRAFT_CLUSTER_ID: test-cluster-id
-          ALLOW_PLAINTEXT_LISTENER: "yes"
-          # Auto-create topics for CDC (sync with docker-compose.yml)
-          KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
-          KAFKA_CFG_NUM_PARTITIONS: 3
-          KAFKA_CFG_DEFAULT_REPLICATION_FACTOR: 1
-        options: >-
-          --health-cmd "kafka-topics.sh --bootstrap-server localhost:9092 --list"
-          --health-interval 30s
-          --health-timeout 10s
-          --health-retries 5
-        ports:
-          - 9092:9092
+    # Kafka is NOT a service container: service containers start before checkout, so
+    # the TLS broker cannot be handed its cert files. It is started with `docker run`
+    # in a step below, after the certs are materialized from secrets.
 
     steps:
       - name: Checkout code
@@ -71,10 +52,42 @@ jobs:
         run: |
           PGPASSWORD=password psql -h localhost -p 5432 -U postgres -d outboxx_test -f dev/postgres/postgres-init.sql
 
+      - name: Start Kafka (plaintext 9092 + TLS 9093)
+        env:
+          # Broker certs come from repo secrets, never committed (see dev/kafka-tls).
+          # Secrets are withheld from fork PRs, so the TLS test only runs on same-repo PRs.
+          KAFKA_TLS_KEYSTORE_PEM: ${{ secrets.KAFKA_TLS_KEYSTORE_PEM }}
+          KAFKA_TLS_KEYSTORE_KEY: ${{ secrets.KAFKA_TLS_KEYSTORE_KEY }}
+          KAFKA_TLS_TRUSTSTORE_PEM: ${{ secrets.KAFKA_TLS_TRUSTSTORE_PEM }}
+        run: |
+          mkdir -p dev/kafka-tls/certs
+          printf '%s' "$KAFKA_TLS_KEYSTORE_PEM"   > dev/kafka-tls/certs/kafka.keystore.pem
+          printf '%s' "$KAFKA_TLS_KEYSTORE_KEY"   > dev/kafka-tls/certs/kafka.keystore.key
+          printf '%s' "$KAFKA_TLS_TRUSTSTORE_PEM" > dev/kafka-tls/certs/kafka.truststore.pem
+          chmod 644 dev/kafka-tls/certs/*
+
+          docker run -d --name kafka --network host \
+            -v "$PWD/dev/kafka-tls/certs:/bitnami/kafka/config/certs:ro" \
+            -e KAFKA_CFG_NODE_ID=1 \
+            -e KAFKA_CFG_PROCESS_ROLES=broker,controller \
+            -e KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@localhost:19093 \
+            -e KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:19093,SSL://:9093 \
+            -e KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092,SSL://localhost:9093 \
+            -e KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,SSL:SSL \
+            -e KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER \
+            -e KAFKA_KRAFT_CLUSTER_ID=test-cluster-id \
+            -e ALLOW_PLAINTEXT_LISTENER=yes \
+            -e KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true \
+            -e KAFKA_CFG_NUM_PARTITIONS=3 \
+            -e KAFKA_CFG_DEFAULT_REPLICATION_FACTOR=1 \
+            -e KAFKA_TLS_TYPE=PEM \
+            -e KAFKA_TLS_CLIENT_AUTH=none \
+            bitnamilegacy/kafka:latest
+
       - name: Wait for Kafka
         run: |
-          echo "Waiting for Kafka to be ready..."
-          timeout 60s bash -c 'until nc -z localhost 9092; do sleep 1; done'
+          echo "Waiting for Kafka (plaintext 9092 + TLS 9093)..."
+          timeout 90s bash -c 'until nc -z localhost 9092 && nc -z localhost 9093; do sleep 2; done'
           echo "Kafka is ready!"
 
       - name: Run integration tests
@@ -86,6 +99,8 @@ jobs:
           POSTGRES_PASSWORD: password
           POSTGRES_DB: outboxx_test
           KAFKA_BROKERS: localhost:9092
+          KAFKA_TLS_BROKERS: localhost:9093
+          KAFKA_TLS_CA: dev/kafka-tls/certs/kafka.truststore.pem
 
       # E2E Tests - Full pipeline verification
       - name: Run E2E tests (PostgreSQL → CDC → Kafka)

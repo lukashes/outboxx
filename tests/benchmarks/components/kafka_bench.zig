@@ -102,7 +102,7 @@ test "benchmark KafkaProducer sendMessage" {
         .allocation_count = &alloc_count,
     };
 
-    var producer = try KafkaProducer.init(counting_alloc.allocator(), mock.bootstraps);
+    var producer = try KafkaProducer.init(counting_alloc.allocator(), mock.bootstraps, null);
     defer producer.deinit();
 
     var bench = zbench.Benchmark.init(counting_alloc.allocator(), .{});
@@ -136,7 +136,7 @@ test "benchmark KafkaProducer produce" {
         .allocation_count = &alloc_count,
     };
 
-    var producer = try KafkaProducer.init(counting_alloc.allocator(), mock.bootstraps);
+    var producer = try KafkaProducer.init(counting_alloc.allocator(), mock.bootstraps, null);
     defer producer.deinit();
 
     var bench = zbench.Benchmark.init(counting_alloc.allocator(), .{});

@@ -55,37 +55,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
         with:
-          fetch-depth: 0  # Full history for secret scanning
+          fetch-depth: 0  # Full history so gitleaks can scan the whole range
 
-      - name: Run secret detection
-        run: |
-          # Check for common secret patterns
-          echo "Scanning for potential secrets..."
-
-          # Database credentials (exclude test configs, format strings, default values, and env var names)
-          if grep -r -i "password.*=" src/ --include="*.zig" | grep -v "_test" | grep -v "// " | grep -v "password.*=.*\"password\"" | grep -v "\.password.*=.*\"password\"" | grep -v "password={s}" | grep -v "password_env" | grep -v "runtime_passwords" | grep -v "getPassword"; then
-            echo "FAIL: Found potential hardcoded passwords"
-            exit 1
-          fi
-
-          # API keys and tokens
-          if grep -r -E "(api_key|apikey|token|secret).*=" src/ --include="*.zig" | grep -v "_test" | grep -v "// "; then
-            echo "FAIL: Found potential API keys or tokens"
-            exit 1
-          fi
-
-          # Connection strings
-          if grep -r -E "postgres://|kafka://|mongodb://" src/ --include="*.zig" | grep -v "_test" | grep -v "// "; then
-            echo "FAIL: Found potential hardcoded connection strings"
-            exit 1
-          fi
-
-          # Private keys
-          if grep -r -E "PRIVATE KEY|BEGIN RSA|BEGIN DSA" src/ --include="*.zig"; then
-            echo "FAIL: Found potential private keys"
-            exit 1
-          fi
-
-          echo "PASS: No hardcoded secrets detected"
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 

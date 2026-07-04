@@ -1,0 +1,21 @@
+# Gitleaks configuration for outboxx.
+# Starts from the bundled ruleset and only carves out known placeholders so real
+# secrets still fail the build. See https://github.com/gitleaks/gitleaks.
+title = "outboxx"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Env-var name references are not secrets; dev/CI stacks ship throwaway credentials"
+regexTarget = "line"
+regexes = [
+  # An env-var NAME reference, not a secret: password_env = "POSTGRES_PASSWORD".
+  '''password_env\s*=\s*"[A-Z0-9_]+"''',
+]
+paths = [
+  # Dev/CI scaffolding uses disposable credentials, never real secrets.
+  '''^docker-compose\.yml$''',
+  '''^dev/''',
+  '''^tests/load/docker-compose\.yml$''',
+]

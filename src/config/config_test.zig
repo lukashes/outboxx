@@ -22,7 +22,10 @@ fn createTestDefault() Config {
         },
         .sink = .{
             .type = "kafka",
-            .kafka = .{ .brokers = &.{"localhost:9092"} },
+            .kafka = .{
+                .brokers = &.{"localhost:9092"},
+                .tls = false,
+            },
         },
         .streams = &.{
             .{
@@ -166,6 +169,83 @@ test "parse Kafka config section with multiple brokers" {
     try testing.expectEqualStrings("kafka1:9092", kafka.brokers[0]);
     try testing.expectEqualStrings("kafka2:9092", kafka.brokers[1]);
     try testing.expectEqualStrings("kafka3:9092", kafka.brokers[2]);
+}
+
+test "parse Kafka tls and sasl sections" {
+    const toml_content =
+        \\[metadata]
+        \\version = "v0"
+        \\
+        \\[source]
+        \\type = "postgres"
+        \\
+        \\[source.postgres]
+        \\host = "localhost"
+        \\port = 5432
+        \\database = "db"
+        \\user = "user"
+        \\password_env = "PWD"
+        \\slot_name = "slot"
+        \\publication_name = "pub"
+        \\
+        \\[sink]
+        \\type = "kafka"
+        \\
+        \\[sink.kafka]
+        \\brokers = ["kafka1:9092"]
+        \\tls = true
+        \\tls_ca_location = "/etc/ssl/certs/ca.pem"
+        \\
+        \\[sink.kafka.sasl]
+        \\mechanism = "SCRAM-SHA-512"
+        \\username = "app"
+        \\password_env = "KAFKA_PASSWORD"
+    ;
+
+    var parsed = try Config.loadFromTomlString(testing.allocator, toml_content);
+    defer parsed.deinit();
+    const cfg = parsed.value;
+
+    const kafka = cfg.sink.kafka.?;
+    try testing.expect(kafka.tls);
+    try testing.expectEqualStrings("/etc/ssl/certs/ca.pem", kafka.tls_ca_location.?);
+    try testing.expectEqualStrings("SCRAM-SHA-512", kafka.sasl.?.mechanism);
+    try testing.expectEqualStrings("app", kafka.sasl.?.username);
+    try testing.expectEqualStrings("KAFKA_PASSWORD", kafka.sasl.?.password_env);
+    try testing.expectEqualStrings("sasl_ssl", kafka.securityProtocol());
+}
+
+test "default tls is enabled" {
+    const toml_content =
+        \\[metadata]
+        \\version = "v0"
+        \\
+        \\[source]
+        \\type = "postgres"
+        \\
+        \\[source.postgres]
+        \\host = "localhost"
+        \\port = 5432
+        \\database = "db"
+        \\user = "user"
+        \\password_env = "PWD"
+        \\slot_name = "slot"
+        \\publication_name = "pub"
+        \\
+        \\[sink]
+        \\type = "kafka"
+        \\
+        \\[sink.kafka]
+        \\brokers = ["kafka1:9092"]
+    ;
+
+    var parsed = try Config.loadFromTomlString(testing.allocator, toml_content);
+    defer parsed.deinit();
+    const kafka = parsed.value.sink.kafka.?;
+
+    try testing.expect(kafka.tls);
+    try testing.expect(kafka.sasl == null);
+    try testing.expectEqualStrings("ssl", kafka.securityProtocol());
 }
 
 test "parse integer values" {
@@ -354,4 +434,47 @@ test "Config validation - empty streams array should fail" {
     var cfg = createTestDefault();
     cfg.streams = &.{};
     try testing.expectError(error.NoStreamsConfigured, cfg.validate(testing.allocator));
+}
+
+test "Config validation - plaintext Kafka passes" {
+    var cfg = createTestDefault();
+    cfg.sink.kafka.?.tls = false;
+    try cfg.validate(testing.allocator);
+}
+
+test "Config validation - TLS-only Kafka passes" {
+    var cfg = createTestDefault();
+    cfg.sink.kafka.?.tls = true;
+    cfg.sink.kafka.?.tls_ca_location = "/etc/ssl/certs/ca.pem";
+    try cfg.validate(testing.allocator);
+}
+
+test "Config validation - invalid SASL mechanism fails" {
+    var cfg = createTestDefault();
+    cfg.sink.kafka.?.sasl = .{ .mechanism = "GSSAPI", .username = "app", .password_env = "KAFKA_PASSWORD" };
+    try testing.expectError(error.InvalidEnumValue, cfg.validate(testing.allocator));
+}
+
+test "Config validation - full SASL over TLS passes" {
+    var cfg = createTestDefault();
+    cfg.sink.kafka.?.tls = true;
+    cfg.sink.kafka.?.tls_ca_location = "/etc/ssl/certs/ca.pem";
+    cfg.sink.kafka.?.sasl = .{ .mechanism = "SCRAM-SHA-512", .username = "app", .password_env = "KAFKA_PASSWORD" };
+    try cfg.validate(testing.allocator);
+}
+
+test "securityProtocol derives from tls and sasl" {
+    const testing_sasl: config.KafkaSasl = .{ .mechanism = "PLAIN", .username = "app", .password_env = "PW" };
+
+    var kafka: config.KafkaSink = .{ .brokers = &.{"b:9092"}, .tls = false };
+    try testing.expectEqualStrings("plaintext", kafka.securityProtocol());
+
+    kafka.tls = true;
+    try testing.expectEqualStrings("ssl", kafka.securityProtocol());
+
+    kafka.sasl = testing_sasl;
+    try testing.expectEqualStrings("sasl_ssl", kafka.securityProtocol());
+
+    kafka.tls = false;
+    try testing.expectEqualStrings("sasl_plaintext", kafka.securityProtocol());
 }

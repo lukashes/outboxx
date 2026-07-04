@@ -16,6 +16,16 @@ pub const Message = struct {
     payload: []const u8,
 };
 
+/// Broker security options mapped onto librdkafka config keys. The password is
+/// the resolved secret, not an environment variable name.
+pub const Security = struct {
+    protocol: []const u8,
+    sasl_mechanism: ?[]const u8 = null,
+    sasl_username: ?[]const u8 = null,
+    sasl_password: ?[]const u8 = null,
+    ssl_ca_location: ?[]const u8 = null,
+};
+
 pub const KafkaProducer = struct {
     producer: ?*c.rd_kafka_t,
     allocator: std.mem.Allocator,
@@ -49,7 +59,30 @@ pub const KafkaProducer = struct {
         }
     }
 
-    pub fn init(allocator: std.mem.Allocator, brokers: []const u8) !Self {
+    // Set a config key whose value is a runtime slice, duped to a C string for librdkafka.
+    fn setConfigSlice(allocator: std.mem.Allocator, conf: ?*c.rd_kafka_conf_t, key: [*:0]const u8, value: []const u8, errstr: *[512]u8) !void {
+        const value_cstr = try allocator.dupeZ(u8, value);
+        defer allocator.free(value_cstr);
+        try setConfig(conf, key, value_cstr.ptr, errstr);
+    }
+
+    fn applySecurity(allocator: std.mem.Allocator, conf: ?*c.rd_kafka_conf_t, security: Security, errstr: *[512]u8) !void {
+        try setConfigSlice(allocator, conf, "security.protocol", security.protocol, errstr);
+        if (security.sasl_mechanism) |mechanism| {
+            try setConfigSlice(allocator, conf, "sasl.mechanism", mechanism, errstr);
+        }
+        if (security.sasl_username) |username| {
+            try setConfigSlice(allocator, conf, "sasl.username", username, errstr);
+        }
+        if (security.sasl_password) |password| {
+            try setConfigSlice(allocator, conf, "sasl.password", password, errstr);
+        }
+        if (security.ssl_ca_location) |ca_location| {
+            try setConfigSlice(allocator, conf, "ssl.ca.location", ca_location, errstr);
+        }
+    }
+
+    pub fn init(allocator: std.mem.Allocator, brokers: []const u8, security: ?Security) !Self {
         var errstr: [512]u8 = undefined;
 
         // Create configuration
@@ -63,10 +96,12 @@ pub const KafkaProducer = struct {
         c.rd_kafka_conf_set_log_cb(conf, logCallback);
 
         // Set bootstrap servers
-        const brokers_cstr = try allocator.dupeZ(u8, brokers);
-        defer allocator.free(brokers_cstr);
+        try setConfigSlice(allocator, conf, "bootstrap.servers", brokers, &errstr);
 
-        try setConfig(conf, "bootstrap.servers", brokers_cstr.ptr, &errstr);
+        // Broker security (TLS/SASL); plaintext when unset
+        if (security) |sec| {
+            try applySecurity(allocator, conf, sec, &errstr);
+        }
 
         // Connection timeout settings (fail-fast on startup)
         try setConfig(conf, "socket.connection.setup.timeout.ms", "10000", &errstr);
