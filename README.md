@@ -8,33 +8,26 @@
 
 **PostgreSQL Change Data Capture in Zig**
 
-Lightweight tool that streams WAL changes to Kafka. Built in Zig for minimal resource consumption.
-
-**🚀 Development Status**: Core CDC pipeline implemented with streaming replication. Under active optimization, approaching alpha release.
+Lightweight and powerful tool that streams WAL changes to Kafka.
+Built in Zig for minimal resource consumption.
 
 ## What is Outboxx?
 
 Outboxx captures PostgreSQL database changes in real-time and streams them to Kafka topics. Inspired by Debezium but designed for simplicity and low resource usage.
 
 **Key Features:**
-- PostgreSQL streaming replication (pgoutput) ✅
-- Multi-table CDC streams ✅
-- Kafka producer integration ✅
-- TOML-based configuration ✅
-- Memory-safe Zig implementation ✅
+- Natively fast
+- PostgreSQL streaming replication (pgoutput)
+- Multi-table CDC streams
+- Kafka producer integration
+- TOML-based configuration
+- Memory-safe Zig implementation
 
-## Current vs Planned
+## Roadmap
 
-| Component | Status |
-|-----------|--------|
-| PostgreSQL Streaming Replication | ✅ Working |
-| Message Processing | ✅ Working |
-| Kafka Producer | ✅ Working |
-| TOML Configuration | ✅ Working |
-| Multi-stream Support | ✅ Working |
-| Schema Registry | 📋 Planned |
-| Table/Column Filtering | 📋 Planned |
-| Production Features | 📋 Planned |
+- Observability
+- Schema Registry
+- Table/Column Filtering
 
 ## Inspired by Debezium
 
@@ -54,7 +47,6 @@ For a measured run on the same WAL backlog (Apple M1, mixed workload), see the [
 **Choose Outboxx when:**
 - Memory is constrained (containers, edge computing, cost optimization)
 - Simple deployment without Kafka Connect infrastructure
-- Learning Zig or experimenting with lightweight CDC solutions
 - Native binary and minimal dependencies preferred
 
 **Stick with Debezium when:**
