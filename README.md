@@ -11,6 +11,8 @@
 Lightweight and powerful tool that streams WAL changes to Kafka.
 Built in Zig for minimal resource consumption.
 
+<br clear="left"/>
+
 ## What is Outboxx?
 
 Outboxx captures PostgreSQL database changes in real-time and streams them to Kafka topics. Inspired by Debezium but designed for simplicity and low resource usage.
