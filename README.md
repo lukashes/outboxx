@@ -75,11 +75,10 @@ version = "v0"
 type = "postgres"
 
 [source.postgres]
-host = "localhost"
-port = 5432
-database = "mydb"
-user = "postgres"
-password_env = "POSTGRES_PASSWORD"
+# libpq connection string (URL or DSN) is read from this env var, never from the file.
+# Configure TLS inside the string via sslmode/sslrootcert/sslcert/sslkey. Example:
+#   export POSTGRES_URL="postgres://user:password@host:5432/dbname?sslmode=require"
+connection_env = "POSTGRES_URL"
 slot_name = "outboxx_slot"
 publication_name = "outboxx_publication"
 
@@ -88,7 +87,8 @@ type = "kafka"
 
 [sink.kafka]
 brokers = ["localhost:9092"]
-tls = false  # encryption is on by default; false for local plaintext
+# encryption is on by default; false for local plaintext
+tls = false
 # For managed brokers add a [sink.kafka.sasl] section (mechanism/username/password_env).
 
 # Multiple streams for different tables
@@ -167,7 +167,7 @@ ALTER TABLE my_table REPLICA IDENTITY FULL;
 make build
 
 # Run with your configuration
-export POSTGRES_PASSWORD="your_password"
+export POSTGRES_URL="postgres://user:your_password@host:5432/dbname?sslmode=require"
 ./zig-out/bin/outboxx --config config.toml
 ```
 

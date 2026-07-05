@@ -22,8 +22,8 @@ else
 fi
 
 # Set environment variables
-export POSTGRES_PASSWORD="password"
-echo "🔐 PostgreSQL password set"
+export POSTGRES_URL="postgres://postgres:password@localhost:5432/outboxx_test?sslmode=disable"
+echo "🔐 PostgreSQL connection set"
 
 # Show configuration info
 echo ""

@@ -6,7 +6,7 @@
 # as the project develops. Not all features shown are fully implemented yet.
 #
 # Environment Variables Required:
-# export POSTGRES_PASSWORD="your_postgres_password"
+# export POSTGRES_URL="postgres://user:password@host:5432/dbname?sslmode=verify-full&sslrootcert=/etc/ssl/certs/ca.crt"
 # export MYSQL_PASSWORD="your_mysql_password"
 
 [metadata]
@@ -27,11 +27,13 @@ flows = ["direct", "transform"]
 type = "postgres"  # Available: "postgres", "mysql" (mysql implementation pending)
 
 [source.postgres]
-host = "localhost"
-port = 5432
-database = "outboxx_test"
-user = "postgres"
-password_env = "POSTGRES_PASSWORD"  # Security: Always use environment variables for passwords
+# Full libpq connection string (URL or DSN) is read from this environment variable, never
+# from the file, so the password stays off disk. TLS is configured inside the string via the
+# standard libpq parameters: sslmode (disable | allow | prefer | require | verify-ca |
+# verify-full), sslrootcert, sslcert, sslkey. Without an explicit sslmode libpq defaults to
+# prefer (opportunistic, unverified); use require or verify-full to enforce and pin the CA.
+#   export POSTGRES_URL="postgres://user:pass@host:5432/db?sslmode=verify-full&sslrootcert=/etc/ssl/certs/ca.crt"
+connection_env = "POSTGRES_URL"
 slot_name = "outboxx_slot"           # PostgreSQL logical replication slot name
 publication_name = "outboxx_publication"  # PostgreSQL publication for logical replication
 

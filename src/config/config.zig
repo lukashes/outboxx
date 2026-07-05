@@ -33,11 +33,11 @@ pub const Metadata = struct {
 };
 
 pub const PostgresSource = struct {
-    host: []const u8,
-    port: u16,
-    database: []const u8,
-    user: []const u8,
-    password_env: []const u8,
+    // Name of the environment variable holding the libpq connection string (URL or DSN),
+    // e.g. postgres://user:pass@host:5432/db?sslmode=verify-full&sslrootcert=/certs/ca.crt.
+    // Kept out of the config file so the password never lands on disk; TLS is configured
+    // through the string's sslmode/ssl* parameters.
+    connection_env: []const u8,
     slot_name: []const u8,
     publication_name: []const u8,
 };
@@ -58,8 +58,8 @@ pub const SourceConfig = struct {
     mysql: ?MysqlSource = null,
 };
 
-// Read a password from the named environment variable; caller owns the result.
-fn readEnvPassword(allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map, env_name: []const u8) ![]u8 {
+// Read the named environment variable; caller owns the result.
+fn readEnvVar(allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map, env_name: []const u8) ![]u8 {
     const value = environ_map.get(env_name) orelse {
         std.log.warn("Environment variable '{s}' not found", .{env_name});
         return error.EnvironmentVariableNotFound;
@@ -77,7 +77,7 @@ pub const KafkaSasl = struct {
 
     /// Read the SASL password from its configured environment variable; caller owns the result.
     pub fn loadPassword(self: KafkaSasl, allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map) ![]u8 {
-        return readEnvPassword(allocator, environ_map, self.password_env);
+        return readEnvVar(allocator, environ_map, self.password_env);
     }
 };
 
@@ -160,18 +160,6 @@ pub const Config = struct {
         return parser.parseString(content);
     }
 
-    /// Read the configured source's password from the environment; caller owns the result.
-    pub fn loadPassword(self: Config, allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map) ![]u8 {
-        const env_name = if (self.source.postgres) |postgres|
-            postgres.password_env
-        else if (self.source.mysql) |mysql|
-            mysql.password_env
-        else
-            return error.PasswordNotConfigured;
-
-        return readEnvPassword(allocator, environ_map, env_name);
-    }
-
     /// Read the Kafka SASL password from the environment; caller owns the result.
     /// Returns null unless the sink actually negotiates SASL.
     pub fn loadKafkaSaslPassword(self: Config, allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map) !?[]u8 {
@@ -181,15 +169,12 @@ pub const Config = struct {
         return try sasl.loadPassword(allocator, environ_map);
     }
 
-    /// Build the libpq connection string for the configured PostgreSQL source.
-    pub fn postgresConnectionString(self: Config, allocator: std.mem.Allocator, password: []const u8) ![]u8 {
+    /// Read the Postgres source's libpq connection string from its configured environment
+    /// variable; caller owns the result. The value is a full conninfo (URL or DSN) and may
+    /// carry the password, so callers must not log it verbatim.
+    pub fn loadPostgresConninfo(self: Config, allocator: std.mem.Allocator, environ_map: *std.process.Environ.Map) ![]u8 {
         const postgres = self.source.postgres orelse return error.PostgresNotConfigured;
-
-        return std.fmt.allocPrint(
-            allocator,
-            "host={s} port={d} dbname={s} user={s} password={s} replication=database gssencmode=disable",
-            .{ postgres.host, postgres.port, postgres.database, postgres.user, password },
-        );
+        return readEnvVar(allocator, environ_map, postgres.connection_env);
     }
 
     // Helper validation functions
@@ -405,9 +390,7 @@ pub const Config = struct {
                 return error.MissingPostgresConfig;
             }
             const postgres = self.source.postgres.?;
-            if (postgres.host.len == 0) return error.MissingPostgresHost;
-            if (postgres.database.len == 0) return error.MissingPostgresDatabase;
-            if (postgres.user.len == 0) return error.MissingPostgresUser;
+            if (postgres.connection_env.len == 0) return error.MissingPostgresConnectionEnv;
             if (postgres.slot_name.len == 0) return error.MissingPostgresSlotName;
         } else if (std.mem.eql(u8, self.source.type, "mysql")) {
             if (self.source.mysql == null) {
@@ -436,13 +419,9 @@ pub const Config = struct {
         // Enhanced source validation with string limits and format checks
         if (std.mem.eql(u8, self.source.type, "postgres")) {
             const postgres = self.source.postgres.?;
-            try validateHostname(postgres.host, "postgres.host");
-            try validatePort(postgres.port, "postgres.port");
-            try validatePostgresIdentifier(postgres.database, "postgres.database");
-            try validatePostgresIdentifier(postgres.user, "postgres.user");
+            try validateStringLength(postgres.connection_env, ValidationLimits.MAX_IDENTIFIER_LEN, "postgres.connection_env");
             try validatePostgresIdentifier(postgres.slot_name, "postgres.slot_name");
             try validatePostgresIdentifier(postgres.publication_name, "postgres.publication_name");
-            try validateStringLength(postgres.password_env, ValidationLimits.MAX_IDENTIFIER_LEN, "postgres.password_env");
         } else if (std.mem.eql(u8, self.source.type, "mysql")) {
             const mysql = self.source.mysql.?;
             try validateHostname(mysql.host, "mysql.host");

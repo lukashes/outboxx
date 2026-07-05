@@ -11,11 +11,7 @@ fn createTestDefault() Config {
         .source = .{
             .type = "postgres",
             .postgres = .{
-                .host = "localhost",
-                .port = 5432,
-                .database = "outboxx_test",
-                .user = "postgres",
-                .password_env = "POSTGRES_PASSWORD",
+                .connection_env = "POSTGRES_URL",
                 .slot_name = "outboxx_slot",
                 .publication_name = "outboxx_publication",
             },
@@ -47,11 +43,7 @@ const valid_config_toml =
     \\type = "postgres"
     \\
     \\[source.postgres]
-    \\host = "pg.example.com"
-    \\port = 5433
-    \\database = "production_db"
-    \\user = "app_user"
-    \\password_env = "PROD_PASSWORD"
+    \\connection_env = "PROD_POSTGRES_URL"
     \\slot_name = "prod_slot"
     \\publication_name = "prod_pub"
     \\
@@ -81,9 +73,8 @@ test "createTestDefault" {
 
     try testing.expect(cfg.source.postgres != null);
     const postgres = cfg.source.postgres.?;
-    try testing.expectEqualStrings("localhost", postgres.host);
-    try testing.expect(postgres.port == 5432);
-    try testing.expectEqualStrings("outboxx_test", postgres.database);
+    try testing.expectEqualStrings("POSTGRES_URL", postgres.connection_env);
+    try testing.expectEqualStrings("outboxx_slot", postgres.slot_name);
 
     try testing.expect(cfg.sink.kafka != null);
     try testing.expect(cfg.sink.kafka.?.brokers.len == 1);
@@ -110,9 +101,8 @@ test "loadFromTomlFile - real file" {
     try testing.expectEqualStrings("v0", cfg.metadata.version);
     try testing.expect(cfg.source.postgres != null);
     const postgres = cfg.source.postgres.?;
-    try testing.expectEqualStrings("pg.example.com", postgres.host);
-    try testing.expect(postgres.port == 5433);
-    try testing.expectEqualStrings("production_db", postgres.database);
+    try testing.expectEqualStrings("PROD_POSTGRES_URL", postgres.connection_env);
+    try testing.expectEqualStrings("prod_slot", postgres.slot_name);
 }
 
 test "loadFromTomlString - empty document fails" {
@@ -126,11 +116,7 @@ test "parse PostgreSQL config section" {
 
     try testing.expect(cfg.source.postgres != null);
     const postgres = cfg.source.postgres.?;
-    try testing.expectEqualStrings("pg.example.com", postgres.host);
-    try testing.expect(postgres.port == 5433);
-    try testing.expectEqualStrings("production_db", postgres.database);
-    try testing.expectEqualStrings("app_user", postgres.user);
-    try testing.expectEqualStrings("PROD_PASSWORD", postgres.password_env);
+    try testing.expectEqualStrings("PROD_POSTGRES_URL", postgres.connection_env);
     try testing.expectEqualStrings("prod_slot", postgres.slot_name);
     try testing.expectEqualStrings("prod_pub", postgres.publication_name);
 }
@@ -144,11 +130,7 @@ test "parse Kafka config section with multiple brokers" {
         \\type = "postgres"
         \\
         \\[source.postgres]
-        \\host = "localhost"
-        \\port = 5432
-        \\database = "db"
-        \\user = "user"
-        \\password_env = "PWD"
+        \\connection_env = "PG_URL"
         \\slot_name = "slot"
         \\publication_name = "pub"
         \\
@@ -180,11 +162,7 @@ test "parse Kafka tls and sasl sections" {
         \\type = "postgres"
         \\
         \\[source.postgres]
-        \\host = "localhost"
-        \\port = 5432
-        \\database = "db"
-        \\user = "user"
-        \\password_env = "PWD"
+        \\connection_env = "PG_URL"
         \\slot_name = "slot"
         \\publication_name = "pub"
         \\
@@ -224,11 +202,7 @@ test "default tls is enabled" {
         \\type = "postgres"
         \\
         \\[source.postgres]
-        \\host = "localhost"
-        \\port = 5432
-        \\database = "db"
-        \\user = "user"
-        \\password_env = "PWD"
+        \\connection_env = "PG_URL"
         \\slot_name = "slot"
         \\publication_name = "pub"
         \\
@@ -246,13 +220,6 @@ test "default tls is enabled" {
     try testing.expect(kafka.tls);
     try testing.expect(kafka.sasl == null);
     try testing.expectEqualStrings("ssl", kafka.securityProtocol());
-}
-
-test "parse integer values" {
-    var parsed = try Config.loadFromTomlString(testing.allocator, valid_config_toml);
-    defer parsed.deinit();
-
-    try testing.expect(parsed.value.source.postgres.?.port == 5433);
 }
 
 test "parse stream with inline comments and optional routing_key" {
@@ -281,11 +248,7 @@ test "parse multiple streams" {
         \\type = "postgres"
         \\
         \\[source.postgres]
-        \\host = "localhost"
-        \\port = 5432
-        \\database = "db"
-        \\user = "user"
-        \\password_env = "PWD"
+        \\connection_env = "PG_URL"
         \\slot_name = "slot"
         \\publication_name = "pub"
         \\
@@ -349,7 +312,7 @@ test "parse multiple streams" {
     try testing.expectEqualStrings("order_id", stream2.sink.routing_key.?);
 }
 
-test "parse invalid port type fails" {
+test "parse invalid boolean type fails" {
     const toml_content =
         \\[metadata]
         \\version = "v0"
@@ -358,11 +321,7 @@ test "parse invalid port type fails" {
         \\type = "postgres"
         \\
         \\[source.postgres]
-        \\host = "localhost"
-        \\port = "not_a_number"
-        \\database = "db"
-        \\user = "user"
-        \\password_env = "PWD"
+        \\connection_env = "PG_URL"
         \\slot_name = "slot"
         \\publication_name = "pub"
         \\
@@ -371,6 +330,7 @@ test "parse invalid port type fails" {
         \\
         \\[sink.kafka]
         \\brokers = ["kafka1:9092"]
+        \\tls = "not_a_bool"
     ;
 
     try testing.expectError(error.InvalidValueType, Config.loadFromTomlString(testing.allocator, toml_content));
@@ -416,18 +376,6 @@ test "Config validation - invalid sink type shows proper error format" {
     var cfg = createTestDefault();
     cfg.sink.type = "invalid_sink_type";
     try testing.expectError(error.InvalidEnumValue, cfg.validate(testing.allocator));
-}
-
-test "Config validation - port 0 should fail" {
-    var cfg = createTestDefault();
-    cfg.source.postgres.?.port = 0;
-    try testing.expectError(error.InvalidPort, cfg.validate(testing.allocator));
-}
-
-test "Config validation - missing required PostgreSQL fields" {
-    var cfg = createTestDefault();
-    cfg.source.postgres.?.host = "";
-    try testing.expectError(error.MissingPostgresHost, cfg.validate(testing.allocator));
 }
 
 test "Config validation - empty streams array should fail" {
@@ -477,4 +425,39 @@ test "securityProtocol derives from tls and sasl" {
 
     kafka.tls = false;
     try testing.expectEqualStrings("sasl_plaintext", kafka.securityProtocol());
+}
+
+test "parse postgres connection_env" {
+    const toml_content =
+        \\[metadata]
+        \\version = "v0"
+        \\
+        \\[source]
+        \\type = "postgres"
+        \\
+        \\[source.postgres]
+        \\connection_env = "POSTGRES_URL"
+        \\slot_name = "slot"
+        \\publication_name = "pub"
+        \\
+        \\[sink]
+        \\type = "kafka"
+        \\
+        \\[sink.kafka]
+        \\brokers = ["kafka1:9092"]
+    ;
+
+    var parsed = try Config.loadFromTomlString(testing.allocator, toml_content);
+    defer parsed.deinit();
+    const postgres = parsed.value.source.postgres.?;
+
+    try testing.expectEqualStrings("POSTGRES_URL", postgres.connection_env);
+    try testing.expectEqualStrings("slot", postgres.slot_name);
+    try testing.expectEqualStrings("pub", postgres.publication_name);
+}
+
+test "Config validation - empty postgres connection_env fails" {
+    var cfg = createTestDefault();
+    cfg.source.postgres.?.connection_env = "";
+    try testing.expectError(error.MissingPostgresConnectionEnv, cfg.validate(testing.allocator));
 }

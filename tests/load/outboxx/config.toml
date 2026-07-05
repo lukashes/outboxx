@@ -5,11 +5,7 @@ version = "v0"
 type = "postgres"
 
 [source.postgres]
-host = "postgres"
-port = 5432
-database = "bench"
-user = "postgres"
-password_env = "POSTGRES_PASSWORD"
+connection_env = "POSTGRES_URL"
 slot_name = "outboxx_benchmark_slot"
 publication_name = "outboxx_benchmark_publication"
 

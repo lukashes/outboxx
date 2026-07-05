@@ -297,9 +297,7 @@ CREATE PUBLICATION outboxx_pub FOR TABLE users, orders;
 
 ```toml
 [source.postgres]
-host = "localhost"
-port = 5432
-database = "outboxx_test"
+connection_env = "POSTGRES_URL"
 slot_name = "outboxx_slot"
 publication_name = "outboxx_pub"
 ```
