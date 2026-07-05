@@ -156,7 +156,7 @@ services:
       kafka:
         condition: service_healthy
     environment:
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_URL: postgres://postgres:postgres@postgres:5432/bench?sslmode=disable
     volumes:
       - ./outboxx/config.toml:/app/config.toml:ro
     command: ["--config", "/app/config.toml"]

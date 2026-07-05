@@ -73,9 +73,10 @@ build:
 	@echo "zig build"
 	@zig build
 
-# Run the application
+# Run the application against the dev config. POSTGRES_URL falls back to the local
+# dev database; override it to point elsewhere. Needs services up (make env-up).
 run:
-	zig build run
+	POSTGRES_URL="$${POSTGRES_URL:-postgres://postgres:password@localhost:5432/outboxx_test?sslmode=disable}" zig build run -- --config dev/config.toml
 
 # Run unit tests
 test-unit:

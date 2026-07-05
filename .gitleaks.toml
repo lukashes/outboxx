@@ -10,7 +10,7 @@ useDefault = true
 description = "Env-var name references are not secrets; dev/CI stacks ship throwaway credentials"
 regexTarget = "line"
 regexes = [
-  # An env-var NAME reference, not a secret: password_env = "POSTGRES_PASSWORD".
+  # An env-var NAME reference, not a secret: password_env = "KAFKA_PASSWORD".
   '''password_env\s*=\s*"[A-Z0-9_]+"''',
 ]
 paths = [

@@ -80,20 +80,18 @@ pub const ReplicationProtocol = struct {
     }
 
     pub fn connect(self: *Self, connection_string: []const u8) ReplicationError!void {
-        // Build connection string with replication=database parameter
-        const repl_conn_str = std.fmt.allocPrint(
-            self.allocator,
-            "{s} replication=database",
-            .{connection_string},
-        ) catch return ReplicationError.OutOfMemory;
-        defer self.allocator.free(repl_conn_str);
+        // connection_string is a user-supplied libpq conninfo (URL or DSN). Pass it as the
+        // dbname keyword with expand_dbname=1 so libpq parses it, and add replication=database
+        // as a separate parameter; appending it to the string would break the URL form.
+        const conninfo_z = self.allocator.dupeZ(u8, connection_string) catch return ReplicationError.OutOfMemory;
+        defer self.allocator.free(conninfo_z);
 
-        const conn_str_z = self.allocator.dupeZ(u8, repl_conn_str) catch return ReplicationError.OutOfMemory;
-        defer self.allocator.free(conn_str_z);
+        const keywords = [_][*c]const u8{ "dbname", "replication", null };
+        const values = [_][*c]const u8{ conninfo_z.ptr, "database", null };
 
         std.log.debug("Connecting to PostgreSQL with replication mode", .{});
 
-        self.connection = c.PQconnectdb(conn_str_z.ptr);
+        self.connection = c.PQconnectdbParams(&keywords, &values, 1);
 
         if (self.connection == null) {
             std.log.warn("Failed to allocate replication connection", .{});
@@ -107,6 +105,10 @@ pub const ReplicationProtocol = struct {
             c.PQfinish(self.connection);
             self.connection = null;
             return ReplicationError.ConnectionFailed;
+        }
+
+        if (c.PQsslInUse(self.connection) == 0) {
+            std.log.info("PostgreSQL connection is not encrypted; set sslmode=require or higher in the connection string to enforce TLS", .{});
         }
 
         std.log.debug("Replication connection established", .{});

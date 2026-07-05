@@ -58,15 +58,15 @@ fn run(init: std.process.Init) !void {
 
     try config.validate(allocator);
 
-    const pw = try config.loadPassword(allocator, init.environ_map);
-    defer allocator.free(pw);
+    const conninfo = try config.loadPostgresConninfo(allocator, init.environ_map);
+    defer allocator.free(conninfo);
 
     const kafka_sasl_pw = try config.loadKafkaSaslPassword(allocator, init.environ_map);
     defer if (kafka_sasl_pw) |p| allocator.free(p);
 
     printConfigInfo(config);
 
-    try validatePostgres(allocator, config, pw);
+    try validatePostgres(allocator, config, conninfo);
 
     const postgres = config.source.postgres.?;
 
@@ -76,14 +76,11 @@ fn run(init: std.process.Init) !void {
     printStatus("Starting processor for {} stream(s)...\n", .{config.streams.len});
     printStatus("Using PostgreSQL streaming replication (pgoutput protocol)\n", .{});
 
-    const conn_str = try config.postgresConnectionString(allocator, pw);
-    defer allocator.free(conn_str);
-
     var source = PostgresSource.init(allocator, postgres.slot_name, postgres.publication_name);
     // NOTE: source will be deinit'd by processor.deinit()
 
     printStatus("Connecting to PostgreSQL streaming replication...\n", .{});
-    try source.connect(conn_str, "0/0");
+    try source.connect(conninfo, "0/0");
 
     const producer = try initKafkaProducer(allocator, config.sink.kafka.?, kafka_sasl_pw);
     // NOTE: producer will be deinit'd by processor.deinit()
@@ -186,22 +183,18 @@ fn parseConfigPath(args: std.process.Args, allocator: std.mem.Allocator) !?[]con
 fn printConfigInfo(cfg: Config) void {
     const postgres = cfg.source.postgres.?;
     printStatus("Configuration loaded:\n", .{});
-    printStatus("  PostgreSQL: {s}:{}\n", .{ postgres.host, postgres.port });
-    printStatus("  Database: {s}\n", .{postgres.database});
-    printStatus("  User: {s}\n", .{postgres.user});
+    printStatus("  PostgreSQL connection from ${s}\n", .{postgres.connection_env});
     printStatus("  Slot: {s}\n", .{postgres.slot_name});
+    printStatus("  Publication: {s}\n", .{postgres.publication_name});
 }
 
-fn validatePostgres(allocator: std.mem.Allocator, cfg: Config, pw: []const u8) !void {
-    const conn_str = try cfg.postgresConnectionString(allocator, pw);
-    defer allocator.free(conn_str);
-
+fn validatePostgres(allocator: std.mem.Allocator, cfg: Config, conninfo: []const u8) !void {
     printStatus("\nValidating PostgreSQL connection and settings...\n", .{});
 
     var validator = PostgresValidator.init(allocator);
     defer validator.deinit();
 
-    try validator.connect(conn_str);
+    try validator.connect(conninfo);
     try validator.checkPostgresVersion();
     try validator.checkWalLevel();
 

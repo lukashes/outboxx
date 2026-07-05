@@ -4,7 +4,7 @@
 # Usage:
 # From the project root directory: ./dev/run-dev.sh or:
 # 1. Start development environment: make env-up
-# 2. Set password: export POSTGRES_PASSWORD="password"
+# 2. Set connection: export POSTGRES_URL="postgres://postgres:password@localhost:5432/outboxx_test?sslmode=disable"
 # 3. Run application: zig build run -- --config dev/config.toml
 
 [metadata]
@@ -14,11 +14,10 @@ version = "v0"
 type = "postgres" # Reference to the "source.postgres"
 
 [source.postgres]
-host = "localhost"
-port = 5432
-database = "outboxx_test"
-user = "postgres"
-password_env = "POSTGRES_PASSWORD"  # Set with: export POSTGRES_PASSWORD="password"
+# libpq connection string (URL or DSN) lives in this env var, kept out of the file so the
+# password never lands on disk. Local Postgres has no TLS, hence sslmode=disable in the URL;
+# use require or verify-full in production.
+connection_env = "POSTGRES_URL"
 slot_name = "outboxx_slot"
 publication_name = "outboxx_publication"
 
