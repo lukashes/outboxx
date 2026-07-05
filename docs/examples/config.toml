@@ -1,93 +1,73 @@
-# Outboxx Configuration Example
-# Extensible Change Data Capture streaming configuration
+# Outboxx configuration example.
 #
-# DESIGN DOCUMENT: This configuration file represents the current vision for Outboxx.
-# The format and options shown here are part of the architectural design and may evolve
-# as the project develops. Not all features shown are fully implemented yet.
+# Streams row changes from PostgreSQL to Kafka. Every option below is implemented.
+# Secrets stay out of this file: the full connection string (with the password)
+# is supplied through an environment variable.
 #
-# Environment Variables Required:
-# export POSTGRES_URL="postgres://user:password@host:5432/dbname?sslmode=verify-full&sslrootcert=/etc/ssl/certs/ca.crt"
-# export MYSQL_PASSWORD="your_mysql_password"
+#   export POSTGRES_URL="postgres://user:pass@host:5432/db?sslmode=require"
+#   export KAFKA_PASSWORD="..."   # only when using SASL (see below)
 
 [metadata]
 version = "v0"
 
-# Plugin registry - defines available source and sink types
-# NOTE: This section is DEPRECATED and not used by the application.
-# Supported types are now hardcoded: sources=["postgres","mysql"], sinks=["kafka","webhook"], formats=["json"]
-# This section is kept for documentation purposes only.
-[plugins]
-sources = ["postgres", "mysql"]
-sinks = ["kafka", "webhook"]
-flows = ["direct", "transform"]
-
-# Default source configuration (can be overridden per stream)
-# DESIGN: Currently supports PostgreSQL, MySQL support is planned
 [source]
-type = "postgres"  # Available: "postgres", "mysql" (mysql implementation pending)
+type = "postgres"
 
 [source.postgres]
-# Full libpq connection string (URL or DSN) is read from this environment variable, never
-# from the file, so the password stays off disk. TLS is configured inside the string via the
-# standard libpq parameters: sslmode (disable | allow | prefer | require | verify-ca |
-# verify-full), sslrootcert, sslcert, sslkey. Without an explicit sslmode libpq defaults to
-# prefer (opportunistic, unverified); use require or verify-full to enforce and pin the CA.
-#   export POSTGRES_URL="postgres://user:pass@host:5432/db?sslmode=verify-full&sslrootcert=/etc/ssl/certs/ca.crt"
+# Name of the env var holding a full libpq connection string (URL or DSN). Keeping
+# it out of the file means the password never lands on disk. TLS is configured
+# inside the string via the standard libpq parameters:
+#   sslmode = disable | allow | prefer | require | verify-ca | verify-full
+#   sslrootcert, sslcert, sslkey
+# Without an explicit sslmode libpq defaults to prefer (opportunistic, unverified);
+# use require or verify-full to enforce and pin the CA in production.
 connection_env = "POSTGRES_URL"
-slot_name = "outboxx_slot"           # PostgreSQL logical replication slot name
-publication_name = "outboxx_publication"  # PostgreSQL publication for logical replication
+slot_name = "outboxx_slot"
+publication_name = "outboxx_publication"
 
-# DESIGN: MySQL source configuration (not yet implemented)
-[source.mysql]
-host = "localhost"
-port = 3306
-database = "myapp"
-user = "root"
-password_env = "MYSQL_PASSWORD"  # Security: Environment variable for MySQL password
-server_id = 1                    # DESIGN: MySQL replication server ID
-binlog_format = "ROW"            # DESIGN: MySQL binary log format for CDC
-
-# Default sink configuration (can be overridden per stream)
-# DESIGN: Currently supports Kafka, webhook support is planned
 [sink]
-type = "kafka"  # Available: "kafka", "webhook" (webhook implementation pending)
+type = "kafka"
 
 [sink.kafka]
-brokers = ["localhost:9092"]         # Kafka broker addresses
-tls = true                           # encryption; on by default, set false for local plaintext
-tls_ca_location = "/etc/ssl/certs/ca.pem"  # optional: CA bundle to verify the broker
-topic_prefix = "cdc"                 # DESIGN: Prefix for auto-generated topic names (not yet used)
-acks = "all"                         # DESIGN: Kafka producer acknowledgment setting (not yet implemented)
+brokers = ["localhost:9092"]
+tls = true                                   # on by default; set false for local plaintext
+# tls_ca_location = "/etc/ssl/certs/ca.pem"  # optional: CA bundle to verify the broker
 
-# SASL authentication (optional). Required for managed brokers (MSK, Confluent Cloud).
-[sink.kafka.sasl]
-mechanism = "SCRAM-SHA-512"          # PLAIN | SCRAM-SHA-256 | SCRAM-SHA-512
-username = "app_user"
-password_env = "KAFKA_PASSWORD"      # env var with the password
+# Optional SASL authentication, required by managed brokers (MSK, Confluent Cloud).
+# The password is read from the named env var, never stored here.
+# [sink.kafka.sasl]
+# mechanism = "SCRAM-SHA-512"                # PLAIN | SCRAM-SHA-256 | SCRAM-SHA-512
+# username = "app_user"
+# password_env = "KAFKA_PASSWORD"
 
-# DESIGN: Webhook sink configuration (not yet implemented)
-[sink.webhook]
-url = "https://api.example.com/webhooks/cdc"    # DESIGN: Webhook endpoint URL
-method = "POST"                                  # DESIGN: HTTP method for webhook calls
-headers = { "Content-Type" = "application/json" }  # DESIGN: HTTP headers for webhook requests
-
-# Event Stream Definition - Multiple streams can be defined to capture changes from different resources
-# DESIGN: Streams are the core concept for defining what data to capture and where to send it
+# One [[streams]] block per table -> topic mapping.
 [[streams]]
-name = "users-stream"  # Unique identifier for this stream (used for logging and metrics)
+name = "users-stream"
 
 [streams.source]
-resource = "users"                           # Table/collection name in the source database
-operations = ["insert", "update", "delete"] # CDC operations to capture
-fields = ["id", "email", "name"]            # DESIGN: Field filtering (not yet implemented)
-condition = "active = true"                  # DESIGN: Row filtering conditions (not yet implemented)
+resource = "users"                           # table name (public schema)
+operations = ["insert", "update", "delete"]  # subset of insert | update | delete
 
 [streams.flow]
-format = "json"                   # Message format - currently only "json" is implemented
-include_schema = true             # DESIGN: Include table schema in messages (not yet implemented)
-include_metadata = true           # DESIGN: Include CDC metadata (LSN, timestamp, etc.) (not yet implemented)
+format = "json"                              # only json is supported
 
 [streams.sink]
-destination = "user_changes"      # Kafka topic name or webhook endpoint
-routing_key = "user_id"           # DESIGN: Field used for message partitioning (not yet implemented)
-delivery_mode = "at_least_once"   # DESIGN: Message delivery guarantees (not yet implemented)
+destination = "public.users"                 # Kafka topic
+routing_key = "id"                           # column used as the partition key (default: id)
+
+[[streams]]
+name = "orders-stream"
+
+[streams.source]
+resource = "orders"
+operations = ["insert", "update"]
+
+[streams.flow]
+format = "json"
+
+[streams.sink]
+destination = "public.orders"
+routing_key = "id"
+
+# Note: the schema also accepts source type "mysql" and sink type "webhook", but
+# those adapters are not wired up yet. See docs/design/ for the roadmap.

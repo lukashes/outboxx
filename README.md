@@ -8,33 +8,28 @@
 
 **PostgreSQL Change Data Capture in Zig**
 
-Lightweight tool that streams WAL changes to Kafka. Built in Zig for minimal resource consumption.
+Lightweight and powerful tool that streams WAL changes to Kafka.
+Built in Zig for minimal resource consumption.
 
-**🚀 Development Status**: Core CDC pipeline implemented with streaming replication. Under active optimization, approaching alpha release.
+<br clear="left"/>
 
 ## What is Outboxx?
 
 Outboxx captures PostgreSQL database changes in real-time and streams them to Kafka topics. Inspired by Debezium but designed for simplicity and low resource usage.
 
 **Key Features:**
-- PostgreSQL streaming replication (pgoutput) ✅
-- Multi-table CDC streams ✅
-- Kafka producer integration ✅
-- TOML-based configuration ✅
-- Memory-safe Zig implementation ✅
+- Natively fast
+- PostgreSQL streaming replication (pgoutput)
+- Multi-table CDC streams
+- Kafka producer integration
+- TOML-based configuration
+- Memory-safe Zig implementation
 
-## Current vs Planned
+## Roadmap
 
-| Component | Status |
-|-----------|--------|
-| PostgreSQL Streaming Replication | ✅ Working |
-| Message Processing | ✅ Working |
-| Kafka Producer | ✅ Working |
-| TOML Configuration | ✅ Working |
-| Multi-stream Support | ✅ Working |
-| Schema Registry | 📋 Planned |
-| Table/Column Filtering | 📋 Planned |
-| Production Features | 📋 Planned |
+- Observability
+- Schema Registry
+- Table/Column Filtering
 
 ## Inspired by Debezium
 
@@ -54,7 +49,6 @@ For a measured run on the same WAL backlog (Apple M1, mixed workload), see the [
 **Choose Outboxx when:**
 - Memory is constrained (containers, edge computing, cost optimization)
 - Simple deployment without Kafka Connect infrastructure
-- Learning Zig or experimenting with lightweight CDC solutions
 - Native binary and minimal dependencies preferred
 
 **Stick with Debezium when:**
@@ -67,59 +61,7 @@ Outboxx aims to bring Debezium's excellent CDC concepts to resource-constrained 
 
 ## Configuration Example
 
-```toml
-[metadata]
-version = "v0"
-
-[source]
-type = "postgres"
-
-[source.postgres]
-# libpq connection string (URL or DSN) is read from this env var, never from the file.
-# Configure TLS inside the string via sslmode/sslrootcert/sslcert/sslkey. Example:
-#   export POSTGRES_URL="postgres://user:password@host:5432/dbname?sslmode=require"
-connection_env = "POSTGRES_URL"
-slot_name = "outboxx_slot"
-publication_name = "outboxx_publication"
-
-[sink]
-type = "kafka"
-
-[sink.kafka]
-brokers = ["localhost:9092"]
-# encryption is on by default; false for local plaintext
-tls = false
-# For managed brokers add a [sink.kafka.sasl] section (mechanism/username/password_env).
-
-# Multiple streams for different tables
-[[streams]]
-name = "users-stream"
-
-[streams.source]
-resource = "users"
-operations = ["insert", "update", "delete"]
-
-[streams.flow]
-format = "json"
-
-[streams.sink]
-destination = "user_changes"
-
-[[streams]]
-name = "orders-stream"
-
-[streams.source]
-resource = "orders"
-operations = ["insert", "update"]
-
-[streams.flow]
-format = "json"
-
-[streams.sink]
-destination = "order_changes"
-```
-
-For complete configuration examples and architectural documentation, see [`docs/examples/config.toml`](docs/examples/config.toml).
+For complete configuration examples, see [`docs/examples/config.toml`](docs/examples/config.toml).
 
 ## Quick Start
 
@@ -179,9 +121,9 @@ export POSTGRES_URL="postgres://user:your_password@host:5432/dbname?sslmode=requ
 
 This is a learning project for Zig programming. See [`dev/README.md`](dev/README.md) for development setup.
 
-### Architecture Documentation
+### Design Documentation
 
-For complete configuration examples and design vision, see [`docs/examples/`](docs/examples/).
+For the design and the project's longer-term vision, see [`docs/design/`](docs/design/).
 
 ## License
 
