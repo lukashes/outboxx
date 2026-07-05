@@ -119,9 +119,9 @@ export POSTGRES_URL="postgres://user:your_password@host:5432/dbname?sslmode=requ
 
 This is a learning project for Zig programming. See [`dev/README.md`](dev/README.md) for development setup.
 
-### Architecture Documentation
+### Design Documentation
 
-For complete configuration examples and design vision, see [`docs/examples/`](docs/examples/).
+For the design and the project's longer-term vision, see [`docs/design/`](docs/design/).
 
 ## License
 
