@@ -185,9 +185,14 @@ make env-down
 ## Run Outboxx against this stack
 
 ```bash
-make build
-export POSTGRES_URL="postgres://postgres:password@localhost:5432/outboxx_test?sslmode=disable"
-./zig-out/bin/outboxx --config dev/config.toml
+make run
+```
+
+`make run` builds Outboxx and runs it against `dev/config.toml`, defaulting
+`POSTGRES_URL` to the local dev database. Point it elsewhere by overriding it:
+
+```bash
+POSTGRES_URL="postgres://user:pass@host:5432/db?sslmode=require" make run
 ```
 
 Make changes in `psql` and watch the Kafka topics. Run the full suite with `make test`.

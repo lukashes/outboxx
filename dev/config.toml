@@ -1,11 +1,9 @@
 # Outboxx Development Configuration
 # This config allows you to run the binary and test CDC functionality
 #
-# Usage:
-# From the project root directory: ./dev/run-dev.sh or:
-# 1. Start development environment: make env-up
-# 2. Set connection: export POSTGRES_URL="postgres://postgres:password@localhost:5432/outboxx_test?sslmode=disable"
-# 3. Run application: zig build run -- --config dev/config.toml
+# Usage: start the stack with `make env-up`, then `make run` (it points here and
+# defaults POSTGRES_URL to the local dev database). Override POSTGRES_URL to use
+# another database, or use ./dev/run-dev.sh for a scripted start.
 
 [metadata]
 version = "v0"
