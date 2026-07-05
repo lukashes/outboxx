@@ -7,7 +7,7 @@ pub const DecoderError = error{
     InvalidTupleData,
 };
 
-// Message type identifiers from pgoutput protocol
+/// Message type identifiers from the pgoutput protocol.
 pub const MessageType = enum(u8) {
     begin = 'B',
     commit = 'C',
@@ -123,6 +123,7 @@ pub const DeleteMessage = struct {
     }
 };
 
+/// A decoded pgoutput logical replication message.
 pub const PgOutputMessage = union(enum) {
     begin: BeginMessage,
     commit: CommitMessage,
@@ -142,6 +143,7 @@ pub const PgOutputMessage = union(enum) {
     }
 };
 
+/// Parses raw pgoutput bytes into typed PgOutputMessage values.
 pub const PgOutputDecoder = struct {
     allocator: std.mem.Allocator,
 
@@ -153,6 +155,7 @@ pub const PgOutputDecoder = struct {
         };
     }
 
+    /// Decode one pgoutput message into a typed PgOutputMessage.
     pub fn decode(self: *Self, allocator: std.mem.Allocator, data: []const u8) DecoderError!PgOutputMessage {
         self.allocator = allocator; // decode into the caller's (per-batch) allocator
 

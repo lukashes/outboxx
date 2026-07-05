@@ -71,7 +71,7 @@ time_us_of() {
 
 # --- Aggregate: minimum time/run per sub-benchmark across passes -------------
 # Why min: benchmark noise is one-sided (scheduling / cold cache / load only
-# *add* time), so the minimum is the cleanest, least-noisy sample — far more
+# *add* time), so the minimum is the cleanest, least-noisy sample, far more
 # stable than the average for a regression baseline. Memory and allocation
 # counts are deterministic, so they come from the first pass.
 for bench in "${BENCHES[@]}"; do

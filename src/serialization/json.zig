@@ -5,7 +5,7 @@ const DataSection = domain.DataSection;
 const FieldData = domain.FieldData;
 const RowData = domain.RowData;
 
-// JSON Serializer for ChangeEvent
+/// Serializes a ChangeEvent to JSON bytes.
 pub const JsonSerializer = struct {
     const Self = @This();
 
@@ -13,11 +13,10 @@ pub const JsonSerializer = struct {
         return Self{};
     }
 
-    // Serialize ChangeEvent to JSON bytes
+    /// Serialize a ChangeEvent to JSON bytes; caller owns the result.
     pub fn serialize(self: *const Self, event: ChangeEvent, allocator: std.mem.Allocator) ![]u8 {
         _ = self;
 
-        // Use custom JSON writer for proper formatting
         var output: std.Io.Writer.Allocating = .init(allocator);
         errdefer output.deinit();
 
@@ -27,7 +26,6 @@ pub const JsonSerializer = struct {
         try writer.writeAll(event.op);
         try writer.writeAll("\",\"data\":");
 
-        // Serialize data section
         try serializeDataSection(event.data, writer);
 
         try writer.writeAll(",\"meta\":{");

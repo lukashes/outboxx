@@ -1,7 +1,7 @@
 const std = @import("std");
 const toml = @import("toml");
 
-// Configuration validation limits and constants
+/// Validation limits for configuration fields.
 pub const ValidationLimits = struct {
     // String length limits
     pub const MAX_HOSTNAME_LEN = 253;
@@ -16,7 +16,7 @@ pub const ValidationLimits = struct {
     pub const MAX_STREAMS_COUNT = 100;
 };
 
-// Supported enum values
+/// Allowed values for enum-like configuration fields.
 pub const SupportedValues = struct {
     pub const SOURCE_TYPES = [_][]const u8{ "postgres", "mysql" };
     pub const SINK_TYPES = [_][]const u8{ "kafka", "webhook" };
@@ -67,9 +67,9 @@ fn readEnvVar(allocator: std.mem.Allocator, environ_map: *std.process.Environ.Ma
     return allocator.dupe(u8, value);
 }
 
-// SASL authentication for the Kafka broker. Its presence enables SASL; all fields
-// are required once present. The password is read from the environment
-// (password_env), never stored in the config file, mirroring the source password.
+/// SASL authentication for the Kafka broker. Its presence enables SASL; all fields
+/// are required once present. The password is read from the environment
+/// (password_env), never stored in the config file, mirroring the source password.
 pub const KafkaSasl = struct {
     mechanism: []const u8, // PLAIN | SCRAM-SHA-256 | SCRAM-SHA-512
     username: []const u8,
@@ -134,8 +134,8 @@ pub const TableFilter = struct {
     exclude: []const []const u8,
 };
 
-// Configuration data, and the TOML parse target. Strings point into the arena of the
-// returned toml.Parsed(Config), so the caller keeps that value alive while using it.
+/// Configuration data, and the TOML parse target. Strings point into the arena of the
+/// returned toml.Parsed(Config), so the caller keeps that value alive while using it.
 pub const Config = struct {
     metadata: Metadata,
     source: SourceConfig,
@@ -179,7 +179,6 @@ pub const Config = struct {
 
     // Helper validation functions
 
-    /// Validate that a string is in the allowed enum values
     fn validateEnum(allocator: std.mem.Allocator, value: []const u8, allowed_values: []const []const u8, field_name: []const u8) !void {
         for (allowed_values) |allowed| {
             if (std.mem.eql(u8, value, allowed)) return;
@@ -202,7 +201,6 @@ pub const Config = struct {
         return error.InvalidEnumValue;
     }
 
-    /// Validate string length limits
     fn validateStringLength(value: []const u8, max_len: usize, field_name: []const u8) !void {
         if (value.len == 0) {
             std.log.warn("Empty {s} not allowed", .{field_name});
@@ -214,7 +212,6 @@ pub const Config = struct {
         }
     }
 
-    /// Validate port number range (1-65535)
     fn validatePort(port: u16, field_name: []const u8) !void {
         if (port == 0) {
             std.log.warn("Invalid {s}: {d} (must be 1-65535)", .{ field_name, port });
@@ -223,7 +220,6 @@ pub const Config = struct {
         // u16 max is 65535, so no upper bound check needed
     }
 
-    /// Validate array size limits
     fn validateArraySize(len: usize, max_len: usize, field_name: []const u8) !void {
         if (len == 0) {
             std.log.warn("Empty {s} array not allowed", .{field_name});
@@ -235,7 +231,7 @@ pub const Config = struct {
         }
     }
 
-    /// Validate PostgreSQL identifier format (alphanumeric + underscore, must start with letter or underscore)
+    // Alphanumeric plus underscore, must start with a letter or underscore.
     fn validatePostgresIdentifier(value: []const u8, field_name: []const u8) !void {
         try validateStringLength(value, ValidationLimits.MAX_IDENTIFIER_LEN, field_name);
 
@@ -257,7 +253,7 @@ pub const Config = struct {
         }
     }
 
-    /// Validate Kafka topic name format
+    // Kafka topic charset: a-z, A-Z, 0-9, '.', '_', '-'.
     fn validateKafkaTopicName(value: []const u8, field_name: []const u8) !void {
         try validateStringLength(value, ValidationLimits.MAX_KAFKA_TOPIC_LEN, field_name);
 
@@ -270,7 +266,7 @@ pub const Config = struct {
         }
     }
 
-    /// Validate hostname format (basic validation)
+    // Basic check only: alphanumeric, dots, hyphens.
     fn validateHostname(value: []const u8, field_name: []const u8) !void {
         try validateStringLength(value, ValidationLimits.MAX_HOSTNAME_LEN, field_name);
 
@@ -283,7 +279,6 @@ pub const Config = struct {
         }
     }
 
-    /// Validate stream operations array
     fn validateOperations(allocator: std.mem.Allocator, operations: []const []const u8) !void {
         try validateArraySize(operations.len, ValidationLimits.MAX_OPERATIONS_COUNT, "operations");
 
@@ -292,7 +287,7 @@ pub const Config = struct {
         }
     }
 
-    /// Validate stream name format (allow dashes since they are sanitized in main.zig)
+    // Like a Postgres identifier but also allows dashes (sanitized in main.zig).
     fn validateStreamName(value: []const u8, field_name: []const u8) !void {
         try validateStringLength(value, ValidationLimits.MAX_IDENTIFIER_LEN, field_name);
 
@@ -314,14 +309,12 @@ pub const Config = struct {
         }
     }
 
-    /// Validate Kafka SASL settings
     fn validateKafkaSasl(allocator: std.mem.Allocator, sasl: KafkaSasl) !void {
         try validateEnum(allocator, sasl.mechanism, &SupportedValues.KAFKA_SASL_MECHANISMS, "kafka.sasl.mechanism");
         try validateStringLength(sasl.username, ValidationLimits.MAX_HOSTNAME_LEN, "kafka.sasl.username");
         try validateStringLength(sasl.password_env, ValidationLimits.MAX_IDENTIFIER_LEN, "kafka.sasl.password_env");
     }
 
-    /// Validate individual stream configuration
     fn validateStream(allocator: std.mem.Allocator, stream: Stream) !void {
         // Stream name validation (allow dashes)
         try validateStreamName(stream.name, "stream.name");
@@ -340,7 +333,6 @@ pub const Config = struct {
         }
     }
 
-    /// Validate all streams
     fn validateStreams(allocator: std.mem.Allocator, streams: []const Stream) !void {
         try validateArraySize(streams.len, ValidationLimits.MAX_STREAMS_COUNT, "streams");
 

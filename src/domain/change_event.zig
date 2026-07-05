@@ -1,6 +1,6 @@
 const std = @import("std");
 
-// Change operation types
+/// Kind of change operation.
 pub const ChangeOperation = enum {
     INSERT,
     UPDATE,
@@ -8,10 +8,10 @@ pub const ChangeOperation = enum {
     UNKNOWN,
 };
 
-// Field value using std.json.Value for flexibility
+/// A single field's value, backed by std.json.Value.
 pub const FieldValue = std.json.Value;
 
-// Helper functions to create field values
+/// Constructors for FieldValue variants.
 pub const FieldValueHelpers = struct {
     pub fn integer(val: i64) std.json.Value {
         return std.json.Value{ .integer = val };
@@ -34,16 +34,16 @@ pub const FieldValueHelpers = struct {
     }
 };
 
-// Field data structure (name + value pair)
+/// A named field: a column name paired with its value.
 pub const FieldData = struct {
     name: []const u8,
     value: std.json.Value,
 };
 
-// Row data is a slice of fields
+/// A row as a slice of named fields.
 pub const RowData = []FieldData;
 
-// Helper functions for working with RowData
+/// Builders and accessors for RowData.
 pub const RowDataHelpers = struct {
     pub fn createBuilder(allocator: std.mem.Allocator) std.ArrayList(FieldData) {
         _ = allocator;
@@ -92,7 +92,7 @@ pub const RowDataHelpers = struct {
     }
 };
 
-// Data section for different operations
+/// Operation-specific payload of a change event.
 pub const DataSection = union(enum) {
     insert: RowData,
     delete: RowData,
@@ -102,7 +102,7 @@ pub const DataSection = union(enum) {
     },
 };
 
-// Source metadata
+/// Source metadata for a change event.
 pub const Metadata = struct {
     source: []const u8, // "postgres", "mysql", etc.
     resource: []const u8, // table/collection name
@@ -111,7 +111,7 @@ pub const Metadata = struct {
     lsn: ?[]const u8, // Log sequence number (optional, source-specific)
 };
 
-// Main domain model - clean change event
+/// A CDC change event: operation, data payload, and source metadata.
 pub const ChangeEvent = struct {
     op: []const u8, // operation as string
     data: DataSection,

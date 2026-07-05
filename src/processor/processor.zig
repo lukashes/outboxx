@@ -12,6 +12,7 @@ const json_serializer = @import("json_serialization");
 const JsonSerializer = json_serializer.JsonSerializer;
 const constants = @import("constants");
 
+/// Return the streams whose resource and operations match a given table change; caller owns the list.
 pub fn matchStreams(allocator: std.mem.Allocator, streams: []const Stream, table_name: []const u8, operation: []const u8) !std.ArrayList(Stream) {
     var matched = std.ArrayList(Stream).empty;
 
@@ -112,6 +113,7 @@ pub const Processor = struct {
         self.source.deinit();
     }
 
+    /// Receive one batch, route each change to its streams, and stage the batch LSN for commit.
     pub fn processChangesToKafka(self: *Self, io: std.Io, batch_allocator: std.mem.Allocator, limit: u32) !void {
         var batch = try self.source.receiveBatch(io, batch_allocator, limit);
         defer batch.deinit();
@@ -185,6 +187,7 @@ pub const Processor = struct {
         return try allocator.dupe(u8, change_event.meta.resource);
     }
 
+    /// Run the batch loop until stop_signal is set, with a background flush/commit worker.
     pub fn startStreaming(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !void {
         const producer = &self.producer;
 

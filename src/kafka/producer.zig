@@ -11,6 +11,7 @@ const KafkaError = error{
     ConnectionTestFailed,
 };
 
+/// A Kafka message: optional partition key and payload.
 pub const Message = struct {
     key: ?[]const u8,
     payload: []const u8,
@@ -26,6 +27,7 @@ pub const Security = struct {
     ssl_ca_location: ?[]const u8 = null,
 };
 
+/// Minimal librdkafka producer wrapper.
 pub const KafkaProducer = struct {
     producer: ?*c.rd_kafka_t,
     allocator: std.mem.Allocator,
@@ -184,7 +186,7 @@ pub const KafkaProducer = struct {
         return topic;
     }
 
-    // Batch produce - reserved for future optimizations
+    /// Batch-produce messages to a topic. Reserved for future optimizations.
     pub fn produce(self: *Self, topic_name: []const u8, messages: []const Message) !void {
         if (messages.len == 0) return;
 

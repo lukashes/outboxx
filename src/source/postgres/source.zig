@@ -189,19 +189,14 @@ pub const PostgresSource = struct {
         };
     }
 
-    /// Extract change from replication message and return LSN for confirmation
-    /// Returns LSN of the message if successfully processed
-    /// Propagates errors (DecodeFailed, ConversionFailed) to caller
-    ///
-    /// LSN is returned even for messages that don't produce ChangeEvents
-    /// (BEGIN/COMMIT/RELATION) - they are still considered "processed"
-    ///
-    /// Error handling strategy (Fail-stop):
-    /// - Decode/convert errors propagate up to main()
-    /// - Application exits with non-zero code
-    /// - Supervisor (systemd/k8s) restarts application
-    /// - PostgreSQL re-sends the same message (LSN not confirmed)
-    /// - If error persists → crash loop → operator intervention required
+    // Extract a change from a replication message and return its LSN for confirmation.
+    // The LSN is returned even for messages that produce no ChangeEvent
+    // (BEGIN/COMMIT/RELATION) - they still count as processed.
+    //
+    // Error handling strategy (fail-stop): decode/convert errors propagate up to main(),
+    // the app exits non-zero, and the supervisor (systemd/k8s) restarts it. The LSN is
+    // not confirmed, so PostgreSQL re-sends the same message; a persistent error becomes
+    // a crash loop that needs operator intervention.
     fn extractChangeFromMessage(self: *Self, io: std.Io, batch_allocator: std.mem.Allocator, msg: replication_protocol.ReplicationMessage, changes: *std.ArrayList(ChangeEvent)) !u64 {
         switch (msg) {
             .xlog_data => |xlog| {
