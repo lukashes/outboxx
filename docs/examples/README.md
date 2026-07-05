@@ -1,52 +1,30 @@
-# Outboxx Examples
+# Configuration example
 
-This directory contains example configurations and architectural designs for Outboxx.
+[`config.toml`](config.toml) is a complete, working Outboxx configuration. Every
+option in it is implemented; copy it and adjust the values.
 
-**Purpose**: Documentation, design examples, and reference configurations showing the full vision of the project.
+## What it configures
 
-## Files Overview
+- A PostgreSQL source read over logical replication (slot + publication).
+- A Kafka sink with TLS and optional SASL.
+- Two example streams mapping tables to topics, keyed for partitioning.
 
-### Configuration Examples
-- **`config.toml`** - Complete configuration example with all available options and design comments
-  - Shows both implemented and planned features
-  - Serves as architecture documentation
-  - Contains detailed comments explaining the design vision
+## Environment variables
 
-### Reference Files
-- **No executable files** - This directory contains only configuration examples and documentation
+Secrets stay out of the file and are read from the environment:
 
-## For Development
+- `POSTGRES_URL` - full libpq connection string (URL or DSN), including the
+  password and `sslmode`. Example:
+  `postgres://user:pass@host:5432/db?sslmode=require`.
+- `KAFKA_PASSWORD` - only when a `[sink.kafka.sasl]` section is present.
 
-**Note**: For active development, use the `/dev/` directory instead. This directory is for examples and design reference.
-
-### 1. Contributing to Development
-
-For actual development and testing, use the `/dev/` directory which contains all tools needed for contributing.
-
-### 2. View Configuration Design
+## Run it
 
 ```bash
-# Study the full configuration example
-cat docs/examples/config.toml
+export POSTGRES_URL="postgres://user:pass@host:5432/db?sslmode=require"
+./zig-out/bin/outboxx --config docs/examples/config.toml
 ```
 
-This configuration shows the architectural vision including planned features marked with "DESIGN:" comments.
-
-## Architecture Features Shown
-
-The example configuration demonstrates:
-
-- **Multi-source support**: PostgreSQL (implemented) + MySQL (planned)
-- **Multi-sink support**: Kafka (implemented) + Webhooks (planned)
-- **Stream-based CDC**: Multiple table streams with independent configuration
-- **Security**: Environment variable based password management
-- **Extensibility**: Plugin-like architecture for sources and sinks
-
-## Design Philosophy
-
-This configuration file serves as:
-1. **Current capabilities** - What works today
-2. **Planned features** - Marked with "DESIGN:" comments
-3. **Architecture guide** - How the system should evolve
-
-For hands-on development and testing, see `/dev/README.md`.
+For a local Docker stack and test scenarios, see [`dev/README.md`](../../dev/README.md).
+For the broader design and the not-yet-implemented parts of the vision (MySQL
+source, webhook sink, filtering), see [`docs/design/`](../design/).

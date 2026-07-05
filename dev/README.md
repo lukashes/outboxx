@@ -9,18 +9,19 @@ This directory contains everything needed for contributing to Outboxx developmen
 ### 1. Start Development Environment
 
 ```bash
-# Start development stack (PostgreSQL + Kafka)
-docker-compose up -d
+# Start the dev stack (PostgreSQL + Kafka)
+make env-up
 
-# Or use the dev script
-./run-dev.sh
+# Status and logs
+make env-status
+make env-logs
 
-# Check status
-docker-compose ps
-
-# View logs
-docker-compose logs -f postgres
+# Stop the stack (env-down removes the data volumes)
+make env-down
 ```
+
+These targets wrap Docker Compose in this directory; run `docker-compose` here
+directly if you need finer control, or `./run-dev.sh` for a scripted start.
 
 ### 2. Connect to Database
 
@@ -161,12 +162,11 @@ docker-compose logs postgres | grep -i replication
 ### Restart environment:
 
 ```bash
-# Restart with data preservation
-docker-compose restart
+# Restart, keeping data
+make env-restart
 
-# Full reload (will delete data!)
-docker-compose down -v
-docker-compose up -d
+# Full reload (deletes data!)
+make env-down && make env-up
 ```
 
 ### Connect to container:
@@ -178,21 +178,16 @@ docker-compose exec postgres bash
 ## Cleanup
 
 ```bash
-# Stop and remove containers
-docker-compose down
-
-# Remove data (careful!)
-docker-compose down -v
-docker volume rm outboxx_postgres_data
+# Stop the stack and remove its data volumes
+make env-down
 ```
 
-## Next Steps
+## Run Outboxx against this stack
 
-The streaming replication is already implemented in Outboxx! You can:
+```bash
+make build
+export POSTGRES_URL="postgres://postgres:password@localhost:5432/outboxx_test?sslmode=disable"
+./zig-out/bin/outboxx --config dev/config.toml
+```
 
-1. Run Outboxx with development config: `./zig-out/bin/outboxx --config dev/config.toml`
-2. Make database changes and watch Kafka topics
-3. Develop new features or optimizations
-4. Run tests: `make test`
-
-Logical replication is ready for use!
+Make changes in `psql` and watch the Kafka topics. Run the full suite with `make test`.
