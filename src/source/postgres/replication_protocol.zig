@@ -10,7 +10,7 @@ pub const ReplicationError = error{
     OutOfMemory,
 };
 
-// Message type identifiers from PostgreSQL replication protocol
+/// Message type identifiers from the PostgreSQL replication protocol.
 pub const MessageType = enum(u8) {
     xlog_data = 'w',
     keepalive = 'k',
@@ -55,6 +55,7 @@ pub const ReplicationMessage = union(enum) {
     }
 };
 
+/// Low-level libpq streaming replication protocol (CopyBoth mode).
 pub const ReplicationProtocol = struct {
     allocator: std.mem.Allocator,
     connection: ?*c.PGconn,

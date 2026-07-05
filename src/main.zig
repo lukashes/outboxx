@@ -100,9 +100,9 @@ fn run(init: std.process.Init) !void {
     try processor.startStreaming(init.io, &shutdown_requested);
 }
 
-/// Build the Kafka sink from config, deriving librdkafka's security.protocol from the
-/// tls/sasl axes, and fail fast if the broker is unreachable at startup. The returned
-/// producer is owned by the caller (handed to the processor, which deinits it).
+// Build the Kafka sink from config, deriving librdkafka's security.protocol from the
+// tls/sasl axes, and fail fast if the broker is unreachable at startup. The returned
+// producer is owned by the caller (handed to the processor, which deinits it).
 fn initKafkaProducer(allocator: std.mem.Allocator, kafka: config_mod.KafkaSink, sasl_password: ?[]const u8) !KafkaProducer {
     const brokers_str = try std.mem.join(allocator, ",", kafka.brokers);
     defer allocator.free(brokers_str);
@@ -123,9 +123,8 @@ fn initKafkaProducer(allocator: std.mem.Allocator, kafka: config_mod.KafkaSink, 
     return producer;
 }
 
-/// Print user-facing messages to stdout
-/// Use this for status messages, configuration info, and other user output
-/// For logs and diagnostics, use std.log.* (writes to stderr)
+// Print user-facing messages to stdout. Use for status/config output; logs and
+// diagnostics go through std.log.* (stderr).
 fn printStatus(comptime fmt: []const u8, args: anytype) void {
     var buf: [4096]u8 = undefined;
     var stdout_writer = std.Io.File.stdout().writer(stdout_io, &buf);

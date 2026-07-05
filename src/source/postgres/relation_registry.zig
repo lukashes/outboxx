@@ -24,6 +24,7 @@ pub const RelationInfo = struct {
     }
 };
 
+/// Maps relation_id to table metadata, rebuilt in memory from RELATION messages.
 pub const RelationRegistry = struct {
     allocator: std.mem.Allocator,
     relations: std.AutoHashMap(u32, RelationInfo),
