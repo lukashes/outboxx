@@ -542,11 +542,20 @@
             "uid": "Prometheus"
           },
           "expr": "rate(outboxx_events_processed_total[1m])",
-          "legendFormat": "events/sec",
+          "legendFormat": "outboxx (self-reported)",
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "sum(rate(debezium_postgres_streaming_totalnumberofeventsseen[1m]))",
+          "legendFormat": "debezium (self-reported)",
+          "refId": "B"
         }
       ],
-      "title": "Outboxx events processed (self-reported)",
+      "title": "CDC events/sec: Outboxx vs Debezium (self-reported)",
       "type": "timeseries"
     },
     {
@@ -591,7 +600,28 @@
           },
           "unit": "decbytes"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "debezium (ms behind source)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ms"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.axisLabel",
+                "value": "ms behind source"
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 8,
@@ -621,11 +651,20 @@
             "uid": "Prometheus"
           },
           "expr": "outboxx_replication_lag_bytes",
-          "legendFormat": "lag",
+          "legendFormat": "outboxx (WAL bytes)",
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "max(debezium_postgres_streaming_millisecondsbehindsource)",
+          "legendFormat": "debezium (ms behind source)",
+          "refId": "B"
         }
       ],
-      "title": "Outboxx replication lag (self-reported)",
+      "title": "CDC lag: Outboxx (WAL bytes) vs Debezium (ms behind source)",
       "type": "timeseries"
     }
   ],
