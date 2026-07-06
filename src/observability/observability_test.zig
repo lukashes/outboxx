@@ -21,7 +21,7 @@ test "writeMetrics renders counters and the lag gauge in Prometheus text" {
 
     try std.testing.expect(std.mem.indexOf(u8, out, "outboxx_events_processed_total 5") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "outboxx_decode_errors_total 1") != null);
-    try std.testing.expect(std.mem.indexOf(u8, out, "outboxx_replication_lag_bytes 600") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "outboxx_replication_lag_seconds 600") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "# TYPE outboxx_events_processed_total counter") != null);
 }
 

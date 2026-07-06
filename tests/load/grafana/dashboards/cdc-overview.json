@@ -598,30 +598,9 @@
               }
             ]
           },
-          "unit": "decbytes"
+          "unit": "s"
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "debezium (ms behind source)"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "ms"
-              },
-              {
-                "id": "custom.axisPlacement",
-                "value": "right"
-              },
-              {
-                "id": "custom.axisLabel",
-                "value": "ms behind source"
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "gridPos": {
         "h": 8,
@@ -650,8 +629,8 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "outboxx_replication_lag_bytes",
-          "legendFormat": "outboxx (WAL bytes)",
+          "expr": "outboxx_replication_lag_seconds",
+          "legendFormat": "outboxx",
           "refId": "A"
         },
         {
@@ -659,12 +638,12 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "max(debezium_postgres_streaming_millisecondsbehindsource)",
-          "legendFormat": "debezium (ms behind source)",
+          "expr": "max(debezium_postgres_streaming_millisecondsbehindsource) / 1000",
+          "legendFormat": "debezium",
           "refId": "B"
         }
       ],
-      "title": "CDC lag: Outboxx (WAL bytes) vs Debezium (ms behind source)",
+      "title": "CDC lag behind source: Outboxx vs Debezium (seconds)",
       "type": "timeseries"
     }
   ],

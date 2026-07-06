@@ -89,8 +89,8 @@ pub const Observability = struct {
                 .description = "Kafka produce failures",
             }),
             .lag = try meter.createGauge(i64, .{
-                .name = "outboxx_replication_lag_bytes",
-                .description = "WAL bytes the server head is ahead of the last processed change",
+                .name = "outboxx_replication_lag_seconds",
+                .description = "Seconds the last processed transaction's commit is behind now (0 when caught up)",
             }),
             // Seed the heartbeat so liveness holds through a slow startup/connect.
             .last_progress_sec = std.atomic.Value(i64).init(std.Io.Timestamp.now(io, .awake).toSeconds()),
@@ -123,11 +123,11 @@ pub const Observability = struct {
         c.add(1, .{}) catch {};
     }
 
-    /// Set the replication lag gauge to WAL bytes the server head is ahead of the
-    /// last change we processed (0 when caught up). The source computes it per batch.
-    pub fn setLag(self: *Self, lag_bytes: u64) void {
+    /// Set the replication lag gauge to seconds behind source: wall clock minus the
+    /// last processed transaction's commit time (0 when caught up). Source computes it.
+    pub fn setLag(self: *Self, lag_seconds: i64) void {
         const g = self.lag orelse return;
-        g.record(@intCast(lag_bytes), .{}) catch {};
+        g.record(lag_seconds, .{}) catch {};
     }
 
     /// Mark the receive loop as alive; call once per batch iteration.

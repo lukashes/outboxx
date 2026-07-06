@@ -172,7 +172,8 @@ Grafana dashboard: **CDC / Debezium benchmark overview**. Besides the Kafka/cAdv
 comparison panels, Prometheus scrapes Outboxx's own `/metrics` (job `outboxx`, port
 9464) and Debezium's JMX metrics, so two panels compare each tool's self-reported
 numbers side by side: events/sec (`outboxx_events_processed_total` vs
-`debezium_postgres_streaming_totalnumberofeventsseen`) and lag, where the units
-differ - Outboxx reports WAL bytes behind, Debezium reports milliseconds behind
-source (plotted on the right axis). The Kafka-offset append-rate panel stays as an
-independent, unit-matched throughput comparison.
+`debezium_postgres_streaming_totalnumberofeventsseen`) and lag behind source in
+seconds (`outboxx_replication_lag_seconds` vs Debezium's
+`millisecondsbehindsource / 1000`). Both lag metrics are wall-clock time behind the
+last committed transaction, so they share one axis. The Kafka-offset append-rate
+panel stays as an independent throughput comparison.

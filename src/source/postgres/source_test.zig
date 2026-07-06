@@ -22,7 +22,7 @@ test "Batch: deinit with empty changes" {
     var batch = Batch{
         .changes = changes,
         .last_lsn = 12345,
-        .replication_lag_bytes = 0,
+        .replication_lag_seconds = 0,
         .allocator = allocator,
     };
     defer batch.deinit();

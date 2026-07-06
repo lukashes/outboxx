@@ -143,7 +143,7 @@ pub const Processor = struct {
 
         // Count consumed WAL changes and refresh the lag gauge once per batch.
         self.obs.addEvents(batch.changes.len);
-        self.obs.setLag(batch.replication_lag_bytes);
+        self.obs.setLag(batch.replication_lag_seconds);
 
         for (batch.changes) |change_event| {
             var matched = try matchStreams(batch_allocator, self.streams, change_event.meta.resource, change_event.op);
