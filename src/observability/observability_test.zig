@@ -11,7 +11,7 @@ test "writeMetrics renders counters and the lag gauge in Prometheus text" {
     obs.addEvents(3);
     obs.addEvents(2);
     obs.recordDecodeError();
-    obs.setLag(1000, 400);
+    obs.setLag(600);
 
     var aw = std.Io.Writer.Allocating.init(allocator);
     defer aw.deinit();
@@ -62,7 +62,7 @@ test "disabled observability records nothing but keeps health state" {
     // No-ops: must not touch the null OTel plumbing.
     obs.addEvents(10);
     obs.recordProduceError();
-    obs.setLag(1, 0);
+    obs.setLag(1);
 
     // Health atomics are valid even when disabled.
     try std.testing.expect(!obs.liveness(io)); // heartbeat never fired

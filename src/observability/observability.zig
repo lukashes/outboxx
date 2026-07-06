@@ -90,7 +90,7 @@ pub const Observability = struct {
             }),
             .lag = try meter.createGauge(i64, .{
                 .name = "outboxx_replication_lag_bytes",
-                .description = "Server WAL position minus the last confirmed LSN, in bytes",
+                .description = "WAL bytes the server head is ahead of the last processed change",
             }),
             // Seed the heartbeat so liveness holds through a slow startup/connect.
             .last_progress_sec = std.atomic.Value(i64).init(std.Io.Timestamp.now(io, .awake).toSeconds()),
@@ -123,14 +123,11 @@ pub const Observability = struct {
         c.add(1, .{}) catch {};
     }
 
-    /// Replication lag = server WAL head minus the last confirmed LSN (saturating).
-    /// Skipped until the first feedback establishes a baseline; otherwise a zero
-    /// confirmed LSN would report the absolute server position as "lag".
-    pub fn setLag(self: *Self, server_lsn: u64, confirmed_lsn: u64) void {
+    /// Set the replication lag gauge to WAL bytes the server head is ahead of the
+    /// last change we processed (0 when caught up). The source computes it per batch.
+    pub fn setLag(self: *Self, lag_bytes: u64) void {
         const g = self.lag orelse return;
-        if (confirmed_lsn == 0) return;
-        const delta = if (server_lsn > confirmed_lsn) server_lsn - confirmed_lsn else 0;
-        g.record(@intCast(delta), .{}) catch {};
+        g.record(@intCast(lag_bytes), .{}) catch {};
     }
 
     /// Mark the receive loop as alive; call once per batch iteration.

@@ -36,6 +36,11 @@ pub const Batch = struct {
     /// LSN for feedback (last change in batch)
     last_lsn: u64,
 
+    /// Replication lag in bytes for the last data message: server WAL head minus
+    /// the change's own LSN (server_wal_end - wal_start). 0 when the batch carried
+    /// no data message, which means we drained everything available (caught up).
+    replication_lag_bytes: u64,
+
     allocator: std.mem.Allocator,
 
     pub fn deinit(self: *Batch) void {
@@ -136,6 +141,9 @@ pub const PostgresSource = struct {
         }
 
         var last_confirmed_lsn: u64 = self.last_lsn; // Track LSN locally
+        // Backlog of the last data message: how far the server WAL head is ahead of
+        // the change we just read. Stays 0 if only keepalives arrive (caught up).
+        var last_lag: u64 = 0;
 
         // Monotonic deadline (`.awake`), so a wall-clock jump can't skew the wait.
         const deadline = std.Io.Timestamp.now(io, .awake).addDuration(.fromMilliseconds(wait_time_ms));
@@ -162,6 +170,10 @@ pub const PostgresSource = struct {
             // Extract change from the first message
             var msg = repl_msg.?;
             defer msg.deinit(self.allocator);
+            switch (msg) {
+                .xlog_data => |x| last_lag = x.server_wal_end -| x.wal_start,
+                else => {},
+            }
 
             const msg_lsn = try self.extractChangeFromMessage(io, batch_allocator, msg, &changes);
             last_confirmed_lsn = msg_lsn; // Update LSN (always > 0 on success)
@@ -173,6 +185,10 @@ pub const PostgresSource = struct {
 
                 var buffered_msg = next_msg.?;
                 defer buffered_msg.deinit(self.allocator);
+                switch (buffered_msg) {
+                    .xlog_data => |x| last_lag = x.server_wal_end -| x.wal_start,
+                    else => {},
+                }
 
                 const buffered_lsn = try self.extractChangeFromMessage(io, batch_allocator, buffered_msg, &changes);
                 last_confirmed_lsn = buffered_lsn; // Update LSN (always > 0 on success)
@@ -185,6 +201,7 @@ pub const PostgresSource = struct {
         return .{
             .changes = try changes.toOwnedSlice(batch_allocator),
             .last_lsn = last_confirmed_lsn,
+            .replication_lag_bytes = last_lag,
             .allocator = batch_allocator,
         };
     }

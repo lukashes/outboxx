@@ -28,7 +28,7 @@ configured address/port (default `0.0.0.0:9464`):
   - `outboxx_events_processed_total` (counter) - WAL change events consumed
   - `outboxx_decode_errors_total` (counter) - pgoutput decode/convert failures
   - `outboxx_produce_errors_total` (counter) - Kafka produce failures
-  - `outboxx_replication_lag_bytes` (gauge) - server WAL head minus the last confirmed LSN
+  - `outboxx_replication_lag_bytes` (gauge) - WAL bytes the server head is ahead of the last processed change (0 when caught up)
 - `GET /healthz` - liveness: 200 while the receive loop makes progress, 503 if it stalls.
 - `GET /readyz` - readiness: 200 once connected to Postgres and streaming, else 503.
 

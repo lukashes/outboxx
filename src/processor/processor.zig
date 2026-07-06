@@ -38,7 +38,6 @@ fn flushCommitWorker(
     producer: *KafkaProducer,
     source: *PostgresSource,
     pending_lsn: *std.atomic.Value(u64),
-    confirmed_lsn: *std.atomic.Value(u64),
 ) void {
     var iterations: u32 = 0;
     const flush_interval_iterations: u32 = @intCast(constants.CDC.KAFKA_FLUSH_INTERVAL_SEC);
@@ -69,8 +68,6 @@ fn flushCommitWorker(
             std.log.err("Background LSN commit failed: {}", .{err});
             continue;
         };
-        // Latest LSN acknowledged to Postgres; the replication-lag gauge reads it.
-        confirmed_lsn.store(lsn, .release);
     }
 
     producer.flush(constants.CDC.KAFKA_FLUSH_TIMEOUT_MS) catch |err| {
@@ -82,7 +79,6 @@ fn flushCommitWorker(
         source.sendFeedback(io, lsn) catch |err| {
             std.log.warn("Final background LSN commit failed: {}", .{err});
         };
-        confirmed_lsn.store(lsn, .release);
     }
 
     std.log.debug("Flush/commit worker stopped", .{});
@@ -99,8 +95,6 @@ pub const Processor = struct {
 
     events_processed: usize,
     pending_lsn: std.atomic.Value(u64),
-    // LSN last confirmed to Postgres by the flush worker; drives the lag gauge.
-    confirmed_lsn: std.atomic.Value(u64),
 
     const Self = @This();
 
@@ -114,7 +108,6 @@ pub const Processor = struct {
             .obs = obs,
             .events_processed = 0,
             .pending_lsn = std.atomic.Value(u64).init(0),
-            .confirmed_lsn = std.atomic.Value(u64).init(0),
         };
     }
 
@@ -142,7 +135,7 @@ pub const Processor = struct {
 
         if (batch.changes.len == 0) {
             self.pending_lsn.store(batch.last_lsn, .release);
-            self.obs.setLag(batch.last_lsn, self.confirmed_lsn.load(.acquire));
+            self.obs.setLag(0); // drained everything available -> caught up
             return;
         }
 
@@ -150,7 +143,7 @@ pub const Processor = struct {
 
         // Count consumed WAL changes and refresh the lag gauge once per batch.
         self.obs.addEvents(batch.changes.len);
-        self.obs.setLag(batch.last_lsn, self.confirmed_lsn.load(.acquire));
+        self.obs.setLag(batch.replication_lag_bytes);
 
         for (batch.changes) |change_event| {
             var matched = try matchStreams(batch_allocator, self.streams, change_event.meta.resource, change_event.op);
@@ -226,7 +219,6 @@ pub const Processor = struct {
             producer,
             &self.source,
             &self.pending_lsn,
-            &self.confirmed_lsn,
         });
         // On a receive error, still stop the worker (wakes its sleep for the
         // final flush, and awaits) before the error propagates.
