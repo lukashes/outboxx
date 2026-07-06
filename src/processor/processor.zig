@@ -11,6 +11,7 @@ const ChangeEvent = domain.ChangeEvent;
 const json_serializer = @import("json_serialization");
 const JsonSerializer = json_serializer.JsonSerializer;
 const constants = @import("constants");
+pub const Observability = @import("observability").Observability;
 
 /// Return the streams whose resource and operations match a given table change; caller owns the list.
 pub fn matchStreams(allocator: std.mem.Allocator, streams: []const Stream, table_name: []const u8, operation: []const u8) !std.ArrayList(Stream) {
@@ -37,6 +38,7 @@ fn flushCommitWorker(
     producer: *KafkaProducer,
     source: *PostgresSource,
     pending_lsn: *std.atomic.Value(u64),
+    confirmed_lsn: *std.atomic.Value(u64),
 ) void {
     var iterations: u32 = 0;
     const flush_interval_iterations: u32 = @intCast(constants.CDC.KAFKA_FLUSH_INTERVAL_SEC);
@@ -67,6 +69,8 @@ fn flushCommitWorker(
             std.log.err("Background LSN commit failed: {}", .{err});
             continue;
         };
+        // Latest LSN acknowledged to Postgres; the replication-lag gauge reads it.
+        confirmed_lsn.store(lsn, .release);
     }
 
     producer.flush(constants.CDC.KAFKA_FLUSH_TIMEOUT_MS) catch |err| {
@@ -78,6 +82,7 @@ fn flushCommitWorker(
         source.sendFeedback(io, lsn) catch |err| {
             std.log.warn("Final background LSN commit failed: {}", .{err});
         };
+        confirmed_lsn.store(lsn, .release);
     }
 
     std.log.debug("Flush/commit worker stopped", .{});
@@ -90,21 +95,26 @@ pub const Processor = struct {
     producer: KafkaProducer,
     streams: []const Stream,
     serializer: JsonSerializer,
+    obs: *Observability,
 
     events_processed: usize,
     pending_lsn: std.atomic.Value(u64),
+    // LSN last confirmed to Postgres by the flush worker; drives the lag gauge.
+    confirmed_lsn: std.atomic.Value(u64),
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, source: PostgresSource, producer: KafkaProducer, streams: []const Stream) Self {
+    pub fn init(allocator: std.mem.Allocator, source: PostgresSource, producer: KafkaProducer, streams: []const Stream, obs: *Observability) Self {
         return Self{
             .allocator = allocator,
             .source = source,
             .producer = producer,
             .streams = streams,
             .serializer = JsonSerializer.init(),
+            .obs = obs,
             .events_processed = 0,
             .pending_lsn = std.atomic.Value(u64).init(0),
+            .confirmed_lsn = std.atomic.Value(u64).init(0),
         };
     }
 
@@ -115,17 +125,32 @@ pub const Processor = struct {
 
     /// Receive one batch, route each change to its streams, and stage the batch LSN for commit.
     pub fn processChangesToKafka(self: *Self, io: std.Io, batch_allocator: std.mem.Allocator, limit: u32) !void {
-        var batch = try self.source.receiveBatch(io, batch_allocator, limit);
+        var batch = self.source.receiveBatch(io, batch_allocator, limit) catch |err| {
+            switch (err) {
+                error.DecodeFailed, error.ConversionFailed => self.obs.recordDecodeError(),
+                else => {},
+            }
+            return err;
+        };
         defer batch.deinit();
+
+        // A successful receive (even an empty batch) means we are connected and
+        // reading the replication stream — the signal readiness cares about.
+        self.obs.markStreaming();
 
         const producer = &self.producer;
 
         if (batch.changes.len == 0) {
             self.pending_lsn.store(batch.last_lsn, .release);
+            self.obs.setLag(batch.last_lsn, self.confirmed_lsn.load(.acquire));
             return;
         }
 
         std.log.debug("Processing {} changes from batch (LSN: {})", .{ batch.changes.len, batch.last_lsn });
+
+        // Count consumed WAL changes and refresh the lag gauge once per batch.
+        self.obs.addEvents(batch.changes.len);
+        self.obs.setLag(batch.last_lsn, self.confirmed_lsn.load(.acquire));
 
         for (batch.changes) |change_event| {
             var matched = try matchStreams(batch_allocator, self.streams, change_event.meta.resource, change_event.op);
@@ -146,7 +171,10 @@ pub const Processor = struct {
                 const topic_name = stream.sink.destination;
                 const partition_key = try self.getPartitionKey(batch_allocator, change_event, stream);
 
-                try producer.sendMessage(topic_name, partition_key, json_bytes);
+                producer.sendMessage(topic_name, partition_key, json_bytes) catch |err| {
+                    self.obs.recordProduceError();
+                    return err;
+                };
 
                 self.events_processed += 1;
                 if (self.events_processed % 10000 == 0) {
@@ -198,12 +226,15 @@ pub const Processor = struct {
             producer,
             &self.source,
             &self.pending_lsn,
+            &self.confirmed_lsn,
         });
         // On a receive error, still stop the worker (wakes its sleep for the
         // final flush, and awaits) before the error propagates.
         errdefer flush_future.cancel(io);
 
         while (!stop_signal.load(.monotonic)) {
+            self.obs.heartbeat(io);
+
             var batch_arena = std.heap.ArenaAllocator.init(self.allocator);
             defer batch_arena.deinit();
 

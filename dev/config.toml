@@ -26,6 +26,11 @@ type = "kafka" # Reference to the "sink.kafka"
 brokers = ["localhost:9092"]
 tls = false  # local Kafka has no TLS; encryption is on by default otherwise
 
+# Prometheus /metrics plus /healthz and /readyz. Omit this section to disable.
+[observability]
+address = "127.0.0.1"
+port = 9464
+
 # Multiple streams can be defined to capture changes from different resources
 [[streams]]
 name = "users_dev_stream" # Name could be used for logging or metrics and new entites

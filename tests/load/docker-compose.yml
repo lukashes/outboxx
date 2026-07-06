@@ -155,6 +155,8 @@ services:
         condition: service_healthy
     environment:
       POSTGRES_URL: postgres://postgres:postgres@postgres:5432/bench?sslmode=disable
+    ports:
+      - "9464:9464"  # Prometheus /metrics, /healthz, /readyz
     volumes:
       - ./outboxx/config.toml:/app/config.toml:ro
     command: ["--config", "/app/config.toml"]

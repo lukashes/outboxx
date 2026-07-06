@@ -168,4 +168,8 @@ debezium.public.benchmark_records         # Debezium
 outboxx.public.benchmark_records          # Outboxx
 ```
 
-Grafana dashboard: **CDC / Debezium benchmark overview**.
+Grafana dashboard: **CDC / Debezium benchmark overview**. Besides the Kafka/cAdvisor
+comparison panels, Prometheus scrapes Outboxx's own `/metrics` (job `outboxx`, port
+9464), so the dashboard also plots its self-reported events/sec and replication lag
+directly. The Debezium-vs-Outboxx throughput comparison still uses Kafka offsets,
+which both readers expose equally.

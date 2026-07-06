@@ -117,6 +117,13 @@ pub const TableFilter = struct {
     exclude: []const []const u8,
 };
 
+/// Optional metrics/health HTTP server. Absent section -> observability disabled.
+pub const ObservabilityConfig = struct {
+    // 0.0.0.0 for container scraping; 127.0.0.1 to keep it local. No secrets on these endpoints.
+    address: []const u8 = "0.0.0.0",
+    port: u16 = 9464, // conventional OpenTelemetry Prometheus exporter port
+};
+
 /// Configuration data, and the TOML parse target. Strings point into the arena of the
 /// returned toml.Parsed(Config), so the caller keeps that value alive while using it.
 pub const Config = struct {
@@ -125,6 +132,7 @@ pub const Config = struct {
     sink: SinkConfig,
     streams: []const Stream = &.{},
     tables: ?TableFilter = null,
+    observability: ?ObservabilityConfig = null,
 
     /// Parse a config file; caller owns and must deinit the returned result.
     pub fn loadFromTomlFile(io: std.Io, allocator: std.mem.Allocator, file_path: []const u8) !toml.Parsed(Config) {
@@ -381,7 +389,13 @@ pub const Config = struct {
             }
         }
 
-        // 5. STREAMS VALIDATION
+        // 5. OBSERVABILITY VALIDATION
+        if (self.observability) |obs| {
+            try validatePort(obs.port, "observability.port");
+            try validateStringLength(obs.address, ValidationLimits.MAX_HOSTNAME_LEN, "observability.address");
+        }
+
+        // 6. STREAMS VALIDATION
         if (self.streams.len == 0) {
             std.log.warn("No streams configured in config file", .{});
             return error.NoStreamsConfigured;

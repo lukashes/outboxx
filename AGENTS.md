@@ -59,6 +59,7 @@ src/
     validator.zig            startup checks: version, wal_level, tables
   processor/processor.zig    pipeline, stream matching, flush/commit worker
   kafka/producer.zig         librdkafka wrapper (TLS/SASL)
+  observability/             OpenTelemetry facade + Prometheus/health HTTP server
   config/config.zig          TOML structs, env-var loading, validation
 tests/  test_helpers.zig, e2e/, benchmarks/, load/
 ```
@@ -90,6 +91,8 @@ TOML, secrets kept out of the file (see `docs/examples/config.toml`).
   advisory, not a rewrite.
 - `[sink.kafka]`: `tls` (default true) plus an optional `[sink.kafka.sasl]`
   (`mechanism`, `username`, `password_env`).
+- `[observability]` (optional; absent = off): `address`/`port` for a Prometheus
+  `/metrics` plus `/healthz` and `/readyz` HTTP server.
 - Postgres needs `wal_level = logical` and `REPLICA IDENTITY FULL` on tracked
   tables. Outboxx auto-creates the slot and publication.
 

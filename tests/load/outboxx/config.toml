@@ -16,6 +16,13 @@ type = "kafka"
 brokers = ["kafka:9092"]
 tls = false  # the benchmark broker is plaintext
 
+# Expose /metrics so Prometheus scrapes throughput and lag straight from outboxx,
+# instead of inferring them from kafka-exporter/cadvisor. 0.0.0.0 so the Prometheus
+# container can reach it over the compose network.
+[observability]
+address = "0.0.0.0"
+port = 9464
+
 [[streams]]
 name = "benchmark-records"
 

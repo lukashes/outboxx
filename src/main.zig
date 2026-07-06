@@ -9,6 +9,8 @@ const PostgresValidator = @import("source/postgres/validator.zig").PostgresValid
 const builtin = @import("builtin");
 const posix = std.posix;
 const constants = @import("constants");
+const observability = @import("observability");
+const Observability = observability.Observability;
 
 pub const CliError = error{
     NoConfigPath,
@@ -91,6 +93,14 @@ fn run(init: std.process.Init) !void {
 
     printConfigInfo(config);
 
+    // Metrics/health are no-ops unless [observability] is configured, so the
+    // rest of the wiring never branches on it.
+    var obs = if (config.observability != null)
+        try Observability.init(allocator, init.io)
+    else
+        Observability.initDisabled();
+    defer obs.deinit();
+
     try validatePostgres(allocator, config, conninfo);
 
     const postgres = config.source.postgres.?;
@@ -106,11 +116,12 @@ fn run(init: std.process.Init) !void {
 
     printStatus("Connecting to PostgreSQL streaming replication...\n", .{});
     try source.connect(conninfo, "0/0");
+    obs.markConnected(true);
 
     const producer = try initKafkaProducer(allocator, config.sink.kafka.?, kafka_sasl_pw);
     // NOTE: producer will be deinit'd by processor.deinit()
 
-    var processor = Processor.init(allocator, source, producer, config.streams);
+    var processor = Processor.init(allocator, source, producer, config.streams, &obs);
     defer processor.deinit();
 
     printStatus("\nProcessor initialized successfully with slot: {s}\n", .{postgres.slot_name});
@@ -122,7 +133,18 @@ fn run(init: std.process.Init) !void {
     printStatus("Using publication: {s}\n", .{postgres.publication_name});
     printStatus("Press Ctrl+C to stop gracefully.\n\n", .{});
 
-    try processor.startStreaming(init.io, &shutdown_requested);
+    // Serve /metrics + health on a background worker while the receive loop runs;
+    // the future is canceled on shutdown, which unblocks its accept().
+    if (config.observability) |obs_cfg| {
+        printStatus("Observability endpoints on http://{s}:{d} (/metrics, /healthz, /readyz)\n\n", .{ obs_cfg.address, obs_cfg.port });
+        var metrics_future = try init.io.concurrent(observability.serve, .{
+            init.io, &obs, obs_cfg.address, obs_cfg.port, &shutdown_requested,
+        });
+        defer metrics_future.cancel(init.io);
+        try processor.startStreaming(init.io, &shutdown_requested);
+    } else {
+        try processor.startStreaming(init.io, &shutdown_requested);
+    }
 }
 
 // Build the Kafka sink from config, deriving librdkafka's security.protocol from the
