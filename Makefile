@@ -8,6 +8,7 @@ SHELL := $(CURDIR)/.make-shell
 # Number of passes for bench-save / bench-compare (the minimum time/run is
 # kept). Override e.g. `make bench-save BENCH_RUNS=9`.
 export BENCH_RUNS ?= 5
+ZIG_BUILD_ARGS ?=
 
 # Helper function for running commands with spinner
 # Captures both stdout and stderr, shows full output on failure
@@ -70,8 +71,8 @@ help:
 # Build the project
 build:
 # macro-prefix-map is not supported at darwin
-	@echo "zig build"
-	@zig build
+	@echo "zig build $(ZIG_BUILD_ARGS)"
+	@zig build $(ZIG_BUILD_ARGS)
 
 # Run the application against the dev config. POSTGRES_URL falls back to the local
 # dev database; override it to point elsewhere. Needs services up (make env-up).

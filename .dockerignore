@@ -1,21 +1,17 @@
-# Build outputs and caches (zig fetches deps fresh during the image build)
-zig-out/
-zig-cache/
-.zig-cache/
-zig-pkg/
-
-# VCS and local tooling
-.git/
-.direnv/
-.claude/
-
-# Local data and artifacts
-postgres-data/
-build/
-dist/
-target/
+.git
+.direnv
+.zig-cache
+zig-cache
+zig-out
+dist
+build
+target
+*.tmp
+*.temp
 *.log
-
-# OS junk
-**/.DS_Store
-Thumbs.db
+.DS_Store
+CLAUDE.local.md
+.claude
+.idea
+dev/outboxx_article_v3.md
+dev/kafka-tls/certs

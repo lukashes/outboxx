@@ -1,6 +1,7 @@
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 
-pub const VERSION = "0.2.0";
+pub const VERSION = build_options.version;
 pub const APP_NAME = "Outboxx";
 pub const DESCRIPTION = "PostgreSQL Change Data Capture with Kafka";
 

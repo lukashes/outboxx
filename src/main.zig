@@ -14,6 +14,17 @@ pub const CliError = error{
     NoConfigPath,
 };
 
+const CliAction = enum {
+    run,
+    help,
+    version,
+};
+
+const Cli = struct {
+    action: CliAction = .run,
+    config_path: ?[]const u8 = null,
+};
+
 var shutdown_requested = std.atomic.Value(bool).init(false);
 
 // Stdout writes need an Io; kept here so printStatus/printBanner stay
@@ -43,13 +54,27 @@ fn run(init: std.process.Init) !void {
         }
     };
 
+    const cli = try parseCli(init.minimal.args, allocator);
+    defer if (cli.config_path) |path| allocator.free(path);
+
+    switch (cli.action) {
+        .help => {
+            printHelp();
+            return;
+        },
+        .version => {
+            printVersion();
+            return;
+        },
+        .run => {},
+    }
+
     printBanner();
 
-    const config_file_path = try parseConfigPath(init.minimal.args, allocator) orelse {
+    const config_file_path = cli.config_path orelse {
         std.log.warn("config file is required. Use --config <path>", .{});
         return CliError.NoConfigPath;
     };
-    defer allocator.free(config_file_path);
 
     printStatus("Loading configuration from: {s}\n", .{config_file_path});
     var parsed = try Config.loadFromTomlFile(init.io, allocator, config_file_path);
@@ -163,20 +188,52 @@ fn printBanner() void {
     printStatus("Build: {s}\n\n", .{@tagName(constants.BUILD_MODE)});
 }
 
-fn parseConfigPath(args: std.process.Args, allocator: std.mem.Allocator) !?[]const u8 {
+fn printVersion() void {
+    printStatus("outboxx {s}\n", .{constants.VERSION});
+}
+
+fn printHelp() void {
+    printStatus(
+        \\Outboxx - PostgreSQL Change Data Capture with Kafka
+        \\
+        \\Usage:
+        \\  outboxx --config <path>
+        \\  outboxx --version
+        \\  outboxx --help
+        \\
+        \\Options:
+        \\  --config, -c <path>  TOML configuration file
+        \\  --version           Print version and exit
+        \\  --help, -h          Print this help and exit
+        \\
+    , .{});
+}
+
+fn parseCli(args: std.process.Args, allocator: std.mem.Allocator) !Cli {
     var it = args.iterate();
     defer it.deinit();
 
+    var cli = Cli{};
+
     _ = it.next(); // skip executable name (argv[0])
     while (it.next()) |arg| {
-        if (std.mem.eql(u8, arg, "--config")) {
+        if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+            cli.action = .help;
+            return cli;
+        }
+        if (std.mem.eql(u8, arg, "--version")) {
+            cli.action = .version;
+            return cli;
+        }
+        if (std.mem.eql(u8, arg, "--config") or std.mem.eql(u8, arg, "-c")) {
             if (it.next()) |path| {
-                return try allocator.dupe(u8, path);
+                if (cli.config_path) |old_path| allocator.free(old_path);
+                cli.config_path = try allocator.dupe(u8, path);
             }
         }
     }
 
-    return null;
+    return cli;
 }
 
 fn printConfigInfo(cfg: Config) void {

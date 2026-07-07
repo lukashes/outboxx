@@ -104,6 +104,19 @@ ALTER TABLE my_table REPLICA IDENTITY FULL;
 
 ### 2. Running Outboxx
 
+Run the published Docker image:
+
+```bash
+export POSTGRES_URL="postgres://user:your_password@host:5432/dbname?sslmode=require"
+docker run --rm \
+  -e POSTGRES_URL \
+  -v "$PWD/config.toml:/config.toml:ro" \
+  ghcr.io/lukashes/outboxx:latest \
+  --config /config.toml
+```
+
+For local development builds:
+
 ```bash
 # Build the application
 make build
@@ -112,6 +125,13 @@ make build
 export POSTGRES_URL="postgres://user:your_password@host:5432/dbname?sslmode=require"
 ./zig-out/bin/outboxx --config config.toml
 ```
+
+Release images are published manually from GitHub Actions. The workflow reads
+the version from `build.zig.zon`, publishes `linux/amd64` and `linux/arm64`, and
+writes the immutable image digest to the run summary. The image uses a Nix
+builder and a small scratch runtime containing only the binary, its runtime
+libraries, and CA certificates. On macOS, run the Linux image through Docker or
+another Linux VM/container runtime.
 
 ### 3. Production Deployment
 
