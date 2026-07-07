@@ -6,12 +6,12 @@ RUN echo "experimental-features = nix-command flakes" >> /etc/nix/nix.conf
 
 WORKDIR /src
 
-# Cache the Nix dev shell before copying the full repository.
+# Cache the Nix build environment before copying the full repository.
 COPY flake.nix flake.lock ./
 RUN nix develop --command echo "deps cached"
 
 COPY . .
-RUN nix develop --command zig build -Doptimize=ReleaseSafe -Dversion="${VERSION}"
+RUN nix develop --command zig build -Doptimize=ReleaseFast -Dversion="${VERSION}"
 RUN nix develop --command bash -c 'set -euo pipefail; \
     mkdir -p /runtime/app /runtime/etc/ssl/certs; \
     cp zig-out/bin/outboxx /runtime/app/outboxx; \

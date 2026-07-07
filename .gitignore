@@ -45,10 +45,6 @@ test_results/
 docs/build/
 docs/draft/
 
-# Claude Code assistant files
-CLAUDE.local.md
-.claude/
-
 # Direnv
 .direnv
 .envrc

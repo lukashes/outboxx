@@ -10,8 +10,6 @@ target
 *.temp
 *.log
 .DS_Store
-CLAUDE.local.md
-.claude
 .idea
 dev/outboxx_article_v3.md
 dev/kafka-tls/certs
