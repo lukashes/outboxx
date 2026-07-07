@@ -1,0 +1,113 @@
+name: Publish Docker Image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/lukashes/outboxx
+
+jobs:
+  docker-image:
+    name: Docker image (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Read version
+        id: version
+        run: |
+          version="$(awk -F'"' '/\.version =/ {print $2; exit}' build.zig.zon)"
+          if [ -z "$version" ]; then
+            echo "failed to read .version from build.zig.zon" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Login to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build image
+        env:
+          ARCH: ${{ matrix.arch }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          docker build \
+            --build-arg VERSION="${VERSION}" \
+            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            --label "org.opencontainers.image.version=${VERSION}" \
+            --tag "${IMAGE_NAME}:${VERSION}-${ARCH}" \
+            --tag "${IMAGE_NAME}:${VERSION}-${{ github.run_number }}-${ARCH}" \
+            --tag "${IMAGE_NAME}:sha-${GITHUB_SHA::12}-${ARCH}" \
+            .
+          docker run --rm "${IMAGE_NAME}:${VERSION}-${ARCH}" --version
+
+      - name: Push image
+        env:
+          ARCH: ${{ matrix.arch }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          docker push "${IMAGE_NAME}:${VERSION}-${ARCH}"
+          docker push "${IMAGE_NAME}:${VERSION}-${{ github.run_number }}-${ARCH}"
+          docker push "${IMAGE_NAME}:sha-${GITHUB_SHA::12}-${ARCH}"
+
+  publish:
+    name: Publish multi-arch tags
+    runs-on: ubuntu-24.04
+    needs: docker-image
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Read version
+        id: version
+        run: |
+          version="$(awk -F'"' '/\.version =/ {print $2; exit}' build.zig.zon)"
+          if [ -z "$version" ]; then
+            echo "failed to read .version from build.zig.zon" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Login to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Publish multi-arch image tags
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          for tag in "${VERSION}" "v${VERSION}" "${VERSION}-${{ github.run_number }}" "latest" "sha-${GITHUB_SHA::12}"; do
+            docker buildx imagetools create \
+              --tag "${IMAGE_NAME}:${tag}" \
+              "${IMAGE_NAME}:${VERSION}-amd64" \
+              "${IMAGE_NAME}:${VERSION}-arm64"
+          done
+
+      - name: Report image digest
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          digest="$(docker buildx imagetools inspect "${IMAGE_NAME}:${VERSION}" | awk '/^Digest:/ {print $2; exit}')"
+          {
+            echo "## Published image"
+            echo
+            echo "- Image: \`${IMAGE_NAME}:${VERSION}\`"
+            echo "- Digest: \`${IMAGE_NAME}@${digest}\`"
+            echo "- Build tag: \`${IMAGE_NAME}:${VERSION}-${{ github.run_number }}\`"
+            echo "- Commit tag: \`${IMAGE_NAME}:sha-${GITHUB_SHA::12}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

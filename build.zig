@@ -11,12 +11,22 @@ pub fn build(b: *std.Build) void {
         "Prioritize performance, safety, or binary size (default: ReleaseFast)",
     ) orelse .ReleaseFast;
 
+    const version = b.option(
+        []const u8,
+        "version",
+        "Version string embedded into the outboxx binary",
+    ) orelse "0.2.0";
+
+    const build_options = b.addOptions();
+    build_options.addOption([]const u8, "version", version);
+
     // Constants module (application-wide constants)
     const constants_module = b.createModule(.{
         .root_source_file = b.path("src/constants.zig"),
         .target = target,
         .optimize = optimize,
     });
+    constants_module.addOptions("build_options", build_options);
 
     // TOML parser dependency (parses config straight into Zig structs)
     const toml_dep = b.dependency("toml", .{

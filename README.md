@@ -104,6 +104,19 @@ ALTER TABLE my_table REPLICA IDENTITY FULL;
 
 ### 2. Running Outboxx
 
+Run the published Docker image:
+
+```bash
+export POSTGRES_URL="postgres://user:your_password@host:5432/dbname?sslmode=require"
+docker run --rm \
+  -e POSTGRES_URL \
+  -v "$PWD/config.toml:/config.toml:ro" \
+  ghcr.io/lukashes/outboxx:latest \
+  --config /config.toml
+```
+
+For local development builds:
+
 ```bash
 # Build the application
 make build
