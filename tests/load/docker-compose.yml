@@ -146,9 +146,7 @@ services:
 
   outboxx:
     profiles: ["compare"]
-    build:
-      context: ../..
-      dockerfile: tests/load/outboxx/Dockerfile
+    image: ${OUTBOXX_IMAGE:-ghcr.io/lukashes/outboxx:latest}
     container_name: cdc-outboxx
     depends_on:
       postgres:
