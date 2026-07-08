@@ -25,7 +25,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     ports:
-      - "5432:5432"
+      - "${LOAD_POSTGRES_PORT:-15432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/001-init.sql:ro
@@ -41,8 +41,8 @@ services:
     image: quay.io/debezium/kafka:3.5.2.Final
     container_name: cdc-kafka
     ports:
-      - "9092:9092"
-      - "9093:9093"
+      - "${LOAD_KAFKA_PORT:-19092}:9092"
+      - "${LOAD_KAFKA_CONTROLLER_PORT:-19093}:9093"
     environment:
       CLUSTER_ID: oh-sxaDRTcyAr6pFRbXyzA
       NODE_ID: 1

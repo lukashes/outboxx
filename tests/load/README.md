@@ -35,7 +35,14 @@ Open:
 - Prometheus: http://localhost:9090
 - Kafka UI: http://localhost:8080
 - Kafka Connect REST: http://localhost:8083
-- PostgreSQL: `localhost:5432`, database `bench`, user `postgres`, password `postgres`
+- PostgreSQL: `localhost:15432`, database `bench`, user `postgres`, password `postgres`
+
+The load stack uses different host ports from the dev stack, so both can run at
+the same time. Override the load ports inline if needed:
+
+```sh
+make infra LOAD_POSTGRES_PORT=15433 LOAD_KAFKA_PORT=19094 LOAD_KAFKA_CONTROLLER_PORT=19095
+```
 
 ## Results
 
