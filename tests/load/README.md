@@ -22,6 +22,13 @@ What each command does:
 - `make start-all` starts Debezium and Outboxx together. Debezium is registered automatically.
 - `make reset` stops the stand and removes this stand's PostgreSQL, Kafka, Prometheus, and Grafana volumes.
 
+To benchmark the local checkout, copy the example override and rebuild:
+
+```sh
+cp docker-compose.override.yml.example docker-compose.override.yml
+make start-outboxx
+```
+
 Open:
 
 - Grafana: http://localhost:3000 (`admin` / `admin`)

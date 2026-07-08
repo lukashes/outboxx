@@ -30,6 +30,7 @@ Thumbs.db
 .env
 .env.local
 *.local
+tests/load/docker-compose.override.yml
 
 # Docker volumes (if any)
 postgres-data/

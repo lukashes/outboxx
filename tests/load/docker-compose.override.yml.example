@@ -1,0 +1,6 @@
+services:
+  outboxx:
+    image: outboxx:load-local
+    build:
+      context: ../..
+      dockerfile: tests/load/outboxx/Dockerfile
