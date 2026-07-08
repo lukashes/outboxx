@@ -35,11 +35,9 @@ RUN nix develop --command bash -c 'set -euo pipefail; \
     if [ -d /etc/ssl/certs ]; then cp -aL /etc/ssl/certs/. /runtime/etc/ssl/certs/; fi; \
     if [ -f /etc/ssl/cert.pem ]; then cp -aL /etc/ssl/cert.pem /runtime/etc/ssl/cert.pem; fi'
 
-FROM nixos/nix:2.24.10
+FROM scratch
 
 COPY --from=builder /runtime /
-
-RUN rm -rf /root/.cache /tmp/* /var/tmp/* /nix/var/nix/gcroots/auto/* /nix/var/nix/profiles/per-user/root/channels
 
 USER 65532:65532
 WORKDIR /app
