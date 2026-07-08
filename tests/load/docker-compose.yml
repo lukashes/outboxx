@@ -146,7 +146,7 @@ services:
 
   outboxx:
     profiles: ["compare"]
-    image: ${OUTBOXX_IMAGE:-ghcr.io/lukashes/outboxx:latest}
+    image: ghcr.io/lukashes/outboxx:latest
     container_name: cdc-outboxx
     depends_on:
       postgres:

@@ -22,9 +22,6 @@ What each command does:
 - `make start-all` starts Debezium and Outboxx together. Debezium is registered automatically.
 - `make reset` stops the stand and removes this stand's PostgreSQL, Kafka, Prometheus, and Grafana volumes.
 
-By default, the benchmark runs Outboxx from `ghcr.io/lukashes/outboxx:latest`.
-Set `OUTBOXX_IMAGE=` to use another published tag or digest.
-
 To benchmark the local checkout, copy the example override and rebuild:
 
 ```sh
