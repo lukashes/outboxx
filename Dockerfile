@@ -11,7 +11,7 @@ COPY flake.nix flake.lock ./
 RUN nix develop --command echo "deps cached"
 
 COPY . .
-RUN nix develop --command zig build -Dcpu=baseline -Doptimize=ReleaseFast -Dversion="${VERSION}"
+RUN nix develop --command zig build -Dcpu=baseline -Doptimize=ReleaseSafe -Dversion="${VERSION}"
 RUN nix develop --command bash -c 'set -euo pipefail; \
     mkdir -p /runtime/app /runtime/etc/ssl/certs /runtime/etc; \
     cp zig-out/bin/outboxx /runtime/app/outboxx; \
