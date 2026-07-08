@@ -105,6 +105,10 @@ TOML, secrets kept out of the file (see `docs/examples/config.toml`).
   milestones, `warn` for an error with context, `err` only in `main.zig` before
   exit. User-facing status in `main.zig` uses stdout (`printStatus`), never
   `std.debug.print`. Comments and identifiers in English.
+- Branch names include the PR type, such as `feat`, `bugfix`, `docs`, or
+  `infra`. Keep them short and specific: a few context words are enough.
+- PR bodies state the problem and the solution. Keep them concise, preferably
+  as bullets.
 
 ## Gotchas
 
