@@ -68,6 +68,3 @@ format = "json"
 [streams.sink]
 destination = "public.orders"
 routing_key = "id"
-
-# Note: the schema also accepts source type "mysql" and sink type "webhook", but
-# those adapters are not wired up yet. See docs/design/ for the roadmap.

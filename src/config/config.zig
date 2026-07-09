@@ -18,8 +18,8 @@ pub const ValidationLimits = struct {
 
 /// Allowed values for enum-like configuration fields.
 pub const SupportedValues = struct {
-    pub const SOURCE_TYPES = [_][]const u8{ "postgres", "mysql" };
-    pub const SINK_TYPES = [_][]const u8{ "kafka", "webhook" };
+    pub const SOURCE_TYPES = [_][]const u8{"postgres"};
+    pub const SINK_TYPES = [_][]const u8{"kafka"};
     pub const OPERATIONS = [_][]const u8{ "insert", "update", "delete" };
     pub const FORMATS = [_][]const u8{"json"};
     // Only username/password mechanisms; GSSAPI/OAUTHBEARER need auth plumbing we don't expose yet.
@@ -42,20 +42,9 @@ pub const PostgresSource = struct {
     publication_name: []const u8,
 };
 
-pub const MysqlSource = struct {
-    host: []const u8,
-    port: u16,
-    database: []const u8,
-    user: []const u8,
-    password_env: []const u8,
-    server_id: u32,
-    binlog_format: []const u8,
-};
-
 pub const SourceConfig = struct {
     type: []const u8,
     postgres: ?PostgresSource = null,
-    mysql: ?MysqlSource = null,
 };
 
 // Read the named environment variable; caller owns the result.
@@ -97,15 +86,9 @@ pub const KafkaSink = struct {
     }
 };
 
-pub const WebhookSink = struct {
-    url: []const u8,
-    method: []const u8,
-};
-
 pub const SinkConfig = struct {
     type: []const u8,
     kafka: ?KafkaSink = null,
-    webhook: ?WebhookSink = null,
 };
 
 pub const StreamSource = struct {
@@ -212,14 +195,6 @@ pub const Config = struct {
         }
     }
 
-    fn validatePort(port: u16, field_name: []const u8) !void {
-        if (port == 0) {
-            std.log.warn("Invalid {s}: {d} (must be 1-65535)", .{ field_name, port });
-            return error.InvalidPort;
-        }
-        // u16 max is 65535, so no upper bound check needed
-    }
-
     fn validateArraySize(len: usize, max_len: usize, field_name: []const u8) !void {
         if (len == 0) {
             std.log.warn("Empty {s} array not allowed", .{field_name});
@@ -262,19 +237,6 @@ pub const Config = struct {
             if (!std.ascii.isAlphanumeric(char) and char != '.' and char != '_' and char != '-') {
                 std.log.warn("Invalid {s}: '{s}' contains invalid character '{c}'", .{ field_name, value, char });
                 return error.InvalidTopicFormat;
-            }
-        }
-    }
-
-    // Basic check only: alphanumeric, dots, hyphens.
-    fn validateHostname(value: []const u8, field_name: []const u8) !void {
-        try validateStringLength(value, ValidationLimits.MAX_HOSTNAME_LEN, field_name);
-
-        // Basic hostname validation: alphanumeric, dots, hyphens
-        for (value) |char| {
-            if (!std.ascii.isAlphanumeric(char) and char != '.' and char != '-') {
-                std.log.warn("Invalid {s}: '{s}' contains invalid character '{c}'", .{ field_name, value, char });
-                return error.InvalidHostnameFormat;
             }
         }
     }
@@ -384,14 +346,6 @@ pub const Config = struct {
             const postgres = self.source.postgres.?;
             if (postgres.connection_env.len == 0) return error.MissingPostgresConnectionEnv;
             if (postgres.slot_name.len == 0) return error.MissingPostgresSlotName;
-        } else if (std.mem.eql(u8, self.source.type, "mysql")) {
-            if (self.source.mysql == null) {
-                return error.MissingMysqlConfig;
-            }
-            const mysql = self.source.mysql.?;
-            if (mysql.host.len == 0) return error.MissingMysqlHost;
-            if (mysql.database.len == 0) return error.MissingMysqlDatabase;
-            if (mysql.user.len == 0) return error.MissingMysqlUser;
         }
 
         // Check sink configuration structure
@@ -401,10 +355,6 @@ pub const Config = struct {
             }
             const kafka = self.sink.kafka.?;
             if (kafka.brokers.len == 0) return error.MissingKafkaBrokers;
-        } else if (std.mem.eql(u8, self.sink.type, "webhook")) {
-            if (self.sink.webhook == null) {
-                return error.MissingWebhookConfig;
-            }
         }
 
         // 4. DETAILED FIELD VALIDATION
@@ -414,14 +364,6 @@ pub const Config = struct {
             try validateStringLength(postgres.connection_env, ValidationLimits.MAX_IDENTIFIER_LEN, "postgres.connection_env");
             try validatePostgresIdentifier(postgres.slot_name, "postgres.slot_name");
             try validatePostgresIdentifier(postgres.publication_name, "postgres.publication_name");
-        } else if (std.mem.eql(u8, self.source.type, "mysql")) {
-            const mysql = self.source.mysql.?;
-            try validateHostname(mysql.host, "mysql.host");
-            try validatePort(mysql.port, "mysql.port");
-            try validatePostgresIdentifier(mysql.database, "mysql.database");
-            try validatePostgresIdentifier(mysql.user, "mysql.user");
-            try validateStringLength(mysql.password_env, ValidationLimits.MAX_IDENTIFIER_LEN, "mysql.password_env");
-            try validateStringLength(mysql.binlog_format, ValidationLimits.MAX_IDENTIFIER_LEN, "mysql.binlog_format");
         }
 
         // Enhanced sink validation with string limits and format checks
@@ -437,10 +379,6 @@ pub const Config = struct {
             if (kafka.sasl) |sasl| {
                 try validateKafkaSasl(allocator, sasl);
             }
-        } else if (std.mem.eql(u8, self.sink.type, "webhook")) {
-            const webhook = self.sink.webhook.?;
-            try validateStringLength(webhook.url, ValidationLimits.MAX_URL_LEN, "webhook.url");
-            try validateStringLength(webhook.method, ValidationLimits.MAX_IDENTIFIER_LEN, "webhook.method");
         }
 
         // 5. STREAMS VALIDATION

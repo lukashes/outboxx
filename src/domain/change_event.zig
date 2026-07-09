@@ -104,7 +104,7 @@ pub const DataSection = union(enum) {
 
 /// Source metadata for a change event.
 pub const Metadata = struct {
-    source: []const u8, // "postgres", "mysql", etc.
+    source: []const u8, // "postgres"
     resource: []const u8, // table/collection name
     schema: []const u8, // database schema
     timestamp: i64, // when the change occurred

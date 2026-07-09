@@ -81,6 +81,13 @@ test "createTestDefault" {
     try testing.expectEqualStrings("localhost:9092", cfg.sink.kafka.?.brokers[0]);
 }
 
+test "supported adapter types are implemented" {
+    try testing.expectEqual(@as(usize, 1), config.SupportedValues.SOURCE_TYPES.len);
+    try testing.expectEqualStrings("postgres", config.SupportedValues.SOURCE_TYPES[0]);
+    try testing.expectEqual(@as(usize, 1), config.SupportedValues.SINK_TYPES.len);
+    try testing.expectEqualStrings("kafka", config.SupportedValues.SINK_TYPES[0]);
+}
+
 // TOML parsing tests
 test "loadFromTomlFile - missing file fails fast" {
     const result = Config.loadFromTomlFile(testing.io, testing.allocator, "dummy_path");
