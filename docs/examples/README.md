@@ -26,5 +26,5 @@ export POSTGRES_URL="postgres://user:pass@host:5432/db?sslmode=require"
 ```
 
 For a local Docker stack and test scenarios, see [`dev/README.md`](../../dev/README.md).
-For the broader design and the not-yet-implemented parts of the vision (MySQL
-source, webhook sink, filtering), see [`docs/design/`](../design/).
+For the broader design and the not-yet-implemented parts of the vision, see
+[`docs/design/`](../design/).
