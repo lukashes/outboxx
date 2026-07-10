@@ -5,6 +5,10 @@ const source_mod = @import("source.zig");
 const PostgresSource = source_mod.PostgresSource;
 const Batch = source_mod.Batch;
 
+test {
+    @import("reflect").refAllDeclsRecursive(@import("source.zig"));
+}
+
 test "PostgresSource: init and deinit" {
     const allocator = testing.allocator;
 

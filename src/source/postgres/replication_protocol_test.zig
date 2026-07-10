@@ -11,6 +11,10 @@ const writeI64BigEndian = replication.writeI64BigEndian;
 const test_helpers = @import("test_helpers");
 const getTestConnectionString = test_helpers.getTestConnectionString;
 
+test {
+    @import("reflect").refAllDeclsRecursive(@import("replication_protocol.zig"));
+}
+
 test "readU64BigEndian: basic value" {
     const bytes = [_]u8{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x23 };
     const result = readU64BigEndian(&bytes);

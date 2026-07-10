@@ -125,17 +125,4 @@ pub const PostgresValidator = struct {
 
         print("PostgreSQL validation: Table '{s}.{s}' exists ✓\n", .{ schema, table_name });
     }
-
-    pub fn validateAll(self: *Self, tables: []const struct { schema: []const u8, name: []const u8 }) ValidationError!void {
-        print("=== PostgreSQL Validation ===\n", .{});
-
-        try self.checkPostgresVersion();
-        try self.checkWalLevel();
-
-        for (tables) |table| {
-            try self.checkTableExists(table.schema, table.name);
-        }
-
-        print("PostgreSQL validation: All checks passed ✓\n", .{});
-    }
 };

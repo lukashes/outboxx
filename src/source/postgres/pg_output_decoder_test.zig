@@ -3,6 +3,10 @@ const testing = std.testing;
 
 const decoder_mod = @import("pg_output_decoder.zig");
 const PgOutputDecoder = decoder_mod.PgOutputDecoder;
+
+test {
+    @import("reflect").refAllDeclsRecursive(@import("pg_output_decoder.zig"));
+}
 const PgOutputMessage = decoder_mod.PgOutputMessage;
 const MessageType = decoder_mod.MessageType;
 const TupleDataType = decoder_mod.TupleDataType;

@@ -4,6 +4,10 @@ const testing = std.testing;
 const config = @import("config.zig");
 const Config = config.Config;
 
+test {
+    @import("reflect").refAllDeclsRecursive(@import("config.zig"));
+}
+
 // Valid config built from static data. No allocations, so nothing to free.
 fn createTestDefault() Config {
     return .{

@@ -5,6 +5,10 @@ const relation_registry_mod = @import("relation_registry.zig");
 const RelationRegistry = relation_registry_mod.RelationRegistry;
 const pg_output_decoder = @import("pg_output_decoder.zig");
 const RelationMessage = pg_output_decoder.RelationMessage;
+
+test {
+    @import("reflect").refAllDeclsRecursive(@import("relation_registry.zig"));
+}
 const RelationMessageColumn = pg_output_decoder.RelationMessageColumn;
 
 fn createTestRelation(allocator: std.mem.Allocator, relation_id: u32, namespace: []const u8, relation_name: []const u8) !RelationMessage {
