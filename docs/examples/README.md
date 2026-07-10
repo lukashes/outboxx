@@ -32,8 +32,6 @@ configured address/port (default `0.0.0.0:9464`):
 - `GET /healthz` - liveness: 200 while the receive loop makes progress, 503 if it stalls.
 - `GET /readyz` - readiness: 200 once connected to Postgres and streaming, else 503.
 
-Events per second is a query, not a metric: `rate(outboxx_events_processed_total[1m])`.
-
 ## Run it
 
 ```bash
