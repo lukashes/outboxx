@@ -98,7 +98,7 @@ fn run(init: std.process.Init) !void {
     var obs = if (config.observability != null)
         try Observability.init(allocator, init.io)
     else
-        Observability.initDisabled();
+        Observability.noop();
     defer obs.deinit();
 
     try validatePostgres(allocator, config, conninfo);

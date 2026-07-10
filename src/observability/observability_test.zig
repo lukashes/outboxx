@@ -93,7 +93,7 @@ test "lag gauge renders the latest value on each scrape and never accumulates" {
 test "disabled observability records nothing but keeps health state" {
     const io = std.testing.io;
 
-    var obs = Observability.initDisabled();
+    var obs = Observability.noop();
     // No-ops: must not touch the null OTel plumbing.
     obs.addEvents(10);
     obs.recordProduceError();

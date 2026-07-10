@@ -45,7 +45,7 @@ pub const Observability = struct {
     streaming: std.atomic.Value(bool),
 
     /// No-op instance: no OTel objects, no HTTP server; all record calls return early.
-    pub fn initDisabled() Self {
+    pub fn noop() Self {
         return .{
             .allocator = undefined,
             .enabled = false,
@@ -121,11 +121,13 @@ pub const Observability = struct {
         c.add(@intCast(n), .{}) catch {};
     }
 
+    /// Count one pgoutput decode/convert failure.
     pub fn recordDecodeError(self: *Self) void {
         const c = self.decode_errors orelse return;
         c.add(1, .{}) catch {};
     }
 
+    /// Count one Kafka produce failure.
     pub fn recordProduceError(self: *Self) void {
         const c = self.produce_errors orelse return;
         c.add(1, .{}) catch {};
@@ -143,10 +145,12 @@ pub const Observability = struct {
         self.last_progress_sec.store(std.Io.Timestamp.now(io, .awake).toSeconds(), .monotonic);
     }
 
+    /// Record whether the Postgres replication connection is up (readiness input).
     pub fn markConnected(self: *Self, value: bool) void {
         self.connected.store(value, .monotonic);
     }
 
+    /// Mark that the replication stream has delivered at least one batch (readiness input).
     pub fn markStreaming(self: *Self) void {
         self.streaming.store(true, .monotonic);
     }

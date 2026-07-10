@@ -85,7 +85,7 @@ test "E2E: INSERT operation - full pipeline verification" {
     var producer = try KafkaProducer.init(allocator, "localhost:9092", null);
     try producer.testConnection();
 
-    var obs = Observability.initDisabled();
+    var obs = Observability.noop();
     var processor = Processor.init(allocator, source, producer, streams, &obs);
     defer processor.deinit();
 
@@ -223,7 +223,7 @@ test "E2E: UPDATE operation - full pipeline verification" {
     var producer = try KafkaProducer.init(allocator, "localhost:9092", null);
     try producer.testConnection();
 
-    var obs = Observability.initDisabled();
+    var obs = Observability.noop();
     var processor = Processor.init(allocator, source, producer, streams, &obs);
     defer processor.deinit();
 
@@ -354,7 +354,7 @@ test "E2E: DELETE operation - full pipeline verification" {
     var producer = try KafkaProducer.init(allocator, "localhost:9092", null);
     try producer.testConnection();
 
-    var obs = Observability.initDisabled();
+    var obs = Observability.noop();
     var processor = Processor.init(allocator, source, producer, streams, &obs);
     defer processor.deinit();
 
