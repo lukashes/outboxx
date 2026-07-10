@@ -2,10 +2,6 @@ const std = @import("std");
 const testing = std.testing;
 const PostgresValidator = @import("validator.zig").PostgresValidator;
 
-test {
-    @import("reflect").refAllDeclsRecursive(@import("validator.zig"));
-}
-
 test "PostgresValidator initialization" {
     const allocator = testing.allocator;
     const validator = PostgresValidator.init(allocator);

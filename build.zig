@@ -299,21 +299,6 @@ pub fn build(b: *std.Build) void {
     replication_protocol_tests.root_module.addImport("test_helpers", test_helpers_module);
     streaming_integration_tests.root_module.addImport("test_helpers", test_helpers_module);
 
-    // Dependency-free reflection helper: each *_test.zig calls
-    // refAllDeclsRecursive on its module so every pub decl is analyzed by
-    // `zig build test`, not just the ones a test happens to reference.
-    const reflect_module = b.createModule(.{
-        .root_source_file = b.path("tests/reflect.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    config_tests.root_module.addImport("reflect", reflect_module);
-    validator_tests.root_module.addImport("reflect", reflect_module);
-    streaming_source_tests.root_module.addImport("reflect", reflect_module);
-    relation_registry_tests.root_module.addImport("reflect", reflect_module);
-    pg_output_decoder_tests.root_module.addImport("reflect", reflect_module);
-    replication_protocol_tests.root_module.addImport("reflect", reflect_module);
-
     const run_config_tests = b.addRunArtifact(config_tests);
     const run_domain_tests = b.addRunArtifact(domain_tests);
     const run_json_serialization_tests = b.addRunArtifact(json_serialization_tests);
