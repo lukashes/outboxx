@@ -55,6 +55,38 @@ test "counters persist across scrapes without new activity" {
     }
 }
 
+fn scrapeLag(obs: *Observability, allocator: std.mem.Allocator) ![]u8 {
+    var aw = std.Io.Writer.Allocating.init(allocator);
+    defer aw.deinit();
+    try obs.writeMetrics(&aw.writer);
+    return aw.toOwnedSlice();
+}
+
+// Reproduces the idle path: after a real batch reports lag 19, the caught-up
+// branch keeps calling setLag(0). The rendered gauge must follow to 0, not
+// freeze at 19 (the load-stand symptom).
+test "lag gauge follows a later setLag(0) down to zero" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var obs = try Observability.init(allocator, io);
+    defer obs.deinit();
+
+    obs.setLag(19);
+    {
+        const out = try scrapeLag(&obs, allocator);
+        defer allocator.free(out);
+        try std.testing.expect(std.mem.indexOf(u8, out, "outboxx_replication_lag_seconds 19") != null);
+    }
+
+    obs.setLag(0);
+    {
+        const out = try scrapeLag(&obs, allocator);
+        defer allocator.free(out);
+        try std.testing.expect(std.mem.indexOf(u8, out, "outboxx_replication_lag_seconds 0") != null);
+    }
+}
+
 test "disabled observability records nothing but keeps health state" {
     const io = std.testing.io;
 

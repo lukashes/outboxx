@@ -61,7 +61,14 @@ pub const Observability = struct {
 
         // InMemory + manual collect() lets us render Prometheus text on scrape
         // instead of running the SDK's own background HTTP server/thread.
-        const inmem = try metrics.MetricExporter.InMemory(allocator, io, null, null);
+        //
+        // Pass DefaultTemporality explicitly: InMemory otherwise defaults every
+        // instrument to Cumulative, and the reader's cumulative path *sums*
+        // successive collected values. That is right for counters but wrong for
+        // the lag gauge — it would grow without bound and never fall back to 0.
+        // DefaultTemporality keeps counters Cumulative and gives the gauge Delta,
+        // so each scrape reports its last recorded value.
+        const inmem = try metrics.MetricExporter.InMemory(allocator, io, metrics.View.DefaultTemporality, null);
         errdefer inmem.in_memory.deinit();
 
         const reader = try metrics.MetricReader.init(allocator, io, inmem.exporter);
