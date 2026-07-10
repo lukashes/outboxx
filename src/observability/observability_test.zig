@@ -62,28 +62,31 @@ fn scrapeLag(obs: *Observability, allocator: std.mem.Allocator) ![]u8 {
     return aw.toOwnedSlice();
 }
 
-// Reproduces the idle path: after a real batch reports lag 19, the caught-up
-// branch keeps calling setLag(0). The rendered gauge must follow to 0, not
-// freeze at 19 (the load-stand symptom).
-test "lag gauge follows a later setLag(0) down to zero" {
+// The gauge must render the value from the most recent setLag, overwriting the
+// previous one — never summing successive records (the cumulative-temporality
+// bug: 19 then 600 would render 619). Walk a sequence that goes up, down to 0
+// (the caught-up idle path, the load-stand symptom), and back up, asserting each
+// scrape renders exactly the last value. Lines carry the trailing newline so a
+// value can't match as a prefix of a longer number.
+test "lag gauge renders the latest value on each scrape and never accumulates" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
 
     var obs = try Observability.init(allocator, io);
     defer obs.deinit();
 
-    obs.setLag(19);
-    {
-        const out = try scrapeLag(&obs, allocator);
-        defer allocator.free(out);
-        try std.testing.expect(std.mem.indexOf(u8, out, "outboxx_replication_lag_seconds 19") != null);
-    }
+    const steps = [_]struct { set: i64, want: []const u8 }{
+        .{ .set = 19, .want = "outboxx_replication_lag_seconds 19\n" },
+        .{ .set = 600, .want = "outboxx_replication_lag_seconds 600\n" }, // not 619
+        .{ .set = 0, .want = "outboxx_replication_lag_seconds 0\n" },
+        .{ .set = 5, .want = "outboxx_replication_lag_seconds 5\n" },
+    };
 
-    obs.setLag(0);
-    {
+    for (steps) |step| {
+        obs.setLag(step.set);
         const out = try scrapeLag(&obs, allocator);
         defer allocator.free(out);
-        try std.testing.expect(std.mem.indexOf(u8, out, "outboxx_replication_lag_seconds 0") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out, step.want) != null);
     }
 }
 

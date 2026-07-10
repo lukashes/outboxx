@@ -63,11 +63,12 @@ pub const Observability = struct {
         // instead of running the SDK's own background HTTP server/thread.
         //
         // Pass DefaultTemporality explicitly: InMemory otherwise defaults every
-        // instrument to Cumulative, and the reader's cumulative path *sums*
-        // successive collected values. That is right for counters but wrong for
-        // the lag gauge — it would grow without bound and never fall back to 0.
-        // DefaultTemporality keeps counters Cumulative and gives the gauge Delta,
-        // so each scrape reports its last recorded value.
+        // instrument to Cumulative, and the SDK's cumulative path *sums*
+        // successive collected values (open-telemetry/opentelemetry-zig#36). That
+        // is right for counters but wrong for the lag gauge — it would grow without
+        // bound and never fall back to 0. DefaultTemporality keeps counters
+        // Cumulative and gives the gauge Delta, so each scrape reports its last
+        // recorded value, which is what Prometheus expects for each.
         const inmem = try metrics.MetricExporter.InMemory(allocator, io, metrics.View.DefaultTemporality, null);
         errdefer inmem.in_memory.deinit();
 
