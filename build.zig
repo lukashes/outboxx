@@ -1,5 +1,33 @@
 const std = @import("std");
 
+// Modules that main.zig imports, shared by every outboxx executable variant.
+const MainModules = struct {
+    domain: *std.Build.Module,
+    json_serialization: *std.Build.Module,
+    kafka_producer: *std.Build.Module,
+    config: *std.Build.Module,
+    postgres_source: *std.Build.Module,
+    constants: *std.Build.Module,
+    c: *std.Build.Module,
+};
+
+// Wire main.zig's imports and C libraries onto an executable's root module.
+// Release, debug, and release-small all need the identical set, so they share
+// this instead of drifting — the drift that had left debug/release-small with
+// no imports and uncompilable (#36).
+fn wireMainExe(mod: *std.Build.Module, mods: MainModules) void {
+    mod.addImport("domain", mods.domain);
+    mod.addImport("json_serialization", mods.json_serialization);
+    mod.addImport("kafka_producer", mods.kafka_producer);
+    mod.addImport("config", mods.config);
+    mod.addImport("postgres_source", mods.postgres_source);
+    mod.addImport("constants", mods.constants);
+    mod.addImport("c", mods.c);
+    mod.link_libc = true;
+    mod.linkSystemLibrary("pq", .{});
+    mod.linkSystemLibrary("rdkafka", .{});
+}
+
 pub fn build(b: *std.Build) void {
     // Standard target options allow the person running zig build to pick the architecture and OS
     const target = b.standardTargetOptions(.{});
@@ -123,23 +151,17 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    // Dependencies for the main executable
-    exe.root_module.addImport("domain", domain_module);
-    exe.root_module.addImport("json_serialization", json_serialization_module);
-    exe.root_module.addImport("kafka_producer", kafka_producer_module);
-    exe.root_module.addImport("config", config_module);
-    exe.root_module.addImport("postgres_source", postgres_source_module);
-    exe.root_module.addImport("constants", constants_module);
-    exe.root_module.addImport("c", c_prod_module);
-
-    // Link libc for PostgreSQL and Kafka C libraries
-    exe.root_module.link_libc = true;
-
-    // Add PostgreSQL library (libpq)
-    exe.root_module.linkSystemLibrary("pq", .{});
-
-    // Add Kafka library (librdkafka)
-    exe.root_module.linkSystemLibrary("rdkafka", .{});
+    // Modules main.zig imports; shared across the release/debug/small variants.
+    const main_modules = MainModules{
+        .domain = domain_module,
+        .json_serialization = json_serialization_module,
+        .kafka_producer = kafka_producer_module,
+        .config = config_module,
+        .postgres_source = postgres_source_module,
+        .constants = constants_module,
+        .c = c_prod_module,
+    };
+    wireMainExe(exe.root_module, main_modules);
 
     b.installArtifact(exe);
 
@@ -353,8 +375,7 @@ pub fn build(b: *std.Build) void {
             .optimize = .Debug,
         }),
     });
-    debug_exe.root_module.link_libc = true;
-    debug_exe.root_module.linkSystemLibrary("pq", .{});
+    wireMainExe(debug_exe.root_module, main_modules);
 
     const debug_install = b.addInstallArtifact(debug_exe, .{});
     const debug_step = b.step("debug", "Build debug version");
@@ -369,8 +390,7 @@ pub fn build(b: *std.Build) void {
             .optimize = .ReleaseSmall,
         }),
     });
-    release_small_exe.root_module.link_libc = true;
-    release_small_exe.root_module.linkSystemLibrary("pq", .{});
+    wireMainExe(release_small_exe.root_module, main_modules);
 
     const release_small_install = b.addInstallArtifact(release_small_exe, .{});
     const release_small_step = b.step("release-small", "Build release version optimized for size");
