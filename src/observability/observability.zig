@@ -35,7 +35,6 @@ pub const Observability = struct {
 
     // Instruments; null when disabled.
     events: ?*metrics.Counter(u64) = null,
-    decode_errors: ?*metrics.Counter(u64) = null,
     produce_errors: ?*metrics.Counter(u64) = null,
     lag: ?*metrics.Gauge(i64) = null,
 
@@ -88,10 +87,6 @@ pub const Observability = struct {
                 .name = "outboxx_events_processed_total",
                 .description = "WAL change events consumed from the replication stream",
             }),
-            .decode_errors = try meter.createCounter(u64, .{
-                .name = "outboxx_decode_errors_total",
-                .description = "pgoutput decode/convert failures",
-            }),
             .produce_errors = try meter.createCounter(u64, .{
                 .name = "outboxx_produce_errors_total",
                 .description = "Kafka produce failures",
@@ -119,12 +114,6 @@ pub const Observability = struct {
     pub fn addEvents(self: *Self, n: usize) void {
         const c = self.events orelse return;
         c.add(@intCast(n), .{}) catch {};
-    }
-
-    /// Count one pgoutput decode/convert failure.
-    pub fn recordDecodeError(self: *Self) void {
-        const c = self.decode_errors orelse return;
-        c.add(1, .{}) catch {};
     }
 
     /// Count one Kafka produce failure.

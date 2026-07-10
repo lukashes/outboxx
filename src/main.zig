@@ -116,7 +116,6 @@ fn run(init: std.process.Init) !void {
 
     printStatus("Connecting to PostgreSQL streaming replication...\n", .{});
     try source.connect(conninfo, "0/0");
-    obs.markConnected(true);
 
     const producer = try initKafkaProducer(allocator, config.sink.kafka.?, kafka_sasl_pw);
     // NOTE: producer will be deinit'd by processor.deinit()

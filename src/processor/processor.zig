@@ -118,13 +118,7 @@ pub const Processor = struct {
 
     /// Receive one batch, route each change to its streams, and stage the batch LSN for commit.
     pub fn processChangesToKafka(self: *Self, io: std.Io, batch_allocator: std.mem.Allocator, limit: u32) !void {
-        var batch = self.source.receiveBatch(io, batch_allocator, limit) catch |err| {
-            switch (err) {
-                error.DecodeFailed, error.ConversionFailed => self.obs.recordDecodeError(),
-                else => {},
-            }
-            return err;
-        };
+        var batch = try self.source.receiveBatch(io, batch_allocator, limit);
         defer batch.deinit();
 
         // A successful receive (even an empty batch) means we are connected and
@@ -210,6 +204,10 @@ pub const Processor = struct {
 
     /// Run the batch loop until stop_signal is set, with a background flush/commit worker.
     pub fn startStreaming(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !void {
+        // The source is connected and validated before we get here, so readiness's
+        // connection signal goes up now; markStreaming follows on the first batch.
+        self.obs.markConnected(true);
+
         const producer = &self.producer;
 
         // Background flush/commit loop. `concurrent` not `async`: it must run
