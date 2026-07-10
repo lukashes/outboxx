@@ -23,11 +23,11 @@ Outboxx captures PostgreSQL database changes in real-time and streams them to Ka
 - Multi-table CDC streams
 - Kafka producer integration
 - TOML-based configuration
+- Prometheus metrics and health endpoints
 - Memory-safe Zig implementation
 
 ## Roadmap
 
-- Observability
 - Schema Registry
 - Table/Column Filtering
 
