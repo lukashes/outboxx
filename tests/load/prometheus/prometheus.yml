@@ -18,6 +18,12 @@ scrape_configs:
       - targets:
           - kafka-exporter:9308
 
+  # Outboxx's own /metrics (only up under the `compare` profile).
+  - job_name: outboxx
+    static_configs:
+      - targets:
+          - outboxx:9464
+
   - job_name: cadvisor
     static_configs:
       - targets:

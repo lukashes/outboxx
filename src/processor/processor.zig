@@ -11,6 +11,21 @@ const ChangeEvent = domain.ChangeEvent;
 const json_serializer = @import("json_serialization");
 const JsonSerializer = json_serializer.JsonSerializer;
 const constants = @import("constants");
+pub const Observability = @import("observability").Observability;
+
+// Per-batch tally of routed change events by stream and operation, so the events
+// counter is updated once per distinct combo instead of once per routed change.
+const EventCount = struct { stream: []const u8, operation: []const u8, count: u64 };
+
+fn tallyEvent(list: *std.ArrayList(EventCount), allocator: std.mem.Allocator, stream: []const u8, operation: []const u8) !void {
+    for (list.items) |*e| {
+        if (std.mem.eql(u8, e.stream, stream) and std.mem.eql(u8, e.operation, operation)) {
+            e.count += 1;
+            return;
+        }
+    }
+    try list.append(allocator, .{ .stream = stream, .operation = operation, .count = 1 });
+}
 
 /// Return the streams whose resource and operations match a given table change; caller owns the list.
 pub fn matchStreams(allocator: std.mem.Allocator, streams: []const Stream, table_name: []const u8, operation: []const u8) !std.ArrayList(Stream) {
@@ -90,19 +105,21 @@ pub const Processor = struct {
     producer: KafkaProducer,
     streams: []const Stream,
     serializer: JsonSerializer,
+    obs: *Observability,
 
     events_processed: usize,
     pending_lsn: std.atomic.Value(u64),
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, source: PostgresSource, producer: KafkaProducer, streams: []const Stream) Self {
+    pub fn init(allocator: std.mem.Allocator, source: PostgresSource, producer: KafkaProducer, streams: []const Stream, obs: *Observability) Self {
         return Self{
             .allocator = allocator,
             .source = source,
             .producer = producer,
             .streams = streams,
             .serializer = JsonSerializer.init(),
+            .obs = obs,
             .events_processed = 0,
             .pending_lsn = std.atomic.Value(u64).init(0),
         };
@@ -118,14 +135,26 @@ pub const Processor = struct {
         var batch = try self.source.receiveBatch(io, batch_allocator, limit);
         defer batch.deinit();
 
+        // A successful receive (even an empty batch) means we are connected and
+        // reading the replication stream — the signal readiness cares about.
+        self.obs.markStreaming();
+
         const producer = &self.producer;
 
         if (batch.changes.len == 0) {
             self.pending_lsn.store(batch.last_lsn, .release);
+            self.obs.setLag(0); // drained everything available -> caught up
             return;
         }
 
         std.log.debug("Processing {} changes from batch (LSN: {})", .{ batch.changes.len, batch.last_lsn });
+
+        // Refresh lag once per batch; event counts are tallied per (stream, operation)
+        // in the loop and emitted after it, so the counter costs one add() per distinct
+        // combo per batch instead of one per routed change.
+        self.obs.setLag(batch.replication_lag_seconds);
+        var event_counts = std.ArrayList(EventCount).empty;
+        defer event_counts.deinit(batch_allocator);
 
         for (batch.changes) |change_event| {
             var matched = try matchStreams(batch_allocator, self.streams, change_event.meta.resource, change_event.op);
@@ -146,7 +175,12 @@ pub const Processor = struct {
                 const topic_name = stream.sink.destination;
                 const partition_key = try self.getPartitionKey(batch_allocator, change_event, stream);
 
-                try producer.sendMessage(topic_name, partition_key, json_bytes);
+                producer.sendMessage(topic_name, partition_key, json_bytes) catch |err| {
+                    self.obs.recordProduceError();
+                    return err;
+                };
+
+                try tallyEvent(&event_counts, batch_allocator, stream.name, change_event.op);
 
                 self.events_processed += 1;
                 if (self.events_processed % 10000 == 0) {
@@ -162,6 +196,8 @@ pub const Processor = struct {
                 });
             }
         }
+
+        for (event_counts.items) |e| self.obs.addEvents(e.count, e.stream, e.operation);
 
         producer.poll();
 
@@ -189,6 +225,10 @@ pub const Processor = struct {
 
     /// Run the batch loop until stop_signal is set, with a background flush/commit worker.
     pub fn startStreaming(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !void {
+        // The source is connected and validated before we get here, so readiness's
+        // connection signal goes up now; markStreaming follows on the first batch.
+        self.obs.markConnected(true);
+
         const producer = &self.producer;
 
         // Background flush/commit loop. `concurrent` not `async`: it must run
@@ -204,6 +244,8 @@ pub const Processor = struct {
         errdefer flush_future.cancel(io);
 
         while (!stop_signal.load(.monotonic)) {
+            self.obs.heartbeat(io);
+
             var batch_arena = std.heap.ArenaAllocator.init(self.allocator);
             defer batch_arena.deinit();
 

@@ -43,6 +43,22 @@ pub fn build(b: *std.Build) void {
     });
     config_module.addImport("toml", toml_module);
 
+    // OpenTelemetry SDK: metric instruments + aggregation behind the observability facade.
+    // It sets a preferred optimize mode, so it takes -Drelease, not -Doptimize; pass only target.
+    const otel_dep = b.dependency("opentelemetry", .{
+        .target = target,
+    });
+    const otel_module = otel_dep.module("sdk");
+
+    // Observability module (Prometheus /metrics + health endpoints), the only OTel consumer.
+    const observability_module = b.createModule(.{
+        .root_source_file = b.path("src/observability/observability.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    observability_module.addImport("opentelemetry-sdk", otel_module);
+    observability_module.addImport("constants", constants_module);
+
     // Domain module (new architecture) - must be defined before use
     const domain_module = b.createModule(.{
         .root_source_file = b.path("src/domain/change_event.zig"),
@@ -111,6 +127,7 @@ pub fn build(b: *std.Build) void {
     cdc_processor_module.addImport("kafka_producer", kafka_producer_module);
     cdc_processor_module.addImport("config", config_module);
     cdc_processor_module.addImport("constants", constants_module);
+    cdc_processor_module.addImport("observability", observability_module);
 
     // Main executable
     const exe = b.addExecutable(.{
@@ -130,6 +147,7 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("config", config_module);
     exe.root_module.addImport("postgres_source", postgres_source_module);
     exe.root_module.addImport("constants", constants_module);
+    exe.root_module.addImport("observability", observability_module);
     exe.root_module.addImport("c", c_prod_module);
 
     // Link libc for PostgreSQL and Kafka C libraries
@@ -164,6 +182,17 @@ pub fn build(b: *std.Build) void {
         }),
     });
     config_tests.root_module.addImport("toml", toml_module);
+
+    // Observability tests (metrics rendering + health logic)
+    const observability_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/observability/observability_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    observability_tests.root_module.addImport("opentelemetry-sdk", otel_module);
+    observability_tests.root_module.addImport("constants", constants_module);
 
     // Domain layer tests (new)
     const domain_tests = b.addTest(.{
@@ -278,6 +307,7 @@ pub fn build(b: *std.Build) void {
     streaming_integration_tests.root_module.addImport("test_helpers", test_helpers_module);
 
     const run_config_tests = b.addRunArtifact(config_tests);
+    const run_observability_tests = b.addRunArtifact(observability_tests);
     const run_domain_tests = b.addRunArtifact(domain_tests);
     const run_json_serialization_tests = b.addRunArtifact(json_serialization_tests);
     const run_kafka_producer_tests = b.addRunArtifact(kafka_producer_tests);
@@ -289,6 +319,7 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_config_tests.step);
+    test_step.dependOn(&run_observability_tests.step);
     test_step.dependOn(&run_domain_tests.step);
     test_step.dependOn(&run_json_serialization_tests.step);
     test_step.dependOn(&run_pg_output_decoder_tests.step);

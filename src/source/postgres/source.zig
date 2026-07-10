@@ -28,6 +28,9 @@ pub const RelationMessage = pg_output_decoder.RelationMessage;
 pub const RelationMessageColumn = pg_output_decoder.RelationMessageColumn;
 pub const RelationRegistry = relation_registry.RelationRegistry;
 
+// Unix time of the Postgres epoch (2000-01-01 UTC), to convert commit timestamps.
+const POSTGRES_EPOCH_UNIX_SECONDS: i64 = 946684800;
+
 /// Batch of changes from PostgreSQL (streaming source)
 pub const Batch = struct {
     /// Change events (flat list)
@@ -35,6 +38,10 @@ pub const Batch = struct {
 
     /// LSN for feedback (last change in batch)
     last_lsn: u64,
+
+    /// Seconds the last transaction in this batch is behind now (wall clock minus
+    /// the transaction's commit time). 0 when the batch carried no data (caught up).
+    replication_lag_seconds: i64,
 
     allocator: std.mem.Allocator,
 
@@ -67,6 +74,10 @@ pub const PostgresSource = struct {
     decoder: PgOutputDecoder,
     converter: Converter,
     last_lsn: u64, // Last confirmed LSN (starting point for next batch)
+    // Commit timestamp (us since the Postgres epoch) of the last transaction seen.
+    // The stream does not expose the server WAL head during a backlog, so lag is
+    // measured as wall-clock time behind this commit, like Debezium.
+    last_commit_time: i64,
 
     const Self = @This();
 
@@ -82,6 +93,7 @@ pub const PostgresSource = struct {
             .decoder = PgOutputDecoder.init(allocator),
             .converter = Converter.init(allocator),
             .last_lsn = 0,
+            .last_commit_time = 0,
         };
     }
 
@@ -182,9 +194,19 @@ pub const PostgresSource = struct {
         // Update instance LSN for next batch
         self.last_lsn = last_confirmed_lsn;
 
+        // Time behind source: wall clock minus the last transaction's commit time.
+        // Postgres commit timestamps are microseconds since 2000-01-01, so shift to
+        // the Unix epoch before comparing. 0 until we have seen a commit.
+        const lag_seconds: i64 = if (self.last_commit_time == 0) 0 else blk: {
+            const commit_unix = @divFloor(self.last_commit_time, std.time.us_per_s) + POSTGRES_EPOCH_UNIX_SECONDS;
+            const now_unix = std.Io.Timestamp.now(io, .real).toSeconds();
+            break :blk @max(now_unix - commit_unix, 0);
+        };
+
         return .{
             .changes = try changes.toOwnedSlice(batch_allocator),
             .last_lsn = last_confirmed_lsn,
+            .replication_lag_seconds = lag_seconds,
             .allocator = batch_allocator,
         };
     }
@@ -205,6 +227,13 @@ pub const PostgresSource = struct {
                     return PostgresSourceError.DecodeFailed; // Propagate error up
                 };
                 defer pg_msg.deinit(batch_allocator);
+
+                // BEGIN/COMMIT carry the transaction's commit timestamp, used for the lag metric.
+                switch (pg_msg) {
+                    .begin => |b| self.last_commit_time = b.commit_time,
+                    .commit => |c| self.last_commit_time = c.commit_time,
+                    else => {},
+                }
 
                 const change_opt = self.converter.convert(io, batch_allocator, pg_msg) catch |err| {
                     std.log.warn("Failed to convert message to ChangeEvent at LSN {}: {}", .{ xlog.server_wal_end, err });

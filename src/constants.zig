@@ -24,3 +24,10 @@ pub const CDC = struct {
     pub const KAFKA_BATCH_SIZE = "262144"; // 256KB batches for better network utilization
     pub const KAFKA_POLL_INTERVAL: u32 = 100; // Poll every N messages (reduces syscall overhead)
 };
+
+/// Observability tuning constants.
+pub const OBSERVABILITY = struct {
+    // Liveness turns unhealthy if the receive loop makes no progress for this long.
+    // Must exceed BATCH_WAIT and the flush interval; keepalives keep it fresh when idle.
+    pub const LIVENESS_MAX_STALE_SEC: i64 = 30;
+};

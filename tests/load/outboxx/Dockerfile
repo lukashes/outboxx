@@ -13,4 +13,5 @@ COPY . .
 RUN nix develop --command zig build -Doptimize=ReleaseFast
 
 WORKDIR /app
+EXPOSE 9464
 ENTRYPOINT ["/src/zig-out/bin/outboxx"]

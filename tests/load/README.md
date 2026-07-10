@@ -16,7 +16,7 @@ make reset
 What each command does:
 
 - `make infra` starts PostgreSQL, Kafka, Kafka UI, Prometheus, Grafana, exporters, and cAdvisor. It stops Debezium/Outboxx if they exist and creates logical replication slots before any workload.
-- `make load` starts `infra` if needed and generates PostgreSQL writes while CDC readers are stopped, so WAL accumulates behind the slots.
+- `make load` brings infra and slots up if needed, then generates PostgreSQL writes. It leaves any running readers in place, so lag and throughput can be watched live while the load runs. For the readers-down backlog scenario (WAL accumulating behind the slots), run `make infra` first.
 - `make start-debezium` starts only Debezium. Outboxx is stopped/removed first.
 - `make start-outboxx` starts only Outboxx. Debezium and connector-init are stopped/removed first.
 - `make start-all` starts Debezium and Outboxx together. Debezium is registered automatically.
@@ -168,4 +168,12 @@ debezium.public.benchmark_records         # Debezium
 outboxx.public.benchmark_records          # Outboxx
 ```
 
-Grafana dashboard: **CDC / Debezium benchmark overview**.
+Grafana dashboard: **CDC / Debezium benchmark overview**. Besides the Kafka/cAdvisor
+comparison panels, Prometheus scrapes Outboxx's own `/metrics` (job `outboxx`, port
+9464) and Debezium's JMX metrics, so two panels compare each tool's self-reported
+numbers side by side: events/sec (`outboxx_events_processed_total` vs
+`debezium_postgres_streaming_totalnumberofeventsseen`) and lag behind source in
+seconds (`outboxx_replication_lag_seconds` vs Debezium's
+`millisecondsbehindsource / 1000`). Both lag metrics are wall-clock time behind the
+last committed transaction, so they share one axis. The Kafka-offset append-rate
+panel stays as an independent throughput comparison.
