@@ -203,6 +203,14 @@ pub const Config = struct {
         }
     }
 
+    // Reject port 0; u16 already caps the upper bound at 65535.
+    fn validatePort(port: u16, field_name: []const u8) !void {
+        if (port == 0) {
+            std.log.warn("Invalid {s}: port must be 1-65535", .{field_name});
+            return error.InvalidPort;
+        }
+    }
+
     fn validateArraySize(len: usize, max_len: usize, field_name: []const u8) !void {
         if (len == 0) {
             std.log.warn("Empty {s} array not allowed", .{field_name});
