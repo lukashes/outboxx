@@ -6,8 +6,10 @@ const metrics = otel.metrics;
 
 pub const serve = @import("http.zig").serve;
 
-// Last rendered value of a single metric series, kept between scrapes.
-const Sample = struct { prom_type: []const u8, value: i64 };
+// Last rendered value of one metric series, kept between scrapes. The snapshot
+// keys on the full Prometheus series (name plus any labels); `name` is retained
+// so the `# TYPE` line can be grouped per metric.
+const Sample = struct { name: []const u8, prom_type: []const u8, value: i64 };
 
 /// Metric instruments plus liveness/readiness state for the pipeline, sitting
 /// behind the OpenTelemetry SDK. Constructed either enabled (real OTel plumbing)
@@ -30,8 +32,14 @@ pub const Observability = struct {
 
     // collect() only emits instruments touched since the last call; this holds the
     // latest value of every series so each scrape renders them all. Keyed by the
-    // instrument name, which the SDK borrows for the instrument's lifetime.
+    // full series string (name plus labels), which we own because the SDK frees the
+    // measurements after each scrape.
     snapshot: std.StringHashMapUnmanaged(Sample) = .{},
+
+    // Owns label-value strings handed to the SDK. Instruments borrow attribute
+    // strings (they are not copied) and a series persists across scrapes, so a
+    // label must outlive the per-batch memory a table name comes from.
+    label_pool: std.StringHashMapUnmanaged(void) = .{},
 
     // Instruments; null when disabled.
     events: ?*metrics.Counter(u64) = null,
@@ -104,16 +112,33 @@ pub const Observability = struct {
 
     pub fn deinit(self: *Self) void {
         if (!self.enabled) return;
+        var keys = self.snapshot.keyIterator();
+        while (keys.next()) |k| self.allocator.free(k.*);
         self.snapshot.deinit(self.allocator);
+        var labels = self.label_pool.keyIterator();
+        while (labels.next()) |k| self.allocator.free(k.*);
+        self.label_pool.deinit(self.allocator);
         if (self.reader) |r| r.shutdown();
         if (self.mp) |p| p.shutdown();
         if (self.in_memory) |m| m.deinit();
     }
 
-    /// Count WAL change events consumed in a batch (n = batch.changes.len).
-    pub fn addEvents(self: *Self, n: usize) void {
+    // Return a copy of `s` owned for the lifetime of this Observability, so the SDK's
+    // borrowed attribute pointer stays valid until the series is scraped. The set of
+    // distinct label values is small (configured tables), so this stays bounded.
+    fn intern(self: *Self, s: []const u8) ![]const u8 {
+        const gop = try self.label_pool.getOrPut(self.allocator, s);
+        if (!gop.found_existing) gop.key_ptr.* = try self.allocator.dupe(u8, s);
+        return gop.key_ptr.*;
+    }
+
+    /// Count change events routed by a stream, tagged by the config stream name and operation.
+    /// Callers aggregate per batch, so this runs once per distinct combo, not per change.
+    /// The stream name is interned; `operation` is a static tag name and needs no copy.
+    pub fn addEvents(self: *Self, n: u64, stream: []const u8, operation: []const u8) void {
         const c = self.events orelse return;
-        c.add(@intCast(n), .{}) catch {};
+        const stream_owned = self.intern(stream) catch return;
+        c.add(n, .{ "stream", stream_owned, "operation", operation }) catch {};
     }
 
     /// Count one Kafka produce failure.
@@ -155,10 +180,11 @@ pub const Observability = struct {
         return self.connected.load(.monotonic) and self.streaming.load(.monotonic) and self.liveness(io);
     }
 
-    /// Collect the current metric snapshot and render it as Prometheus text.
-    /// On-scrape: `collect()` drives the aggregator, `fetch()` drains it, and we
-    /// format the scalar (attribute-less) instruments ourselves — the SDK's
-    /// PrometheusFormatter is not part of its public surface.
+    /// Collect the current metrics and render them as Prometheus text. On scrape,
+    /// `collect()` drives the aggregator and `fetch()` drains it; we render the text
+    /// ourselves (the SDK's PrometheusFormatter is not public). Each (name, label set)
+    /// is one series, kept in the snapshot so a series that did not change this cycle
+    /// is still present on every scrape.
     pub fn writeMetrics(self: *Self, writer: *std.Io.Writer) !void {
         const reader = self.reader orelse return;
         const in_memory = self.in_memory orelse return;
@@ -170,28 +196,113 @@ pub const Observability = struct {
             self.allocator.free(measurements);
         }
 
-        // Merge this collection into the persistent snapshot (scalar, unlabeled series only).
         for (measurements) |m| {
             const prom_type: []const u8 = switch (m.instrumentKind) {
                 .Counter, .ObservableCounter => "counter",
                 else => "gauge",
             };
-            switch (m.data) {
-                .int => |points| {
-                    if (points.len == 0) continue;
-                    try self.snapshot.put(self.allocator, m.instrumentOptions.name, .{
-                        .prom_type = prom_type,
-                        .value = points[points.len - 1].value,
-                    });
-                },
-                else => {},
+            const points = switch (m.data) {
+                .int => |p| p,
+                else => continue,
+            };
+            for (points) |point| {
+                try self.upsertSeries(m.instrumentOptions.name, prom_type, point);
             }
         }
 
+        try self.renderSnapshot(writer);
+    }
+
+    // Merge one data point into the snapshot under its full series key (name plus
+    // rendered labels). A new series dupes its key into snapshot-owned memory, since
+    // the SDK frees the measurements after the scrape; a known series updates value.
+    fn upsertSeries(self: *Self, name: []const u8, prom_type: []const u8, point: anytype) !void {
+        var series = std.ArrayList(u8).empty;
+        errdefer series.deinit(self.allocator);
+        try series.appendSlice(self.allocator, name);
+        try appendLabels(self.allocator, &series, point.attributes);
+
+        const gop = try self.snapshot.getOrPut(self.allocator, series.items);
+        if (gop.found_existing) {
+            series.deinit(self.allocator);
+        } else {
+            gop.key_ptr.* = try series.toOwnedSlice(self.allocator);
+            gop.value_ptr.name = name;
+            gop.value_ptr.prom_type = prom_type;
+        }
+        gop.value_ptr.value = point.value;
+    }
+
+    // Render the snapshot, grouped by metric name so each `# TYPE` line precedes its
+    // series exactly once (Prometheus rejects a family split across the exposition).
+    fn renderSnapshot(self: *Self, writer: *std.Io.Writer) !void {
+        const Entry = struct { series: []const u8, name: []const u8, prom_type: []const u8, value: i64 };
+
+        var entries = std.ArrayList(Entry).empty;
+        defer entries.deinit(self.allocator);
         var it = self.snapshot.iterator();
-        while (it.next()) |entry| {
-            const name = entry.key_ptr.*;
-            try writer.print("# TYPE {s} {s}\n{s} {d}\n", .{ name, entry.value_ptr.prom_type, name, entry.value_ptr.value });
+        while (it.next()) |e| {
+            try entries.append(self.allocator, .{
+                .series = e.key_ptr.*,
+                .name = e.value_ptr.name,
+                .prom_type = e.value_ptr.prom_type,
+                .value = e.value_ptr.value,
+            });
+        }
+
+        std.mem.sort(Entry, entries.items, {}, struct {
+            fn lessThan(_: void, a: Entry, b: Entry) bool {
+                if (!std.mem.eql(u8, a.name, b.name)) return std.mem.lessThan(u8, a.name, b.name);
+                return std.mem.lessThan(u8, a.series, b.series);
+            }
+        }.lessThan);
+
+        var current_name: []const u8 = "";
+        for (entries.items) |e| {
+            if (!std.mem.eql(u8, e.name, current_name)) {
+                try writer.print("# TYPE {s} {s}\n", .{ e.name, e.prom_type });
+                current_name = e.name;
+            }
+            try writer.print("{s} {d}\n", .{ e.series, e.value });
         }
     }
 };
+
+// Append `{k="v",...}` for a data point's attributes, or nothing when it has none.
+// Attribute order matches the add() call site, so a series renders identically each scrape.
+fn appendLabels(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), attributes: anytype) !void {
+    const attrs = attributes orelse return;
+    if (attrs.len == 0) return;
+    try buf.append(allocator, '{');
+    for (attrs, 0..) |attr, i| {
+        if (i > 0) try buf.append(allocator, ',');
+        try buf.appendSlice(allocator, attr.key);
+        try buf.appendSlice(allocator, "=\"");
+        try appendLabelValue(allocator, buf, attr.value);
+        try buf.append(allocator, '"');
+    }
+    try buf.append(allocator, '}');
+}
+
+// Render one attribute value into a label value, escaping the three characters the
+// Prometheus exposition format requires inside a quoted string.
+fn appendLabelValue(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), value: anytype) !void {
+    switch (value) {
+        .string => |s| for (s) |ch| switch (ch) {
+            '"' => try buf.appendSlice(allocator, "\\\""),
+            '\\' => try buf.appendSlice(allocator, "\\\\"),
+            '\n' => try buf.appendSlice(allocator, "\\n"),
+            else => try buf.append(allocator, ch),
+        },
+        .bool => |b| try buf.appendSlice(allocator, if (b) "true" else "false"),
+        .int => |n| {
+            var tmp: [32]u8 = undefined;
+            try buf.appendSlice(allocator, std.fmt.bufPrint(&tmp, "{d}", .{n}) catch return);
+        },
+        .double => |d| {
+            var tmp: [64]u8 = undefined;
+            try buf.appendSlice(allocator, std.fmt.bufPrint(&tmp, "{d}", .{d}) catch return);
+        },
+        else => {},
+    }
+}

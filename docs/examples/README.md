@@ -25,7 +25,7 @@ With an `[observability]` section, Outboxx serves three HTTP endpoints on the
 configured address/port (default `0.0.0.0:9464`):
 
 - `GET /metrics` - Prometheus text exposition, currently:
-  - `outboxx_events_processed_total` (counter) - WAL change events consumed
+  - `outboxx_events_processed_total` (counter, labeled by `stream` and `operation`) - WAL change events routed, per configured stream
   - `outboxx_produce_errors_total` (counter) - Kafka produce failures
   - `outboxx_replication_lag_seconds` (gauge) - seconds the last processed transaction is behind now, i.e. time behind source (0 when caught up)
 - `GET /healthz` - liveness: 200 while the receive loop makes progress, 503 if it stalls.

@@ -13,6 +13,20 @@ const JsonSerializer = json_serializer.JsonSerializer;
 const constants = @import("constants");
 pub const Observability = @import("observability").Observability;
 
+// Per-batch tally of routed change events by stream and operation, so the events
+// counter is updated once per distinct combo instead of once per routed change.
+const EventCount = struct { stream: []const u8, operation: []const u8, count: u64 };
+
+fn tallyEvent(list: *std.ArrayList(EventCount), allocator: std.mem.Allocator, stream: []const u8, operation: []const u8) !void {
+    for (list.items) |*e| {
+        if (std.mem.eql(u8, e.stream, stream) and std.mem.eql(u8, e.operation, operation)) {
+            e.count += 1;
+            return;
+        }
+    }
+    try list.append(allocator, .{ .stream = stream, .operation = operation, .count = 1 });
+}
+
 /// Return the streams whose resource and operations match a given table change; caller owns the list.
 pub fn matchStreams(allocator: std.mem.Allocator, streams: []const Stream, table_name: []const u8, operation: []const u8) !std.ArrayList(Stream) {
     var matched = std.ArrayList(Stream).empty;
@@ -135,9 +149,12 @@ pub const Processor = struct {
 
         std.log.debug("Processing {} changes from batch (LSN: {})", .{ batch.changes.len, batch.last_lsn });
 
-        // Count consumed WAL changes and refresh the lag gauge once per batch.
-        self.obs.addEvents(batch.changes.len);
+        // Refresh lag once per batch; event counts are tallied per (stream, operation)
+        // in the loop and emitted after it, so the counter costs one add() per distinct
+        // combo per batch instead of one per routed change.
         self.obs.setLag(batch.replication_lag_seconds);
+        var event_counts = std.ArrayList(EventCount).empty;
+        defer event_counts.deinit(batch_allocator);
 
         for (batch.changes) |change_event| {
             var matched = try matchStreams(batch_allocator, self.streams, change_event.meta.resource, change_event.op);
@@ -163,6 +180,8 @@ pub const Processor = struct {
                     return err;
                 };
 
+                try tallyEvent(&event_counts, batch_allocator, stream.name, change_event.op);
+
                 self.events_processed += 1;
                 if (self.events_processed % 10000 == 0) {
                     std.log.info("Processed {} CDC events", .{self.events_processed});
@@ -177,6 +196,8 @@ pub const Processor = struct {
                 });
             }
         }
+
+        for (event_counts.items) |e| self.obs.addEvents(e.count, e.stream, e.operation);
 
         producer.poll();
 

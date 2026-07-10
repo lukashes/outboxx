@@ -8,8 +8,8 @@ test "writeMetrics renders counters and the lag gauge in Prometheus text" {
     var obs = try Observability.init(allocator, io);
     defer obs.deinit();
 
-    obs.addEvents(3);
-    obs.addEvents(2);
+    obs.addEvents(3, "users", "INSERT");
+    obs.addEvents(2, "users", "INSERT");
     obs.setLag(600);
 
     var aw = std.Io.Writer.Allocating.init(allocator);
@@ -18,7 +18,7 @@ test "writeMetrics renders counters and the lag gauge in Prometheus text" {
     const out = try aw.toOwnedSlice();
     defer allocator.free(out);
 
-    try std.testing.expect(std.mem.indexOf(u8, out, "outboxx_events_processed_total 5") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "outboxx_events_processed_total{stream=\"users\",operation=\"INSERT\"} 5") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "outboxx_replication_lag_seconds 600") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "# TYPE outboxx_events_processed_total counter") != null);
 }
@@ -30,7 +30,7 @@ test "counters persist across scrapes without new activity" {
     var obs = try Observability.init(allocator, io);
     defer obs.deinit();
 
-    obs.addEvents(7);
+    obs.addEvents(7, "users", "INSERT");
 
     // First scrape emits the counter.
     {
@@ -39,7 +39,7 @@ test "counters persist across scrapes without new activity" {
         try obs.writeMetrics(&aw.writer);
         const out = try aw.toOwnedSlice();
         defer allocator.free(out);
-        try std.testing.expect(std.mem.indexOf(u8, out, "outboxx_events_processed_total 7") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out, "outboxx_events_processed_total{stream=\"users\",operation=\"INSERT\"} 7") != null);
     }
 
     // Second scrape with no new events: the counter must still be present.
@@ -49,7 +49,7 @@ test "counters persist across scrapes without new activity" {
         try obs.writeMetrics(&aw.writer);
         const out = try aw.toOwnedSlice();
         defer allocator.free(out);
-        try std.testing.expect(std.mem.indexOf(u8, out, "outboxx_events_processed_total 7") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out, "outboxx_events_processed_total{stream=\"users\",operation=\"INSERT\"} 7") != null);
     }
 }
 
@@ -88,12 +88,61 @@ test "lag gauge renders the latest value on each scrape and never accumulates" {
     }
 }
 
+test "events counter keeps an independent series per stream and operation" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var obs = try Observability.init(allocator, io);
+    defer obs.deinit();
+
+    obs.addEvents(3, "users", "INSERT");
+    obs.addEvents(1, "users", "UPDATE");
+    obs.addEvents(4, "orders", "INSERT");
+    {
+        const out = try scrapeLag(&obs, allocator);
+        defer allocator.free(out);
+        try std.testing.expect(std.mem.indexOf(u8, out, "outboxx_events_processed_total{stream=\"users\",operation=\"INSERT\"} 3") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out, "outboxx_events_processed_total{stream=\"users\",operation=\"UPDATE\"} 1") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out, "outboxx_events_processed_total{stream=\"orders\",operation=\"INSERT\"} 4") != null);
+    }
+
+    // Each series accumulates on its own; adding to one must not move the others.
+    obs.addEvents(2, "users", "INSERT");
+    {
+        const out = try scrapeLag(&obs, allocator);
+        defer allocator.free(out);
+        try std.testing.expect(std.mem.indexOf(u8, out, "outboxx_events_processed_total{stream=\"users\",operation=\"INSERT\"} 5") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out, "outboxx_events_processed_total{stream=\"users\",operation=\"UPDATE\"} 1") != null);
+        try std.testing.expect(std.mem.indexOf(u8, out, "outboxx_events_processed_total{stream=\"orders\",operation=\"INSERT\"} 4") != null);
+    }
+}
+
+test "event label survives the caller's buffer being reused" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var obs = try Observability.init(allocator, io);
+    defer obs.deinit();
+
+    // The SDK borrows attribute strings rather than copying them, so a label passed
+    // from a caller's buffer must be interned. Mimic a reused buffer, then clobber it.
+    const name = "users";
+    var buf: [16]u8 = undefined;
+    @memcpy(buf[0..name.len], name);
+    obs.addEvents(4, buf[0..name.len], "INSERT");
+    @memset(&buf, 'Z');
+
+    const out = try scrapeLag(&obs, allocator);
+    defer allocator.free(out);
+    try std.testing.expect(std.mem.indexOf(u8, out, "outboxx_events_processed_total{stream=\"users\",operation=\"INSERT\"} 4") != null);
+}
+
 test "disabled observability records nothing but keeps health state" {
     const io = std.testing.io;
 
     var obs = Observability.noop();
     // No-ops: must not touch the null OTel plumbing.
-    obs.addEvents(10);
+    obs.addEvents(10, "users", "INSERT");
     obs.recordProduceError();
     obs.setLag(1);
 
