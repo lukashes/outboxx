@@ -21,15 +21,21 @@ REPORT_INTERVAL ?= 5
 
 MINUTES ?= 60
 
-.PHONY: infra load start-debezium start-outboxx start-all reset create-slots slots status topics offsets results logs ps
+.PHONY: infra infra-up load start-debezium start-outboxx start-all reset create-slots slots status topics offsets results logs ps
 
-infra:
+# Bring infra up and ensure slots exist, leaving any running CDC readers alone.
+infra-up:
 	$(COMPOSE) up -d --remove-orphans $(INFRA_SERVICES)
-	-$(COMPOSE) stop debezium outboxx
-	-$(COMPOSE) rm -sf debezium outboxx connector-init
 	$(MAKE) create-slots
 
-load: infra
+# Clean pre-load baseline: infra up, CDC readers stopped, slots ready.
+infra: infra-up
+	-$(COMPOSE) stop debezium outboxx
+	-$(COMPOSE) rm -sf debezium outboxx connector-init
+
+# Generating load does not touch running readers, so lag/throughput can be
+# watched live. Use `make infra` first for the readers-down backlog scenario.
+load: infra-up
 	$(COMPOSE) run --build --rm workload \
 		--duration $(DURATION) \
 		--batch-size $(BATCH_SIZE) \
