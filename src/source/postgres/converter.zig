@@ -34,11 +34,12 @@ pub const Converter = struct {
     }
 
     /// Convert one decoded pgoutput message to a ChangeEvent, or null when it
-    /// carries no row change (BEGIN, COMMIT, RELATION). RELATION updates the
-    /// registry in place; data messages read column types from it.
+    /// carries no row change (BEGIN, COMMIT, RELATION, or a skipped type).
+    /// RELATION updates the registry in place; data messages read column types
+    /// from it.
     pub fn convert(self: *Self, io: std.Io, allocator: std.mem.Allocator, pg_msg: PgOutputMessage) !?ChangeEvent {
         switch (pg_msg) {
-            .begin, .commit => return null,
+            .begin, .commit, .skip => return null,
             .relation => |rel| {
                 try self.registry.register(rel);
                 return null;
@@ -261,6 +262,15 @@ test "convert: BEGIN and COMMIT yield no event" {
     var commit = PgOutputMessage{ .commit = .{ .flags = 0, .commit_lsn = 0, .end_lsn = 0, .commit_time = 0 } };
     defer commit.deinit(allocator);
     try testing.expect((try converter.convert(std.testing.io, allocator, commit)) == null);
+}
+
+test "convert: skipped message type yields no event" {
+    const allocator = testing.allocator;
+
+    var converter = Converter.init(allocator);
+    defer converter.deinit();
+
+    try testing.expect((try converter.convert(std.testing.io, allocator, .skip)) == null);
 }
 
 test "convert INSERT: basic message to ChangeEvent" {

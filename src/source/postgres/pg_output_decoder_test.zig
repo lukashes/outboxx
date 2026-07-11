@@ -350,6 +350,19 @@ test "PgOutputDecoder: invalid message type" {
     try testing.expectError(decoder_mod.DecoderError.UnknownMessageType, result);
 }
 
+test "PgOutputDecoder: truncate, type and origin decode to skip" {
+    const allocator = testing.allocator;
+    var pg_decoder = PgOutputDecoder.init(allocator);
+
+    // Only the leading type byte matters: the body is never parsed for these.
+    for ([_]u8{ 'T', 'Y', 'O' }) |type_byte| {
+        const data = [_]u8{ type_byte, 0xDE, 0xAD, 0xBE, 0xEF };
+        var msg = try pg_decoder.decode(allocator, &data);
+        defer msg.deinit(allocator);
+        try testing.expect(msg == .skip);
+    }
+}
+
 test "PgOutputDecoder: unchanged TOAST column decodes to null (no value sent)" {
     const allocator = testing.allocator;
     var pg_decoder = PgOutputDecoder.init(allocator);
