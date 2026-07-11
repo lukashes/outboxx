@@ -266,14 +266,16 @@ pub const PostgresSource = struct {
                 return xlog.server_wal_end;
             },
             .keepalive => |keepalive| {
-                // Do NOT send reply here (even if reply_requested=true)
-                // Reason: We must maintain at-least-once guarantee
-                // - Sending reply here would confirm LSN before Kafka flush
-                // - If Kafka flush fails, data would be lost
-                // - Processor will send feedback after successful Kafka flush
-                //
-                // Note: PostgreSQL may wait for reply, but our batch wait time (~6 sec)
-                // is much shorter than wal_sender_timeout (default 60 sec)
+                // Reply when Postgres asks, reporting the last DURABLY confirmed
+                // position (last_feedback_lsn), never the received LSN -- confirming
+                // unflushed data would break at-least-once. Without this reply, a
+                // backlog where flushed_lsn is not advancing yet sends no status
+                // update, and Postgres drops the walsender on wal_sender_timeout.
+                if (keepalive.reply_requested) {
+                    self.sendFeedback(io, self.last_feedback_lsn) catch |err| {
+                        std.log.warn("Failed to reply to keepalive: {}", .{err});
+                    };
+                }
                 return keepalive.server_wal_end;
             },
         }

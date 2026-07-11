@@ -85,15 +85,9 @@ fn flushWorker(
         flushed_lsn.store(lsn, .release);
     }
 
-    producer.flush(constants.CDC.KAFKA_FLUSH_TIMEOUT_MS) catch |err| {
-        std.log.warn("Final background flush failed: {}", .{err});
-    };
-
-    const lsn = pending_lsn.load(.acquire);
-    if (lsn > 0) {
-        flushed_lsn.store(lsn, .release);
-    }
-
+    // No final flush on cancel: awaiting a flush into a wedged broker is what
+    // hangs the shutdown. The graceful path flushes on the main thread instead;
+    // on a fatal error we just exit.
     std.log.debug("Flush worker stopped", .{});
 }
 
@@ -252,8 +246,9 @@ pub const Processor = struct {
             &self.flushed_lsn,
             self.flush_interval_sec,
         });
-        // On a receive error, stop the worker (wakes its sleep, awaits) before the
-        // error propagates. The worker touches no libpq, so this can't wedge on it.
+        // On a receive error, stop the worker before the error propagates (it uses
+        // the producer, which processor.deinit destroys). The worker touches no
+        // libpq and no longer flushes on cancel, so this returns promptly.
         errdefer flush_future.cancel(io);
 
         while (!stop_signal.load(.monotonic)) {
@@ -267,11 +262,14 @@ pub const Processor = struct {
             try self.processChangesToKafka(io, batch_alloc, constants.CDC.BATCH_SIZE);
         }
 
-        // Graceful stop: cancel and await the worker (runs its final flush), then
-        // confirm the LSN it flushed on the way out. The loop's per-batch feedback
-        // (via receiveBatch) can't cover this last flush, so send it explicitly.
+        // Graceful stop: stop the worker, then flush everything staged and confirm
+        // it, both on this thread. After a full flush pending_lsn is durable, so it
+        // is safe to confirm (and covers the last batch the loop just produced).
         flush_future.cancel(io);
-        const final_lsn = self.flushed_lsn.load(.acquire);
+        producer.flush(constants.CDC.KAFKA_FLUSH_TIMEOUT_MS) catch |err| {
+            std.log.warn("Final flush failed: {}", .{err});
+        };
+        const final_lsn = self.pending_lsn.load(.acquire);
         if (final_lsn > 0) {
             self.source.sendFeedback(io, final_lsn) catch |err| {
                 std.log.warn("Final LSN feedback failed: {}", .{err});
