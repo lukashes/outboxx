@@ -22,7 +22,11 @@ fn serveImpl(io: std.Io, obs: *Observability, address: []const u8, port: u16, st
 
     while (!stop.load(.monotonic)) {
         var stream = server.accept(io) catch |err| {
-            if (stop.load(.monotonic)) break;
+            // Canceled means the future is being torn down. `stop` is set only on a
+            // graceful shutdown; on a fatal error the future is cancelled without
+            // it, so break on Canceled too -- otherwise the next accept blocks
+            // forever (cancel fires once) and hangs the process exit.
+            if (err == error.Canceled or stop.load(.monotonic)) break;
             std.log.debug("metrics accept failed: {}", .{err});
             continue;
         };
