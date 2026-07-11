@@ -22,26 +22,24 @@ pub const JsonSerializer = struct {
 
         const writer = &output.writer;
 
-        try writer.writeAll("{\"op\":\"");
-        try writer.writeAll(event.op);
-        try writer.writeAll("\",\"data\":");
+        try writer.writeAll("{\"op\":");
+        try encodeString(event.op, writer);
+        try writer.writeAll(",\"data\":");
 
         try serializeDataSection(event.data, writer);
 
-        try writer.writeAll(",\"meta\":{");
-        try writer.writeAll("\"source\":\"");
-        try writer.writeAll(event.meta.source);
-        try writer.writeAll("\",\"resource\":\"");
-        try writer.writeAll(event.meta.resource);
-        try writer.writeAll("\",\"schema\":\"");
-        try writer.writeAll(event.meta.schema);
-        try writer.writeAll("\",\"timestamp\":");
+        try writer.writeAll(",\"meta\":{\"source\":");
+        try encodeString(event.meta.source, writer);
+        try writer.writeAll(",\"resource\":");
+        try encodeString(event.meta.resource, writer);
+        try writer.writeAll(",\"schema\":");
+        try encodeString(event.meta.schema, writer);
+        try writer.writeAll(",\"timestamp\":");
         try writer.print("{d}", .{event.meta.timestamp});
 
         if (event.meta.lsn) |lsn| {
-            try writer.writeAll(",\"lsn\":\"");
-            try writer.writeAll(lsn);
-            try writer.writeAll("\"");
+            try writer.writeAll(",\"lsn\":");
+            try encodeString(lsn, writer);
         } else {
             try writer.writeAll(",\"lsn\":null");
         }
@@ -49,6 +47,13 @@ pub const JsonSerializer = struct {
         try writer.writeAll("}}");
 
         return output.toOwnedSlice();
+    }
+
+    // Write a JSON string (surrounding quotes plus RFC 8259 escaping, including
+    // control chars below 0x20) via the stdlib encoder. Used for every string in
+    // the output, so column names and metadata are escaped like values.
+    fn encodeString(s: []const u8, writer: *std.Io.Writer) !void {
+        try std.json.Stringify.encodeJsonString(s, .{}, writer);
     }
 
     fn serializeDataSection(data: DataSection, writer: anytype) !void {
@@ -74,9 +79,8 @@ pub const JsonSerializer = struct {
                 try writer.writeAll(",");
             }
 
-            try writer.writeAll("\"");
-            try writer.writeAll(field.name);
-            try writer.writeAll("\":");
+            try encodeString(field.name, writer);
+            try writer.writeAll(":");
 
             try serializeValue(field.value, writer);
         }
@@ -98,21 +102,7 @@ pub const JsonSerializer = struct {
                 try writer.print("{d}", .{f});
             },
             .number_string => |ns| try writer.writeAll(ns),
-            .string => |s| {
-                try writer.writeAll("\"");
-                // Escape special characters
-                for (s) |c| {
-                    switch (c) {
-                        '"' => try writer.writeAll("\\\""),
-                        '\\' => try writer.writeAll("\\\\"),
-                        '\n' => try writer.writeAll("\\n"),
-                        '\r' => try writer.writeAll("\\r"),
-                        '\t' => try writer.writeAll("\\t"),
-                        else => try writer.writeByte(c),
-                    }
-                }
-                try writer.writeAll("\"");
-            },
+            .string => |s| try encodeString(s, writer),
             .array => |arr| {
                 try writer.writeAll("[");
                 for (arr.items, 0..) |item, i| {
@@ -128,9 +118,8 @@ pub const JsonSerializer = struct {
                 while (iter.next()) |entry| {
                     if (!first) try writer.writeAll(",");
                     first = false;
-                    try writer.writeAll("\"");
-                    try writer.writeAll(entry.key_ptr.*);
-                    try writer.writeAll("\":");
+                    try encodeString(entry.key_ptr.*, writer);
+                    try writer.writeAll(":");
                     try serializeValue(entry.value_ptr.*, writer);
                 }
                 try writer.writeAll("}");
@@ -353,4 +342,52 @@ test "JsonSerializer string escaping" {
     // Validate JSON is still parseable
     const is_valid = try std.json.validate(allocator, json_output);
     try testing.expect(is_valid);
+}
+
+test "JsonSerializer escapes control characters and quoted field names" {
+    const testing = std.testing;
+
+    var gpa = std.heap.DebugAllocator(.{}){};
+    defer {
+        const deinit_status = gpa.deinit();
+        if (deinit_status == .leak) {
+            std.debug.panic("Memory leak in test!", .{});
+        }
+    }
+    const allocator = gpa.allocator();
+
+    const metadata = Metadata{
+        .source = try allocator.dupe(u8, "postgres"),
+        .resource = try allocator.dupe(u8, "users"),
+        .schema = try allocator.dupe(u8, "public"),
+        .timestamp = 1234567890,
+        .lsn = null,
+    };
+
+    var event = ChangeEvent.init(ChangeOperation.INSERT, metadata);
+    defer event.deinit(allocator);
+
+    // A legal Postgres column name can contain a quote; a text value can carry
+    // control bytes (NUL, backspace, form feed, vertical tab) that RFC 8259
+    // requires to be escaped. Both broke the output before.
+    const field_name = "a\"b";
+    const field_value = "x\x00\x08\x0C\x0By";
+
+    var builder = RowDataHelpers.createBuilder(allocator);
+    try RowDataHelpers.put(&builder, allocator, field_name, try FieldValueHelpers.text(allocator, field_value));
+    const row = try RowDataHelpers.finalize(&builder, allocator);
+    event.setInsertData(row);
+
+    const serializer = JsonSerializer.init();
+    const json_output = try serializer.serialize(event, allocator);
+    defer allocator.free(json_output);
+
+    // The output must be valid JSON and round-trip the exact bytes back.
+    try testing.expect(try std.json.validate(allocator, json_output));
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_output, .{});
+    defer parsed.deinit();
+
+    const data = parsed.value.object.get("data").?.object;
+    try testing.expectEqualStrings(field_value, data.get(field_name).?.string);
 }
