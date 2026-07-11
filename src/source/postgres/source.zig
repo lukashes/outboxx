@@ -78,6 +78,8 @@ pub const PostgresSource = struct {
     // The stream does not expose the server WAL head during a backlog, so lag is
     // measured as wall-clock time behind this commit, like Debezium.
     last_commit_time: i64,
+    // Last LSN sent to Postgres as standby feedback, to skip redundant updates.
+    last_feedback_lsn: u64,
 
     const Self = @This();
 
@@ -94,6 +96,7 @@ pub const PostgresSource = struct {
             .converter = Converter.init(allocator),
             .last_lsn = 0,
             .last_commit_time = 0,
+            .last_feedback_lsn = 0,
         };
     }
 
@@ -129,16 +132,28 @@ pub const PostgresSource = struct {
         std.log.info("Streaming replication started from LSN: {s}", .{start_lsn});
     }
 
-    /// Receive batch of changes from PostgreSQL (default wait time from constants)
-    /// Wrapper for compatibility with polling source API
-    pub fn receiveBatch(self: *Self, io: std.Io, batch_allocator: std.mem.Allocator, limit: usize) PostgresSourceError!Batch {
-        return self.receiveBatchWithWaitTime(io, batch_allocator, limit, constants.CDC.BATCH_WAIT_MS);
+    /// Receive a batch of changes, first confirming to Postgres how far we have
+    /// durably delivered downstream. confirmed_lsn is what the Kafka flush worker
+    /// has flushed; feedback rides the same replication loop as the read.
+    pub fn receiveBatch(self: *Self, io: std.Io, batch_allocator: std.mem.Allocator, limit: usize, confirmed_lsn: u64) PostgresSourceError!Batch {
+        return self.receiveBatchWithWaitTime(io, batch_allocator, limit, confirmed_lsn, constants.CDC.BATCH_WAIT_MS);
     }
 
     /// Receive batch of changes from PostgreSQL (with wait time)
     /// limit: desired batch size (soft limit)
     /// wait_time_ms: max time to wait for batch
-    pub fn receiveBatchWithWaitTime(self: *Self, io: std.Io, batch_allocator: std.mem.Allocator, limit: usize, wait_time_ms: i32) PostgresSourceError!Batch {
+    pub fn receiveBatchWithWaitTime(self: *Self, io: std.Io, batch_allocator: std.mem.Allocator, limit: usize, confirmed_lsn: u64, wait_time_ms: i32) PostgresSourceError!Batch {
+        // Standby feedback rides the receive loop: before asking for more WAL,
+        // confirm how far we have durably delivered. Sent only when it advances;
+        // a failure is non-fatal here (the read below surfaces a dead link).
+        if (confirmed_lsn > self.last_feedback_lsn) {
+            if (self.sendFeedback(io, confirmed_lsn)) |_| {
+                self.last_feedback_lsn = confirmed_lsn;
+            } else |err| {
+                std.log.warn("Failed to send standby status update: {}", .{err});
+            }
+        }
+
         var changes = std.ArrayList(ChangeEvent).empty;
         errdefer {
             for (changes.items) |*change| {

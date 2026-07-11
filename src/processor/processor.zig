@@ -47,14 +47,18 @@ pub fn matchStreams(allocator: std.mem.Allocator, streams: []const Stream, table
     return matched;
 }
 
-fn flushCommitWorker(
+// Background worker: flush Kafka off the hot path and record how far we have
+// flushed in flushed_lsn. It must NOT touch the Postgres connection -- libpq
+// forbids using one PGconn from two threads, and the receive loop already owns
+// it. The main thread reads flushed_lsn and confirms it to Postgres.
+fn flushWorker(
     io: std.Io,
     producer: *KafkaProducer,
-    source: *PostgresSource,
     pending_lsn: *std.atomic.Value(u64),
+    flushed_lsn: *std.atomic.Value(u64),
+    flush_interval_sec: u32,
 ) void {
     var iterations: u32 = 0;
-    const flush_interval_iterations: u32 = @intCast(constants.CDC.KAFKA_FLUSH_INTERVAL_SEC);
 
     while (true) {
         // The worker's only cancelation point: on shutdown the future is
@@ -62,7 +66,7 @@ fn flushCommitWorker(
         io.sleep(.fromSeconds(1), .awake) catch break;
         iterations += 1;
 
-        if (iterations < flush_interval_iterations) {
+        if (iterations < flush_interval_sec) {
             continue;
         }
 
@@ -78,10 +82,7 @@ fn flushCommitWorker(
             continue;
         }
 
-        source.sendFeedback(io, lsn) catch |err| {
-            std.log.err("Background LSN commit failed: {}", .{err});
-            continue;
-        };
+        flushed_lsn.store(lsn, .release);
     }
 
     producer.flush(constants.CDC.KAFKA_FLUSH_TIMEOUT_MS) catch |err| {
@@ -90,12 +91,10 @@ fn flushCommitWorker(
 
     const lsn = pending_lsn.load(.acquire);
     if (lsn > 0) {
-        source.sendFeedback(io, lsn) catch |err| {
-            std.log.warn("Final background LSN commit failed: {}", .{err});
-        };
+        flushed_lsn.store(lsn, .release);
     }
 
-    std.log.debug("Flush/commit worker stopped", .{});
+    std.log.debug("Flush worker stopped", .{});
 }
 
 /// CDC Processor that works with PostgreSQL streaming replication
@@ -108,7 +107,14 @@ pub const Processor = struct {
     obs: *Observability,
 
     events_processed: usize,
+    // Staged by the main thread after producing a batch to Kafka's local queue.
     pending_lsn: std.atomic.Value(u64),
+    // Set by the flush worker after a successful Kafka flush; read by the main
+    // thread, which confirms it to Postgres. Keeps all libpq access single-threaded.
+    flushed_lsn: std.atomic.Value(u64),
+    // Seconds between background Kafka flushes. Defaults to the constant; tests
+    // shorten it to exercise the periodic flush/commit path quickly.
+    flush_interval_sec: u32,
 
     const Self = @This();
 
@@ -122,6 +128,8 @@ pub const Processor = struct {
             .obs = obs,
             .events_processed = 0,
             .pending_lsn = std.atomic.Value(u64).init(0),
+            .flushed_lsn = std.atomic.Value(u64).init(0),
+            .flush_interval_sec = @intCast(constants.CDC.KAFKA_FLUSH_INTERVAL_SEC),
         };
     }
 
@@ -132,7 +140,10 @@ pub const Processor = struct {
 
     /// Receive one batch, route each change to its streams, and stage the batch LSN for commit.
     pub fn processChangesToKafka(self: *Self, io: std.Io, batch_allocator: std.mem.Allocator, limit: u32) !void {
-        var batch = try self.source.receiveBatch(io, batch_allocator, limit);
+        // Confirm how far the flush worker has flushed to Kafka; the source sends
+        // it as standby feedback before reading the next batch.
+        const confirmed_lsn = self.flushed_lsn.load(.acquire);
+        var batch = try self.source.receiveBatch(io, batch_allocator, limit, confirmed_lsn);
         defer batch.deinit();
 
         // A successful receive (even an empty batch) means we are connected and
@@ -223,7 +234,7 @@ pub const Processor = struct {
         return try allocator.dupe(u8, change_event.meta.resource);
     }
 
-    /// Run the batch loop until stop_signal is set, with a background flush/commit worker.
+    /// Run the batch loop until stop_signal is set, with a background Kafka flush worker.
     pub fn startStreaming(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !void {
         // The source is connected and validated before we get here, so readiness's
         // connection signal goes up now; markStreaming follows on the first batch.
@@ -231,16 +242,18 @@ pub const Processor = struct {
 
         const producer = &self.producer;
 
-        // Background flush/commit loop. `concurrent` not `async`: it must run
-        // alongside the receive loop, and `async` may defer the call until await.
-        var flush_future = try io.concurrent(flushCommitWorker, .{
+        // Background flush loop. `concurrent` not `async`: it must run alongside
+        // the receive loop, and `async` may defer the call until await. It only
+        // touches Kafka; LSN feedback stays on this thread (see commitFlushed).
+        var flush_future = try io.concurrent(flushWorker, .{
             io,
             producer,
-            &self.source,
             &self.pending_lsn,
+            &self.flushed_lsn,
+            self.flush_interval_sec,
         });
-        // On a receive error, still stop the worker (wakes its sleep for the
-        // final flush, and awaits) before the error propagates.
+        // On a receive error, stop the worker (wakes its sleep, awaits) before the
+        // error propagates. The worker touches no libpq, so this can't wedge on it.
         errdefer flush_future.cancel(io);
 
         while (!stop_signal.load(.monotonic)) {
@@ -254,9 +267,16 @@ pub const Processor = struct {
             try self.processChangesToKafka(io, batch_alloc, constants.CDC.BATCH_SIZE);
         }
 
-        // Graceful stop: cancel and await the worker (runs its final flush/commit)
-        // before reporting the stream stopped.
+        // Graceful stop: cancel and await the worker (runs its final flush), then
+        // confirm the LSN it flushed on the way out. The loop's per-batch feedback
+        // (via receiveBatch) can't cover this last flush, so send it explicitly.
         flush_future.cancel(io);
+        const final_lsn = self.flushed_lsn.load(.acquire);
+        if (final_lsn > 0) {
+            self.source.sendFeedback(io, final_lsn) catch |err| {
+                std.log.warn("Final LSN feedback failed: {}", .{err});
+            };
+        }
         std.log.info("Streaming stopped gracefully", .{});
     }
 };
