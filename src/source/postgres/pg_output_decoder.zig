@@ -131,10 +131,13 @@ pub const PgOutputMessage = union(enum) {
     insert: InsertMessage,
     update: UpdateMessage,
     delete: DeleteMessage,
+    /// A message type we consume but don't turn into a change event (truncate,
+    /// type, origin). Its LSN is still confirmed, like BEGIN/COMMIT.
+    skip,
 
     pub fn deinit(self: *PgOutputMessage, allocator: std.mem.Allocator) void {
         switch (self.*) {
-            .begin, .commit => {},
+            .begin, .commit, .skip => {},
             .relation => |*rel| rel.deinit(allocator),
             .insert => |*ins| ins.deinit(allocator),
             .update => |*upd| upd.deinit(allocator),
@@ -172,6 +175,16 @@ pub const PgOutputDecoder = struct {
             .insert => return PgOutputMessage{ .insert = try self.decodeInsert(data[1..]) },
             .update => return PgOutputMessage{ .update = try self.decodeUpdate(data[1..]) },
             .delete => return PgOutputMessage{ .delete = try self.decodeDelete(data[1..]) },
+            // Consume the types that carry no row change we emit, so their LSN is
+            // confirmed instead of crash-looping the pipeline.
+            .truncate => {
+                std.log.info("Detected TRUNCATE on source", .{});
+                return .skip;
+            },
+            .data_type, .origin => {
+                std.log.debug("Skipping pgoutput message type: {c}", .{data[0]});
+                return .skip;
+            },
             else => {
                 std.log.warn("Unknown pgoutput message type: {c} (0x{x})", .{ @as(u8, @intFromEnum(msg_type)), @as(u8, @intFromEnum(msg_type)) });
                 return DecoderError.UnknownMessageType;
