@@ -150,8 +150,11 @@ pub const KafkaProducer = struct {
         self.topics.deinit();
 
         if (self.producer) |producer| {
+            std.log.debug("producer.deinit: flush (timeout {d}ms)", .{constants.CDC.KAFKA_FLUSH_TIMEOUT_MS});
             _ = c.rd_kafka_flush(producer, constants.CDC.KAFKA_FLUSH_TIMEOUT_MS);
+            std.log.debug("producer.deinit: flush returned, destroying", .{});
             c.rd_kafka_destroy(producer);
+            std.log.debug("producer.deinit: destroyed", .{});
         }
     }
 

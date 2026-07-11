@@ -17,8 +17,18 @@ pub fn build(b: *std.Build) void {
         "Version string embedded into the outboxx binary",
     ) orelse "0.2.0";
 
+    // Minimum log level compiled in. Default info keeps Release/prod output clean
+    // (lower levels are filtered at comptime); the load stand builds with
+    // -Dlog_level=debug to trace teardown / fail-fast behavior.
+    const log_level = b.option(
+        std.log.Level,
+        "log_level",
+        "Minimum log level compiled in: err, warn, info, debug (default: info)",
+    ) orelse .info;
+
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "version", version);
+    build_options.addOption(std.log.Level, "log_level", log_level);
 
     // Constants module (application-wide constants)
     const constants_module = b.createModule(.{
