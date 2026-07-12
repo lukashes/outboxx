@@ -12,6 +12,12 @@ const constants = @import("constants");
 const observability = @import("observability");
 const Observability = observability.Observability;
 
+// Log level is a build option (-Dlog_level=..., default info), so lower levels
+// are compiled out of Release/prod. The load stand builds with debug.
+pub const std_options: std.Options = .{
+    .log_level = constants.LOG_LEVEL,
+};
+
 pub const CliError = error{
     NoConfigPath,
 };
@@ -139,7 +145,11 @@ fn run(init: std.process.Init) !void {
         var metrics_future = try init.io.concurrent(observability.serve, .{
             init.io, &obs, obs_cfg.address, obs_cfg.port, &shutdown_requested,
         });
-        defer metrics_future.cancel(init.io);
+        defer {
+            std.log.debug("main: cancelling metrics server", .{});
+            metrics_future.cancel(init.io);
+            std.log.debug("main: metrics server cancelled", .{});
+        }
         try processor.startStreaming(init.io, &shutdown_requested);
     } else {
         try processor.startStreaming(init.io, &shutdown_requested);
