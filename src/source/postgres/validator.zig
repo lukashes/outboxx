@@ -131,8 +131,8 @@ pub const PostgresValidator = struct {
     /// drops the non-key columns from the DELETE old row, breaking the documented
     /// format. Call only for delete-tracking streams: FULL is irrelevant otherwise
     /// and only inflates UPDATE WAL.
-    pub fn checkReplicaIdentityFull(self: *Self, schema: []const u8, table_name: []const u8) ValidationError!void {
-        const query = std.fmt.allocPrintSentinel(self.allocator, "SELECT c.relreplident FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = '{s}' AND c.relname = '{s}';", .{ schema, table_name }, 0) catch return ValidationError.OutOfMemory;
+    pub fn checkReplicaIdentity(self: *Self, schema: []const u8, table_name: []const u8) ValidationError!void {
+        const query = try std.fmt.allocPrintSentinel(self.allocator, "SELECT c.relreplident FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = '{s}' AND c.relname = '{s}';", .{ schema, table_name }, 0);
         defer self.allocator.free(query);
 
         const result = try self.executeQuery(query.ptr);

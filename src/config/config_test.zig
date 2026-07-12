@@ -81,7 +81,7 @@ test "createTestDefault" {
     try testing.expectEqualStrings("localhost:9092", cfg.sink.kafka.?.brokers[0]);
 }
 
-test "Stream.tracksDelete reflects the configured operations" {
+test "Stream.hasDeleteOperation reflects the configured operations" {
     const Stream = config.Stream;
     const base: Stream = .{
         .name = "s",
@@ -92,11 +92,11 @@ test "Stream.tracksDelete reflects the configured operations" {
 
     var insert_update = base;
     insert_update.source.operations = &.{ "insert", "update" };
-    try testing.expect(!insert_update.tracksDelete());
+    try testing.expect(!insert_update.hasDeleteOperation());
 
     var with_delete = base;
     with_delete.source.operations = &.{ "insert", "delete" };
-    try testing.expect(with_delete.tracksDelete());
+    try testing.expect(with_delete.hasDeleteOperation());
 }
 
 test "supported adapter types are implemented" {

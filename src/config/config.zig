@@ -113,7 +113,7 @@ pub const Stream = struct {
 
     /// Whether this stream captures DELETE. Config validation restricts operations
     /// to the lowercase set, so an exact match is enough.
-    pub fn tracksDelete(self: Stream) bool {
+    pub fn hasDeleteOperation(self: Stream) bool {
         for (self.source.operations) |op| {
             if (std.mem.eql(u8, op, "delete")) return true;
         }

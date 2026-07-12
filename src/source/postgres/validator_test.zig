@@ -90,7 +90,7 @@ test "PostgresValidator: replica identity FULL passes" {
 
     try validator.connect(conn_str);
     // users is set to REPLICA IDENTITY FULL by the dev init script.
-    try validator.checkReplicaIdentityFull("public", "users");
+    try validator.checkReplicaIdentity("public", "users");
 }
 
 test "PostgresValidator: replica identity not FULL should error" {
@@ -103,7 +103,7 @@ test "PostgresValidator: replica identity not FULL should error" {
     try validator.connect(conn_str);
     // system_logs keeps the default replica identity (the init script never
     // alters it), so a delete-tracking stream on it must be rejected.
-    const result = validator.checkReplicaIdentityFull("public", "system_logs");
+    const result = validator.checkReplicaIdentity("public", "system_logs");
     try testing.expectError(error.InvalidReplicaIdentity, result);
 }
 
@@ -140,7 +140,7 @@ test "PostgresValidator: methods fail when not connected" {
     const table_result = validator.checkTableExists("public", "users");
     try testing.expectError(error.ConnectionFailed, table_result);
 
-    const identity_result = validator.checkReplicaIdentityFull("public", "users");
+    const identity_result = validator.checkReplicaIdentity("public", "users");
     try testing.expectError(error.ConnectionFailed, identity_result);
 }
 

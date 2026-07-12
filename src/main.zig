@@ -286,21 +286,20 @@ fn validatePostgres(allocator: std.mem.Allocator, cfg: Config, conninfo: []const
     try validator.checkWalLevel();
 
     for (cfg.streams) |stream| {
-        validateStreamTable(&validator, stream) catch |err| {
+        validator.checkTableExists("public", stream.source.resource) catch |err| {
             printStatus("ERROR: Table validation failed for '{s}': {}\n", .{ stream.source.resource, err });
             return err;
         };
+
+        // Only a stream that tracks DELETE needs REPLICA IDENTITY FULL, so the
+        // deleted row carries all columns. Schema is fixed to "public" for now.
+        if (stream.hasDeleteOperation()) {
+            validator.checkReplicaIdentity("public", stream.source.resource) catch |err| {
+                printStatus("ERROR: Replica identity validation failed for '{s}': {}\n", .{ stream.source.resource, err });
+                return err;
+            };
+        }
     }
 
     printStatus("PostgreSQL validation completed successfully!\n", .{});
-}
-
-// Validate the source table satisfies what a stream needs: it must exist, and a
-// stream that tracks DELETE needs REPLICA IDENTITY FULL so the deleted row carries
-// all columns. Schema is fixed to "public" until multi-schema support lands.
-fn validateStreamTable(validator: *PostgresValidator, stream: config_mod.Stream) !void {
-    try validator.checkTableExists("public", stream.source.resource);
-    if (stream.tracksDelete()) {
-        try validator.checkReplicaIdentityFull("public", stream.source.resource);
-    }
 }
