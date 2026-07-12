@@ -157,7 +157,7 @@ pub const PostgresSource = struct {
             const wait_time: i32 = @intCast(@max(remaining.toMilliseconds(), 0));
 
             // Step 1: Blocking receive (poll() inside)
-            const repl_msg = self.protocol.receiveMessage(wait_time) catch |err| {
+            const repl_msg = self.protocol.receiveMessage(io, wait_time) catch |err| {
                 std.log.warn("Failed to receive replication message: {}", .{err});
                 return PostgresSourceError.ReplicationFailed;
             };
@@ -180,7 +180,7 @@ pub const PostgresSource = struct {
 
             // Step 2: DRAIN all buffered messages (non-blocking)
             while (changes.items.len < limit) {
-                const next_msg = self.protocol.receiveMessage(0) catch break; // 0ms wait time = non-blocking
+                const next_msg = self.protocol.receiveMessage(io, 0) catch break; // 0ms wait time = non-blocking
                 if (next_msg == null) break; // No more buffered data
 
                 var buffered_msg = next_msg.?;
@@ -274,7 +274,7 @@ pub const PostgresSource = struct {
             .reply_requested = false,
         };
 
-        self.protocol.sendStatusUpdate(status) catch |err| {
+        self.protocol.sendStatusUpdate(io, status) catch |err| {
             std.log.warn("Failed to send feedback: {}", .{err});
             return PostgresSourceError.ReplicationFailed;
         };
