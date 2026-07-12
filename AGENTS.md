@@ -93,8 +93,9 @@ TOML, secrets kept out of the file (see `docs/examples/config.toml`).
   (`mechanism`, `username`, `password_env`).
 - `[observability]` (optional; absent = off): `address`/`port` for a Prometheus
   `/metrics` plus `/healthz` and `/readyz` HTTP server.
-- Postgres needs `wal_level = logical` and `REPLICA IDENTITY FULL` on tracked
-  tables. Outboxx auto-creates the slot and publication.
+- Postgres needs `wal_level = logical`, plus `REPLICA IDENTITY FULL` on tables
+  whose stream tracks DELETE (validated at startup; UPDATE emits only the new
+  row, so it doesn't need it). Outboxx auto-creates the slot and publication.
 
 ## Conventions
 

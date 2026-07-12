@@ -81,6 +81,24 @@ test "createTestDefault" {
     try testing.expectEqualStrings("localhost:9092", cfg.sink.kafka.?.brokers[0]);
 }
 
+test "Stream.tracksDelete reflects the configured operations" {
+    const Stream = config.Stream;
+    const base: Stream = .{
+        .name = "s",
+        .source = .{ .resource = "users", .operations = &.{} },
+        .flow = .{ .format = "json" },
+        .sink = .{ .destination = "t", .routing_key = null },
+    };
+
+    var insert_update = base;
+    insert_update.source.operations = &.{ "insert", "update" };
+    try testing.expect(!insert_update.tracksDelete());
+
+    var with_delete = base;
+    with_delete.source.operations = &.{ "insert", "delete" };
+    try testing.expect(with_delete.tracksDelete());
+}
+
 test "supported adapter types are implemented" {
     try testing.expectEqual(@as(usize, 1), config.SupportedValues.SOURCE_TYPES.len);
     try testing.expectEqualStrings("postgres", config.SupportedValues.SOURCE_TYPES[0]);

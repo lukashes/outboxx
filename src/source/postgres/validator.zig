@@ -125,4 +125,46 @@ pub const PostgresValidator = struct {
 
         print("PostgreSQL validation: Table '{s}.{s}' exists ✓\n", .{ schema, table_name });
     }
+
+    /// Require REPLICA IDENTITY FULL on a table whose stream tracks DELETE, so the
+    /// deleted row carries all columns. Any other identity (default/index/nothing)
+    /// drops the non-key columns from the DELETE old row, breaking the documented
+    /// format. Call only for delete-tracking streams: FULL is irrelevant otherwise
+    /// and only inflates UPDATE WAL.
+    pub fn checkReplicaIdentityFull(self: *Self, schema: []const u8, table_name: []const u8) ValidationError!void {
+        const query = std.fmt.allocPrintSentinel(self.allocator, "SELECT c.relreplident FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = '{s}' AND c.relname = '{s}';", .{ schema, table_name }, 0) catch return ValidationError.OutOfMemory;
+        defer self.allocator.free(query);
+
+        const result = try self.executeQuery(query.ptr);
+        defer c.PQclear(result);
+
+        // checkTableExists runs first, so an empty result only happens on a race
+        // (the table was dropped between the two queries).
+        if (c.PQntuples(result) == 0) {
+            std.log.warn("PostgreSQL validation: Table '{s}.{s}' not found while checking replica identity", .{ schema, table_name });
+            return ValidationError.TableNotFound;
+        }
+
+        const identity = std.mem.span(c.PQgetvalue(result, 0, 0));
+
+        if (identity.len == 0 or identity[0] != 'f') {
+            std.log.warn("PostgreSQL validation: Table '{s}.{s}' has REPLICA IDENTITY {s}, but this stream tracks DELETE and needs the full old row", .{ schema, table_name, replicaIdentityName(identity) });
+            std.log.warn("Fix: ALTER TABLE {s}.{s} REPLICA IDENTITY FULL", .{ schema, table_name });
+            return ValidationError.InvalidReplicaIdentity;
+        }
+
+        print("PostgreSQL validation: Table '{s}.{s}' REPLICA IDENTITY FULL ✓\n", .{ schema, table_name });
+    }
 };
+
+// Human-readable name for a pg_class.relreplident value, for the error message.
+fn replicaIdentityName(identity: []const u8) []const u8 {
+    if (identity.len == 0) return "unknown";
+    return switch (identity[0]) {
+        'd' => "default (primary key only)",
+        'i' => "index",
+        'n' => "nothing",
+        'f' => "full",
+        else => "unknown",
+    };
+}
