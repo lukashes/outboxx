@@ -119,11 +119,19 @@ pub const ReplicationProtocol = struct {
     pub fn createPublicationIfNotExists(self: *Self) ReplicationError!void {
         if (self.connection == null) return ReplicationError.ConnectionFailed;
 
+        // Postgres folds unquoted identifiers to lowercase. We fold slot and
+        // publication names the same way so the existence check, CREATE, and
+        // START_REPLICATION all reference one name; a mixed-case name would be
+        // created folded but never re-found, and CREATE would fail "already
+        // exists" on every restart -- a crash loop.
+        const pub_name = try std.ascii.allocLowerString(self.allocator, self.publication_name);
+        defer self.allocator.free(pub_name);
+
         // Check if publication exists
         const check_sql_tmp = std.fmt.allocPrint(
             self.allocator,
             "SELECT pubname FROM pg_publication WHERE pubname = '{s}'",
-            .{self.publication_name},
+            .{pub_name},
         ) catch return ReplicationError.OutOfMemory;
         defer self.allocator.free(check_sql_tmp);
 
@@ -142,7 +150,7 @@ pub const ReplicationProtocol = struct {
 
         const num_rows = c.PQntuples(check_result);
         if (num_rows > 0) {
-            std.log.info("Publication '{s}' already exists", .{self.publication_name});
+            std.log.info("Publication '{s}' already exists", .{pub_name});
             return;
         }
 
@@ -150,14 +158,14 @@ pub const ReplicationProtocol = struct {
         const create_sql_tmp = std.fmt.allocPrint(
             self.allocator,
             "CREATE PUBLICATION {s} FOR ALL TABLES",
-            .{self.publication_name},
+            .{pub_name},
         ) catch return ReplicationError.OutOfMemory;
         defer self.allocator.free(create_sql_tmp);
 
         const create_sql = self.allocator.dupeZ(u8, create_sql_tmp) catch return ReplicationError.OutOfMemory;
         defer self.allocator.free(create_sql);
 
-        std.log.info("Creating publication: {s}", .{self.publication_name});
+        std.log.info("Creating publication: {s}", .{pub_name});
 
         const create_result = c.PQexec(self.connection, create_sql.ptr);
         defer c.PQclear(create_result);
@@ -169,18 +177,23 @@ pub const ReplicationProtocol = struct {
             return ReplicationError.ConnectionFailed;
         }
 
-        std.log.info("Publication '{s}' created successfully", .{self.publication_name});
+        std.log.info("Publication '{s}' created successfully", .{pub_name});
     }
 
     /// Create replication slot if it doesn't exist
     pub fn createSlotIfNotExists(self: *Self) ReplicationError!void {
         if (self.connection == null) return ReplicationError.ConnectionFailed;
 
+        // Fold to lowercase like Postgres does for unquoted identifiers (see
+        // createPublicationIfNotExists).
+        const slot_name = try std.ascii.allocLowerString(self.allocator, self.slot_name);
+        defer self.allocator.free(slot_name);
+
         // Check if slot exists
         const check_sql_tmp = std.fmt.allocPrint(
             self.allocator,
             "SELECT slot_name FROM pg_replication_slots WHERE slot_name = '{s}'",
-            .{self.slot_name},
+            .{slot_name},
         ) catch return ReplicationError.OutOfMemory;
         defer self.allocator.free(check_sql_tmp);
 
@@ -199,7 +212,7 @@ pub const ReplicationProtocol = struct {
 
         const num_rows = c.PQntuples(check_result);
         if (num_rows > 0) {
-            std.log.info("Replication slot '{s}' already exists", .{self.slot_name});
+            std.log.info("Replication slot '{s}' already exists", .{slot_name});
             return;
         }
 
@@ -207,14 +220,14 @@ pub const ReplicationProtocol = struct {
         const create_sql_tmp = std.fmt.allocPrint(
             self.allocator,
             "CREATE_REPLICATION_SLOT {s} LOGICAL pgoutput",
-            .{self.slot_name},
+            .{slot_name},
         ) catch return ReplicationError.OutOfMemory;
         defer self.allocator.free(create_sql_tmp);
 
         const create_sql = self.allocator.dupeZ(u8, create_sql_tmp) catch return ReplicationError.OutOfMemory;
         defer self.allocator.free(create_sql);
 
-        std.log.info("Creating replication slot: {s}", .{self.slot_name});
+        std.log.info("Creating replication slot: {s}", .{slot_name});
 
         const create_result = c.PQexec(self.connection, create_sql.ptr);
         defer c.PQclear(create_result);
@@ -226,17 +239,24 @@ pub const ReplicationProtocol = struct {
             return ReplicationError.ConnectionFailed;
         }
 
-        std.log.info("Replication slot '{s}' created successfully", .{self.slot_name});
+        std.log.info("Replication slot '{s}' created successfully", .{slot_name});
     }
 
     pub fn startReplication(self: *Self, start_lsn: []const u8) ReplicationError!void {
         if (self.connection == null) return ReplicationError.ConnectionFailed;
 
+        // Fold to lowercase like Postgres does for unquoted identifiers (see
+        // createPublicationIfNotExists).
+        const slot_name = try std.ascii.allocLowerString(self.allocator, self.slot_name);
+        defer self.allocator.free(slot_name);
+        const pub_name = try std.ascii.allocLowerString(self.allocator, self.publication_name);
+        defer self.allocator.free(pub_name);
+
         // START_REPLICATION SLOT slot_name LOGICAL lsn (proto_version '1', publication_names 'pub_name')
         const sql_tmp = std.fmt.allocPrint(
             self.allocator,
             "START_REPLICATION SLOT {s} LOGICAL {s} (proto_version '1', publication_names '{s}')",
-            .{ self.slot_name, start_lsn, self.publication_name },
+            .{ slot_name, start_lsn, pub_name },
         ) catch return ReplicationError.OutOfMemory;
         defer self.allocator.free(sql_tmp);
 

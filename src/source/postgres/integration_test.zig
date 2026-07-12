@@ -11,6 +11,7 @@ const constants = @import("constants");
 
 const source_mod = @import("source.zig");
 const PostgresSource = source_mod.PostgresSource;
+const ReplicationProtocol = @import("replication_protocol.zig").ReplicationProtocol;
 
 const c = @import("c"); // C bindings (build-system translate-c)
 
@@ -186,6 +187,47 @@ test "Streaming source: receive and convert INSERT messages to ChangeEvents" {
     try source.sendFeedback(std.testing.io, batch.last_lsn);
 
     std.log.info("Integration test passed!", .{});
+}
+
+test "ReplicationProtocol: mixed-case slot and publication names are idempotent across restarts" {
+    const allocator = testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(@intCast(test_helpers.nowMicros(std.testing.io)));
+    const random_suffix = prng.random().int(u32);
+    const timestamp = test_helpers.nowSeconds(std.testing.io);
+
+    // Mixed-case config names. Postgres folds unquoted identifiers to lowercase,
+    // so the objects are actually created lowercase.
+    const pub_name = try std.fmt.allocPrint(allocator, "MixedCasePub_{d}_{d}", .{ timestamp, random_suffix });
+    defer allocator.free(pub_name);
+    const slot_name = try std.fmt.allocPrint(allocator, "MixedCaseSlot_{d}_{d}", .{ timestamp, random_suffix });
+    defer allocator.free(slot_name);
+
+    // Cleanup (and the case-sensitive slot drop) must use the folded name.
+    const pub_lower = try std.ascii.allocLowerString(allocator, pub_name);
+    defer allocator.free(pub_lower);
+    const slot_lower = try std.ascii.allocLowerString(allocator, slot_name);
+    defer allocator.free(slot_lower);
+
+    const setup_conn = try createSetupConnection(allocator);
+    defer c.PQfinish(setup_conn);
+    defer cleanupTestEnvironment(allocator, setup_conn, "mixedcase_no_table", slot_lower, pub_lower);
+
+    const conn_str = try getTestConnectionString(allocator);
+    defer allocator.free(conn_str);
+
+    // Two start cycles with the same mixed-case config. Before the fix the second
+    // cycle crash-looped: the existence check compared the raw mixed-case string,
+    // never matched the folded objects, and CREATE failed with "already exists".
+    var cycle: usize = 0;
+    while (cycle < 2) : (cycle += 1) {
+        var proto = ReplicationProtocol.init(allocator, slot_name, pub_name);
+        defer proto.deinit();
+
+        try proto.connect(conn_str);
+        try proto.createPublicationIfNotExists();
+        try proto.createSlotIfNotExists();
+    }
 }
 
 test "Streaming source: UPDATE operation E2E with old and new tuples" {
