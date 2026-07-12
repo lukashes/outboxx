@@ -290,6 +290,15 @@ fn validatePostgres(allocator: std.mem.Allocator, cfg: Config, conninfo: []const
             printStatus("ERROR: Table validation failed for '{s}': {}\n", .{ stream.source.resource, err });
             return err;
         };
+
+        // Only a stream that tracks DELETE needs REPLICA IDENTITY FULL, so the
+        // deleted row carries all columns. Schema is fixed to "public" for now.
+        if (stream.hasDeleteOperation()) {
+            validator.checkReplicaIdentity("public", stream.source.resource) catch |err| {
+                printStatus("ERROR: Replica identity validation failed for '{s}': {}\n", .{ stream.source.resource, err });
+                return err;
+            };
+        }
     }
 
     printStatus("PostgreSQL validation completed successfully!\n", .{});

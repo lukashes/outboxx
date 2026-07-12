@@ -91,7 +91,9 @@ GRANT USAGE, CREATE ON SCHEMA public TO outboxx_user;
 -- Grant table access (SELECT needed for logical replication)
 GRANT SELECT ON TABLE my_table TO outboxx_user;
 
--- Enable REPLICA IDENTITY FULL (required for capturing complete row data in UPDATE/DELETE)
+-- Enable REPLICA IDENTITY FULL so DELETE events carry the full row.
+-- Required (and validated at startup) for tables whose stream tracks DELETE.
+-- UPDATE emits only the new row, so it does not need this.
 ALTER TABLE my_table REPLICA IDENTITY FULL;
 ```
 

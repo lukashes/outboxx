@@ -81,6 +81,32 @@ test "PostgresValidator: invalid schema should error" {
     try testing.expectError(error.TableNotFound, result);
 }
 
+test "PostgresValidator: replica identity FULL passes" {
+    const allocator = testing.allocator;
+    var validator = PostgresValidator.init(allocator);
+    defer validator.deinit();
+
+    const conn_str = "host=localhost port=5432 dbname=outboxx_test user=postgres password=password";
+
+    try validator.connect(conn_str);
+    // users is set to REPLICA IDENTITY FULL by the dev init script.
+    try validator.checkReplicaIdentity("public", "users");
+}
+
+test "PostgresValidator: replica identity not FULL should error" {
+    const allocator = testing.allocator;
+    var validator = PostgresValidator.init(allocator);
+    defer validator.deinit();
+
+    const conn_str = "host=localhost port=5432 dbname=outboxx_test user=postgres password=password";
+
+    try validator.connect(conn_str);
+    // system_logs keeps the default replica identity (the init script never
+    // alters it), so a delete-tracking stream on it must be rejected.
+    const result = validator.checkReplicaIdentity("public", "system_logs");
+    try testing.expectError(error.InvalidReplicaIdentity, result);
+}
+
 test "PostgresValidator: invalid connection string should error" {
     const allocator = testing.allocator;
     var validator = PostgresValidator.init(allocator);
@@ -113,6 +139,9 @@ test "PostgresValidator: methods fail when not connected" {
 
     const table_result = validator.checkTableExists("public", "users");
     try testing.expectError(error.ConnectionFailed, table_result);
+
+    const identity_result = validator.checkReplicaIdentity("public", "users");
+    try testing.expectError(error.ConnectionFailed, identity_result);
 }
 
 // Note: Testing invalid PostgreSQL version and wal_level requires mocking or
