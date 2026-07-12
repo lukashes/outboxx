@@ -128,8 +128,11 @@ pub const Processor = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        std.log.debug("processor.deinit: deinit producer", .{});
         self.producer.deinit();
+        std.log.debug("processor.deinit: producer done, deinit source", .{});
         self.source.deinit();
+        std.log.debug("processor.deinit: done", .{});
     }
 
     /// Receive one batch, route each change to its streams, and stage the batch LSN for commit.
@@ -166,11 +169,6 @@ pub const Processor = struct {
             defer matched.deinit(batch_allocator);
 
             if (matched.items.len == 0) {
-                std.log.debug("No matching streams for {s}.{s} ({s})", .{
-                    change_event.meta.schema,
-                    change_event.meta.resource,
-                    change_event.op,
-                });
                 continue;
             }
 
@@ -182,6 +180,7 @@ pub const Processor = struct {
 
                 producer.sendMessage(topic_name, partition_key, json_bytes) catch |err| {
                     self.obs.recordProduceError();
+                    std.log.debug("processChangesToKafka: sendMessage failed, propagating {} (fail-fast)", .{err});
                     return err;
                 };
 
@@ -191,14 +190,6 @@ pub const Processor = struct {
                 if (self.events_processed % 10000 == 0) {
                     std.log.info("Processed {} CDC events", .{self.events_processed});
                 }
-
-                std.log.debug("Sent {s} message for {s}.{s} to topic '{s}' (key: {s})", .{
-                    change_event.op,
-                    change_event.meta.schema,
-                    change_event.meta.resource,
-                    topic_name,
-                    partition_key,
-                });
             }
         }
 
@@ -249,7 +240,11 @@ pub const Processor = struct {
         // On a receive error, stop the worker before the error propagates (it uses
         // the producer, which processor.deinit destroys). The worker touches no
         // libpq and no longer flushes on cancel, so this returns promptly.
-        errdefer flush_future.cancel(io);
+        errdefer {
+            std.log.debug("startStreaming: error path, cancelling flush worker", .{});
+            flush_future.cancel(io);
+            std.log.debug("startStreaming: flush worker cancelled, propagating error", .{});
+        }
 
         while (!stop_signal.load(.monotonic)) {
             self.obs.heartbeat(io);

@@ -1,7 +1,11 @@
+const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 
 pub const VERSION = build_options.version;
+/// Minimum log level compiled in; set with -Dlog_level=debug|info|warn|err.
+/// addOption emits its own copy of the enum, so map it back onto std.log.Level by tag.
+pub const LOG_LEVEL: std.log.Level = std.meta.stringToEnum(std.log.Level, @tagName(build_options.log_level)).?;
 pub const APP_NAME = "Outboxx";
 pub const DESCRIPTION = "PostgreSQL Change Data Capture with Kafka";
 
