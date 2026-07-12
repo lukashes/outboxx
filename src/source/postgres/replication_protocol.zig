@@ -61,6 +61,11 @@ pub const ReplicationProtocol = struct {
     connection: ?*c.PGconn,
     slot_name: []const u8,
     publication_name: []const u8,
+    // Serializes libpq access: the flush worker sends feedback on the same
+    // connection the receive loop reads from, and libpq forbids using one
+    // PGconn from two threads. Held only for short non-blocking calls; the
+    // poll() wait runs unlocked.
+    mutex: std.Io.Mutex = .init,
 
     const Self = @This();
 
@@ -278,12 +283,16 @@ pub const ReplicationProtocol = struct {
         std.log.debug("Replication started successfully", .{});
     }
 
-    pub fn receiveMessage(self: *Self, timeout_ms: i32) ReplicationError!?ReplicationMessage {
+    pub fn receiveMessage(self: *Self, io: std.Io, timeout_ms: i32) ReplicationError!?ReplicationMessage {
         if (self.connection == null) return ReplicationError.ConnectionFailed;
 
         // Step 1: Try non-blocking read first
         var buffer: [*c]u8 = undefined;
-        var len = c.PQgetCopyData(self.connection, &buffer, 1); // async=1 (non-blocking)
+        var len = blk: {
+            self.mutex.lockUncancelable(io);
+            defer self.mutex.unlock(io);
+            break :blk c.PQgetCopyData(self.connection, &buffer, 1); // async=1 (non-blocking)
+        };
 
         if (len == 0) {
             // Step 2: No data available - wait for socket to become readable
@@ -313,6 +322,8 @@ pub const ReplicationProtocol = struct {
             }
 
             // Step 4: Socket is readable - consume input
+            self.mutex.lockUncancelable(io);
+            defer self.mutex.unlock(io);
             if (c.PQconsumeInput(self.connection) == 0) {
                 const error_msg = c.PQerrorMessage(self.connection);
                 std.log.warn("Failed to consume input: {s}", .{error_msg});
@@ -330,6 +341,9 @@ pub const ReplicationProtocol = struct {
         }
 
         if (len == -2) {
+            // PQerrorMessage reads connection state, so it needs the lock too.
+            self.mutex.lockUncancelable(io);
+            defer self.mutex.unlock(io);
             const error_msg = c.PQerrorMessage(self.connection);
             std.log.warn("Error reading copy data: {s}", .{error_msg});
             return ReplicationError.ReceiveFailed;
@@ -398,8 +412,11 @@ pub const ReplicationProtocol = struct {
         }
     }
 
-    pub fn sendStatusUpdate(self: *Self, update: StandbyStatusUpdate) ReplicationError!void {
+    pub fn sendStatusUpdate(self: *Self, io: std.Io, update: StandbyStatusUpdate) ReplicationError!void {
         if (self.connection == null) return ReplicationError.ConnectionFailed;
+
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
 
         // Build StandbyStatusUpdate message
         // Format: 'r' + WALWrite(8) + WALFlush(8) + WALApply(8) + ClientTime(8) + ReplyRequested(1)
