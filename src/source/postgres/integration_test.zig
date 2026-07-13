@@ -768,3 +768,74 @@ test "Streaming source: Timeout behavior with no data" {
 
     std.log.info("Timeout test passed: empty batch returned gracefully after timeout", .{});
 }
+
+// Terminating the walsender must fail fast, not be mistaken for an idle poll.
+// Guards the #74 regression where a server-ended COPY stream returned null (the
+// same value as a timeout) and the receive loop spun forever on a dead stream.
+test "Streaming source: server-ended COPY stream fails fast" {
+    const allocator = testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(@intCast(test_helpers.nowMicros(std.testing.io)));
+    const random_suffix = prng.random().int(u32);
+    const timestamp = test_helpers.nowSeconds(std.testing.io);
+    const table_name = try std.fmt.allocPrint(allocator, "stream_end_{d}_{d}", .{ timestamp, random_suffix });
+    defer allocator.free(table_name);
+    const slot_name = try std.fmt.allocPrint(allocator, "slot_end_{d}_{d}", .{ timestamp, random_suffix });
+    defer allocator.free(slot_name);
+    const pub_name = try std.fmt.allocPrint(allocator, "pub_end_{d}_{d}", .{ timestamp, random_suffix });
+    defer allocator.free(pub_name);
+
+    const setup_conn = try createSetupConnection(allocator);
+    defer c.PQfinish(setup_conn);
+    defer cleanupTestEnvironment(allocator, setup_conn, table_name, slot_name, pub_name);
+
+    const create_table_sql = try test_helpers.formatSqlZ(allocator, "CREATE TABLE {s} (id SERIAL PRIMARY KEY, name TEXT)", .{table_name});
+    defer allocator.free(create_table_sql);
+    try execSQL(setup_conn, create_table_sql);
+
+    const create_pub_sql = try test_helpers.formatSqlZ(allocator, "CREATE PUBLICATION {s} FOR TABLE {s}", .{ pub_name, table_name });
+    defer allocator.free(create_pub_sql);
+    try execSQL(setup_conn, create_pub_sql);
+
+    const create_slot_sql = try test_helpers.formatSqlZ(allocator, "SELECT pg_create_logical_replication_slot('{s}', 'pgoutput')", .{slot_name});
+    defer allocator.free(create_slot_sql);
+    try execSQL(setup_conn, create_slot_sql);
+
+    const lsn_result = c.PQexec(setup_conn, "SELECT pg_current_wal_lsn()");
+    defer c.PQclear(lsn_result);
+    const start_lsn = try allocator.dupeZ(u8, std.mem.span(c.PQgetvalue(lsn_result, 0, 0)));
+    defer allocator.free(start_lsn);
+
+    const insert_sql = try test_helpers.formatSqlZ(allocator, "INSERT INTO {s} (name) VALUES ('Alice')", .{table_name});
+    defer allocator.free(insert_sql);
+    try execSQL(setup_conn, insert_sql);
+    try execSQL(setup_conn, "SELECT pg_switch_wal()");
+
+    const conn_str = try getTestConnectionString(allocator);
+    defer allocator.free(conn_str);
+
+    var source = PostgresSource.init(allocator, slot_name, pub_name);
+    defer source.deinit();
+    try source.connect(conn_str, start_lsn);
+
+    // First batch: proves streaming works and the walsender is active (it now
+    // holds the slot, so pg_replication_slots.active_pid is set).
+    const batch = try source.receiveBatch(std.testing.io, allocator, 10);
+    var mut_batch = batch;
+    mut_batch.deinit();
+
+    // Kill the walsender out from under the stream. Assert one backend matched,
+    // otherwise the slot was not active yet and the next receive would just idle.
+    const kill_sql = try test_helpers.formatSqlZ(allocator, "SELECT pg_terminate_backend(active_pid) FROM pg_replication_slots WHERE slot_name = '{s}' AND active_pid IS NOT NULL", .{slot_name});
+    defer allocator.free(kill_sql);
+    const kill_result = c.PQexec(setup_conn, kill_sql.ptr);
+    defer c.PQclear(kill_result);
+    try testing.expect(c.PQresultStatus(kill_result) == c.PGRES_TUPLES_OK);
+    try testing.expectEqual(@as(c_int, 1), c.PQntuples(kill_result));
+
+    // The stream is dead now: receiveBatch must return an error, not an empty
+    // batch. A 2s wait is plenty for the socket to observe the close.
+    try testing.expectError(error.ReplicationFailed, source.receiveBatchWithWaitTime(std.testing.io, allocator, 10, 2000));
+
+    std.log.info("Server-ended stream test passed: fail-fast on dead COPY stream", .{});
+}

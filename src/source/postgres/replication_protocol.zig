@@ -5,6 +5,7 @@ pub const ReplicationError = error{
     ConnectionFailed,
     StartReplicationFailed,
     ReceiveFailed,
+    StreamEnded,
     SendFeedbackFailed,
     InvalidMessage,
     OutOfMemory,
@@ -336,8 +337,26 @@ pub const ReplicationProtocol = struct {
 
         // Step 6: Process received data
         if (len == -1) {
-            // No more data (clean end of COPY stream)
-            return null;
+            // The server ended the COPY stream (walsender shutdown, slot
+            // conflict, standby promotion). We never stop streaming on purpose,
+            // so any end is fatal: fail fast and let the supervisor restart us,
+            // resuming from the last confirmed LSN. Same value as a poll timeout
+            // otherwise, which would masquerade as idle on a dead stream.
+            self.mutex.lockUncancelable(io);
+            defer self.mutex.unlock(io);
+            // Drain the final COPY result(s) to surface the server's reason.
+            var logged = false;
+            while (true) {
+                const result = c.PQgetResult(self.connection);
+                if (result == null) break;
+                defer c.PQclear(result);
+                if (c.PQresultStatus(result) == c.PGRES_FATAL_ERROR) {
+                    std.log.warn("Replication stream ended by server: {s}", .{c.PQresultErrorMessage(result)});
+                    logged = true;
+                }
+            }
+            if (!logged) std.log.warn("Replication stream ended by server", .{});
+            return ReplicationError.StreamEnded;
         }
 
         if (len == -2) {
