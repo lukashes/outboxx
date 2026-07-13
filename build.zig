@@ -316,6 +316,25 @@ pub fn build(b: *std.Build) void {
     replication_protocol_tests.root_module.addImport("test_helpers", test_helpers_module);
     streaming_integration_tests.root_module.addImport("test_helpers", test_helpers_module);
 
+    // Processor stream-routing integration test. In its own module (not the
+    // source integration test) so it can import cdc_processor without pulling
+    // source.zig into two modules via a relative import.
+    const processor_integration_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/processor/routing_integration_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    processor_integration_tests.root_module.addImport("cdc_processor", cdc_processor_module);
+    processor_integration_tests.root_module.addImport("postgres_source", postgres_source_module);
+    processor_integration_tests.root_module.addImport("config", config_module);
+    processor_integration_tests.root_module.addImport("c", c_dev_module);
+    processor_integration_tests.root_module.addImport("test_helpers", test_helpers_module);
+    processor_integration_tests.root_module.link_libc = true;
+    processor_integration_tests.root_module.linkSystemLibrary("pq", .{});
+    processor_integration_tests.root_module.linkSystemLibrary("rdkafka", .{});
+
     const run_config_tests = b.addRunArtifact(config_tests);
     const run_observability_tests = b.addRunArtifact(observability_tests);
     const run_domain_tests = b.addRunArtifact(domain_tests);
@@ -373,6 +392,7 @@ pub fn build(b: *std.Build) void {
 
     const run_kafka_integration_tests = b.addRunArtifact(kafka_integration_tests);
     const run_streaming_integration_tests = b.addRunArtifact(streaming_integration_tests);
+    const run_processor_integration_tests = b.addRunArtifact(processor_integration_tests);
 
     const integration_test_step = b.step("test-integration", "Run integration tests");
     integration_test_step.dependOn(&run_kafka_producer_tests.step);
@@ -380,6 +400,7 @@ pub fn build(b: *std.Build) void {
     integration_test_step.dependOn(&run_streaming_integration_tests.step);
     integration_test_step.dependOn(&run_replication_protocol_tests.step);
     integration_test_step.dependOn(&run_validator_tests.step);
+    integration_test_step.dependOn(&run_processor_integration_tests.step);
 
     // E2E test step - Full pipeline tests (PostgreSQL → CDC → Kafka)
     const e2e_test_step = b.step("test-e2e", "Run end-to-end tests");
@@ -503,6 +524,7 @@ pub fn build(b: *std.Build) void {
     match_streams_bench.root_module.addImport("config", config_module);
     match_streams_bench.root_module.addImport("bench_helpers", bench_helpers_module);
     match_streams_bench.root_module.addImport("processor", cdc_processor_module);
+    match_streams_bench.root_module.addImport("domain", domain_module);
 
     const install_match_streams_bench = b.addInstallArtifact(match_streams_bench, .{});
 

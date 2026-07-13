@@ -3,14 +3,28 @@ const zbench = @import("zbench");
 const config_module = @import("config");
 const bench_helpers = @import("bench_helpers");
 const processor_mod = @import("processor");
+const domain = @import("domain");
 
 const Stream = config_module.Stream;
 const StreamSource = config_module.StreamSource;
 const StreamFlow = config_module.StreamFlow;
 const StreamSink = config_module.StreamSink;
+const ChangeEvent = domain.ChangeEvent;
 const CountingAllocator = bench_helpers.CountingAllocator;
 
 const iterations = 100000;
+
+// An INSERT on public.<resource>; matchStreams only reads op/schema/resource, so
+// data is left unset by ChangeEvent.init.
+fn insertChange(resource: []const u8) ChangeEvent {
+    return ChangeEvent.init(.INSERT, .{
+        .source = "postgres",
+        .resource = resource,
+        .schema = "public",
+        .timestamp = 0,
+        .lsn = null,
+    });
+}
 
 fn createTestStreams(allocator: std.mem.Allocator) ![]Stream {
     const streams = try allocator.alloc(Stream, 10);
@@ -121,18 +135,20 @@ fn createTestStreams(allocator: std.mem.Allocator) ![]Stream {
 // Stream array creation is heavy (10 stream objects with metadata), prepared outside to track matchStreams() allocations only
 const BenchMatchFound = struct {
     streams: []const Stream,
+    change: ChangeEvent = insertChange("users"),
 
     pub fn run(self: *BenchMatchFound, allocator: std.mem.Allocator) void {
-        var matched = processor_mod.matchStreams(allocator, self.streams, "public", "users", "INSERT") catch unreachable;
+        var matched = processor_mod.matchStreams(allocator, self.streams, self.change) catch unreachable;
         defer matched.deinit(allocator);
     }
 };
 
 const BenchMatchNotFound = struct {
     streams: []const Stream,
+    change: ChangeEvent = insertChange("nonexistent_table"),
 
     pub fn run(self: *BenchMatchNotFound, allocator: std.mem.Allocator) void {
-        var matched = processor_mod.matchStreams(allocator, self.streams, "public", "nonexistent_table", "INSERT") catch unreachable;
+        var matched = processor_mod.matchStreams(allocator, self.streams, self.change) catch unreachable;
         defer matched.deinit(allocator);
     }
 };
