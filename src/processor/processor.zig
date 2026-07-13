@@ -27,17 +27,22 @@ fn tallyEvent(list: *std.ArrayList(EventCount), allocator: std.mem.Allocator, st
     try list.append(allocator, .{ .stream = stream, .operation = operation, .count = 1 });
 }
 
-/// Return the streams whose resource and operations match a given table change; caller owns the list.
-pub fn matchStreams(allocator: std.mem.Allocator, streams: []const Stream, table_name: []const u8, operation: []const u8) !std.ArrayList(Stream) {
+/// Return the streams whose resource and operations match a given change; caller owns the list.
+pub fn matchStreams(allocator: std.mem.Allocator, streams: []const Stream, change: ChangeEvent) !std.ArrayList(Stream) {
     var matched = std.ArrayList(Stream).empty;
 
+    // Streams target the public schema (startup validation enforces it), so a
+    // change from any other schema must not match even when the table name
+    // collides. Routing tables from other schemas is #50.
+    if (!std.mem.eql(u8, change.meta.schema, "public")) return matched;
+
     for (streams) |stream| {
-        if (!std.mem.eql(u8, stream.source.resource, table_name)) {
+        if (!std.mem.eql(u8, stream.source.resource, change.meta.resource)) {
             continue;
         }
 
         for (stream.source.operations) |op| {
-            if (std.ascii.eqlIgnoreCase(op, operation)) {
+            if (std.ascii.eqlIgnoreCase(op, change.op)) {
                 try matched.append(allocator, stream);
                 break;
             }
@@ -160,7 +165,7 @@ pub const Processor = struct {
         defer event_counts.deinit(batch_allocator);
 
         for (batch.changes) |change_event| {
-            var matched = try matchStreams(batch_allocator, self.streams, change_event.meta.resource, change_event.op);
+            var matched = try matchStreams(batch_allocator, self.streams, change_event);
             defer matched.deinit(batch_allocator);
 
             if (matched.items.len == 0) {
