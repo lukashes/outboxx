@@ -73,15 +73,15 @@ fn flushCommitWorker(
 
         iterations = 0;
 
-        producer.flush(constants.CDC.KAFKA_FLUSH_TIMEOUT_MS) catch |err| {
-            std.log.err("Background flush failed: {}", .{err});
-            continue;
-        };
-
         const lsn = pending_lsn.load(.acquire);
         if (lsn == 0) {
             continue;
         }
+
+        producer.flush(constants.CDC.KAFKA_FLUSH_TIMEOUT_MS) catch |err| {
+            std.log.err("Background flush failed: {}", .{err});
+            continue;
+        };
 
         source.sendFeedback(io, lsn) catch |err| {
             std.log.err("Background LSN commit failed: {}", .{err});
@@ -89,11 +89,12 @@ fn flushCommitWorker(
         };
     }
 
+    const lsn = pending_lsn.load(.acquire);
+
     producer.flush(constants.CDC.KAFKA_FLUSH_TIMEOUT_MS) catch |err| {
         std.log.warn("Final background flush failed: {}", .{err});
     };
 
-    const lsn = pending_lsn.load(.acquire);
     if (lsn > 0) {
         source.sendFeedback(io, lsn) catch |err| {
             std.log.warn("Final background LSN commit failed: {}", .{err});
