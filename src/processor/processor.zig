@@ -83,6 +83,13 @@ fn flushCommitWorker(
             continue;
         };
 
+        // A drained queue is not a delivered queue: a message can leave it by
+        // permanently failing. Hold the LSN if any did; the receive loop turns
+        // this into a fail-fast.
+        if (producer.deliveryErrorCount() > 0) {
+            continue;
+        }
+
         source.sendFeedback(io, lsn) catch |err| {
             std.log.err("Background LSN commit failed: {}", .{err});
             continue;
@@ -95,7 +102,7 @@ fn flushCommitWorker(
         std.log.warn("Final background flush failed: {}", .{err});
     };
 
-    if (lsn > 0) {
+    if (lsn > 0 and producer.deliveryErrorCount() == 0) {
         source.sendFeedback(io, lsn) catch |err| {
             std.log.warn("Final background LSN commit failed: {}", .{err});
         };
@@ -258,6 +265,14 @@ pub const Processor = struct {
             const batch_alloc = batch_arena.allocator();
 
             try self.processChangesToKafka(io, batch_alloc, constants.CDC.BATCH_SIZE);
+
+            // A permanent delivery failure (or fatal producer error) means data
+            // never reached Kafka. Fail fast so the slot re-sends from the last
+            // confirmed LSN after restart.
+            if (self.producer.deliveryErrorCount() > 0 or self.producer.fatalError()) {
+                std.log.warn("Kafka delivery failed; exiting for restart", .{});
+                return error.DeliveryFailed;
+            }
 
             // A stream quiet past the liveness window (no change and no keepalive)
             // is dead: a frozen or black-holed peer sends no FIN/RST, so reads just
