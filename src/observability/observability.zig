@@ -154,7 +154,9 @@ pub const Observability = struct {
         g.record(lag_seconds, .{}) catch {};
     }
 
-    /// Mark the receive loop as alive; call once per batch iteration.
+    /// Record wire activity on the replication stream (a change or a server
+    /// keepalive). Call only on real activity, not once per loop turn, or a dead
+    /// stream would look alive.
     pub fn heartbeat(self: *Self, io: std.Io) void {
         self.last_progress_sec.store(std.Io.Timestamp.now(io, .awake).toSeconds(), .monotonic);
     }
@@ -169,7 +171,8 @@ pub const Observability = struct {
         self.streaming.store(true, .monotonic);
     }
 
-    /// Liveness: the receive loop produced progress recently (not hung).
+    /// Liveness: the stream saw wire activity within LIVENESS_MAX_STALE_SEC.
+    /// False means a stalled/dead stream — used by /healthz and to fail fast.
     pub fn liveness(self: *Self, io: std.Io) bool {
         const now = std.Io.Timestamp.now(io, .awake).toSeconds();
         return now - self.last_progress_sec.load(.monotonic) < constants.OBSERVABILITY.LIVENESS_MAX_STALE_SEC;

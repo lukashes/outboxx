@@ -147,6 +147,10 @@ pub const Processor = struct {
         // reading the replication stream — the signal readiness cares about.
         self.obs.markStreaming();
 
+        // Liveness follows real wire activity (a change or a keepalive), not the
+        // loop turning: an empty batch on a dead stream must not refresh it.
+        if (batch.changes.len > 0 or batch.received_keepalive) self.obs.heartbeat(io);
+
         const producer = &self.producer;
 
         if (batch.changes.len == 0) {
@@ -224,6 +228,9 @@ pub const Processor = struct {
         // The source is connected and validated before we get here, so readiness's
         // connection signal goes up now; markStreaming follows on the first batch.
         self.obs.markConnected(true);
+        // Seed liveness so it does not read stale before the first message; from
+        // here it is refreshed only by real wire activity (see processChangesToKafka).
+        self.obs.heartbeat(io);
 
         const producer = &self.producer;
 
@@ -244,14 +251,20 @@ pub const Processor = struct {
         }
 
         while (!stop_signal.load(.monotonic)) {
-            self.obs.heartbeat(io);
-
             var batch_arena = std.heap.ArenaAllocator.init(self.allocator);
             defer batch_arena.deinit();
 
             const batch_alloc = batch_arena.allocator();
 
             try self.processChangesToKafka(io, batch_alloc, constants.CDC.BATCH_SIZE);
+
+            // A stream quiet past the liveness window (no change and no keepalive)
+            // is dead: a frozen or black-holed peer sends no FIN/RST, so reads just
+            // time out and look idle. Fail fast so the supervisor reconnects.
+            if (!self.obs.liveness(io)) {
+                std.log.warn("Replication stream stalled: no wire activity within the liveness window; exiting for restart", .{});
+                return error.StreamStalled;
+            }
         }
 
         // Graceful stop: cancel and await the worker (runs its final flush/commit)

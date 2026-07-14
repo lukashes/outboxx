@@ -1,5 +1,6 @@
 const std = @import("std");
 const Observability = @import("observability.zig").Observability;
+const constants = @import("constants");
 
 test "writeMetrics renders counters and the lag gauge in Prometheus text" {
     const allocator = std.testing.allocator;
@@ -158,4 +159,17 @@ test "disabled observability records nothing but keeps health state" {
 
     obs.markConnected(false);
     try std.testing.expect(!obs.readiness(io));
+}
+
+test "liveness goes stale once wire activity is older than the window" {
+    const io = std.testing.io;
+
+    var obs = Observability.noop();
+    obs.heartbeat(io);
+    try std.testing.expect(obs.liveness(io));
+
+    // Backdate the last activity past the window, as a stalled stream would.
+    const now = std.Io.Timestamp.now(io, .awake).toSeconds();
+    obs.last_progress_sec.store(now - constants.OBSERVABILITY.LIVENESS_MAX_STALE_SEC - 5, .monotonic);
+    try std.testing.expect(!obs.liveness(io));
 }
