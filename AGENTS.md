@@ -122,3 +122,15 @@ TOML, secrets kept out of the file (see `docs/examples/config.toml`).
   breaks on 0.16. Don't bump it blindly.
 - Never commit a password or log a conninfo verbatim. `gitleaks` runs in CI;
   dev and load-stand throwaway credentials are allowlisted in `.gitleaks.toml`.
+- A lost replication connection surfaces two ways (verified empirically). A
+  clean end (walsender shutdown, `pg_terminate_backend`) makes `PQgetCopyData`
+  return `-1` once, then `-2` on the next call, so the reader fails fast on its
+  own. A frozen or black-holed peer sends no FIN/RST, so `PQgetCopyData` returns
+  `len=0` (looks idle, `CONNECTION_OK`) forever; `docker pause` reproduces it,
+  60s of silence with no error. Polling faster does not help: there is no signal
+  to read. The source catches this with a liveness deadline: no message (a
+  change or a server keepalive) for `LIVENESS_MAX_STALE_SEC` (90s, must exceed
+  the server keepalive interval ~`wal_sender_timeout/2`) yields `StreamStalled`
+  and fail-fast. The `/healthz` heartbeat is refreshed only by real wire
+  activity, for the same reason (an empty batch on a dead stream must not look
+  alive).
