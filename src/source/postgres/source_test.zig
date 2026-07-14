@@ -23,6 +23,7 @@ test "Batch: deinit with empty changes" {
         .changes = changes,
         .last_lsn = 12345,
         .replication_lag_seconds = 0,
+        .received_message = false,
         .allocator = allocator,
     };
     defer batch.deinit();

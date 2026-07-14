@@ -43,6 +43,11 @@ pub const Batch = struct {
     /// the transaction's commit time). 0 when the batch carried no data (caught up).
     replication_lag_seconds: i64,
 
+    /// Whether any message (a change or a server keepalive) arrived on the wire
+    /// while building this batch. Drives the liveness heartbeat: an empty batch
+    /// with no wire activity must not look alive.
+    received_message: bool,
+
     allocator: std.mem.Allocator,
 
     pub fn deinit(self: *Batch) void {
@@ -56,6 +61,7 @@ pub const Batch = struct {
 pub const PostgresSourceError = error{
     ConnectionFailed,
     ReplicationFailed,
+    StreamStalled,
     DecodeFailed,
     ConversionFailed,
     OutOfMemory,
@@ -78,6 +84,13 @@ pub const PostgresSource = struct {
     // The stream does not expose the server WAL head during a backlog, so lag is
     // measured as wall-clock time behind this commit, like Debezium.
     last_commit_time: i64,
+    // Monotonic seconds (`.awake`) of the last message received on the wire, and
+    // whether it has been seeded yet. A stream with no activity past
+    // stall_timeout_sec is treated as dead. stall_timeout_sec is a field so tests
+    // can shorten it.
+    last_activity_sec: i64,
+    activity_seeded: bool,
+    stall_timeout_sec: i64,
 
     const Self = @This();
 
@@ -94,6 +107,9 @@ pub const PostgresSource = struct {
             .converter = Converter.init(allocator),
             .last_lsn = 0,
             .last_commit_time = 0,
+            .last_activity_sec = 0,
+            .activity_seeded = false,
+            .stall_timeout_sec = constants.OBSERVABILITY.LIVENESS_MAX_STALE_SEC,
         };
     }
 
@@ -148,6 +164,14 @@ pub const PostgresSource = struct {
         }
 
         var last_confirmed_lsn: u64 = self.last_lsn; // Track LSN locally
+        var received_message = false;
+
+        // Seed the activity clock on the first call so a dead peer from the very
+        // start still trips the deadline instead of starting already stale.
+        if (!self.activity_seeded) {
+            self.last_activity_sec = std.Io.Timestamp.now(io, .awake).toSeconds();
+            self.activity_seeded = true;
+        }
 
         // Monotonic deadline (`.awake`), so a wall-clock jump can't skew the wait.
         const deadline = std.Io.Timestamp.now(io, .awake).addDuration(.fromMilliseconds(wait_time_ms));
@@ -170,6 +194,9 @@ pub const PostgresSource = struct {
                 }
                 continue;
             }
+
+            // A message (change or keepalive) means the stream is alive.
+            received_message = true;
 
             // Extract change from the first message
             var msg = repl_msg.?;
@@ -194,6 +221,17 @@ pub const PostgresSource = struct {
         // Update instance LSN for next batch
         self.last_lsn = last_confirmed_lsn;
 
+        // Liveness: a healthy stream sends changes or keepalives well within the
+        // timeout. A frozen or dead peer sends nothing and no FIN/RST, so the
+        // reads just time out and it looks idle; fail fast so the supervisor
+        // restarts us and reconnects, instead of streaming silence forever.
+        const now_sec = std.Io.Timestamp.now(io, .awake).toSeconds();
+        if (received_message) self.last_activity_sec = now_sec;
+        if (now_sec - self.last_activity_sec > self.stall_timeout_sec) {
+            std.log.warn("Replication stream stalled: no data or keepalive for {d}s (limit {d}s); exiting for restart", .{ now_sec - self.last_activity_sec, self.stall_timeout_sec });
+            return PostgresSourceError.StreamStalled;
+        }
+
         // Time behind source: wall clock minus the last transaction's commit time.
         // Postgres commit timestamps are microseconds since 2000-01-01, so shift to
         // the Unix epoch before comparing. 0 until we have seen a commit.
@@ -207,6 +245,7 @@ pub const PostgresSource = struct {
             .changes = try changes.toOwnedSlice(batch_allocator),
             .last_lsn = last_confirmed_lsn,
             .replication_lag_seconds = lag_seconds,
+            .received_message = received_message,
             .allocator = batch_allocator,
         };
     }

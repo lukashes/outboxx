@@ -768,3 +768,66 @@ test "Streaming source: Timeout behavior with no data" {
 
     std.log.info("Timeout test passed: empty batch returned gracefully after timeout", .{});
 }
+
+// A stream with no changes and no keepalives past the stall timeout is dead and
+// must fail fast, not keep returning empty batches. A real silent peer (frozen
+// or network-black-holed) sends no FIN/RST, so the reads just time out; here we
+// age the activity clock to reproduce that without freezing Postgres.
+test "Streaming source: a stalled stream fails fast" {
+    const allocator = testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(@intCast(test_helpers.nowMicros(std.testing.io)));
+    const random_suffix = prng.random().int(u32);
+    const timestamp = test_helpers.nowSeconds(std.testing.io);
+    const table_name = try std.fmt.allocPrint(allocator, "stall_{d}_{d}", .{ timestamp, random_suffix });
+    defer allocator.free(table_name);
+    const slot_name = try std.fmt.allocPrint(allocator, "slot_stall_{d}_{d}", .{ timestamp, random_suffix });
+    defer allocator.free(slot_name);
+    const pub_name = try std.fmt.allocPrint(allocator, "pub_stall_{d}_{d}", .{ timestamp, random_suffix });
+    defer allocator.free(pub_name);
+
+    const setup_conn = try createSetupConnection(allocator);
+    defer c.PQfinish(setup_conn);
+    defer cleanupTestEnvironment(allocator, setup_conn, table_name, slot_name, pub_name);
+
+    const create_table_sql = try test_helpers.formatSqlZ(allocator, "CREATE TABLE {s} (id SERIAL PRIMARY KEY, name TEXT)", .{table_name});
+    defer allocator.free(create_table_sql);
+    try execSQL(setup_conn, create_table_sql);
+    const create_pub_sql = try test_helpers.formatSqlZ(allocator, "CREATE PUBLICATION {s} FOR TABLE {s}", .{ pub_name, table_name });
+    defer allocator.free(create_pub_sql);
+    try execSQL(setup_conn, create_pub_sql);
+    const create_slot_sql = try test_helpers.formatSqlZ(allocator, "SELECT pg_create_logical_replication_slot('{s}', 'pgoutput')", .{slot_name});
+    defer allocator.free(create_slot_sql);
+    try execSQL(setup_conn, create_slot_sql);
+
+    const lsn_result = c.PQexec(setup_conn, "SELECT pg_current_wal_lsn()");
+    defer c.PQclear(lsn_result);
+    const start_lsn = try allocator.dupeZ(u8, std.mem.span(c.PQgetvalue(lsn_result, 0, 0)));
+    defer allocator.free(start_lsn);
+
+    const insert_sql = try test_helpers.formatSqlZ(allocator, "INSERT INTO {s} (name) VALUES ('Alice')", .{table_name});
+    defer allocator.free(insert_sql);
+    try execSQL(setup_conn, insert_sql);
+    try execSQL(setup_conn, "SELECT pg_switch_wal()");
+
+    const conn_str = try getTestConnectionString(allocator);
+    defer allocator.free(conn_str);
+
+    var source = PostgresSource.init(allocator, slot_name, pub_name);
+    defer source.deinit();
+    try source.connect(conn_str, start_lsn);
+
+    // First batch: real activity, seeds the liveness clock.
+    const batch = try source.receiveBatch(std.testing.io, allocator, 10);
+    var mut_batch = batch;
+    mut_batch.deinit();
+
+    // Age the activity clock past a short timeout, as a dead peer would leave it.
+    source.stall_timeout_sec = 1;
+    source.last_activity_sec = std.Io.Timestamp.now(std.testing.io, .awake).toSeconds() - 60;
+
+    // No new rows arrive, so this batch sees no wire activity and must fail fast.
+    try testing.expectError(error.StreamStalled, source.receiveBatchWithWaitTime(std.testing.io, allocator, 10, 50));
+
+    std.log.info("Stall test passed: fail-fast on a stream with no activity", .{});
+}

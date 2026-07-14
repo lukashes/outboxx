@@ -147,6 +147,10 @@ pub const Processor = struct {
         // reading the replication stream — the signal readiness cares about.
         self.obs.markStreaming();
 
+        // Liveness follows real wire activity (a change or a keepalive), not the
+        // loop turning: an empty batch on a dead stream must not refresh it.
+        if (batch.received_message) self.obs.heartbeat(io);
+
         const producer = &self.producer;
 
         if (batch.changes.len == 0) {
@@ -224,6 +228,9 @@ pub const Processor = struct {
         // The source is connected and validated before we get here, so readiness's
         // connection signal goes up now; markStreaming follows on the first batch.
         self.obs.markConnected(true);
+        // Seed liveness so it does not read stale before the first message; from
+        // here it is refreshed only by real wire activity (see processChangesToKafka).
+        self.obs.heartbeat(io);
 
         const producer = &self.producer;
 
@@ -244,8 +251,6 @@ pub const Processor = struct {
         }
 
         while (!stop_signal.load(.monotonic)) {
-            self.obs.heartbeat(io);
-
             var batch_arena = std.heap.ArenaAllocator.init(self.allocator);
             defer batch_arena.deinit();
 
