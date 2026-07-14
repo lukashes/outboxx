@@ -257,6 +257,14 @@ pub const Processor = struct {
             const batch_alloc = batch_arena.allocator();
 
             try self.processChangesToKafka(io, batch_alloc, constants.CDC.BATCH_SIZE);
+
+            // A stream quiet past the liveness window (no change and no keepalive)
+            // is dead: a frozen or black-holed peer sends no FIN/RST, so reads just
+            // time out and look idle. Fail fast so the supervisor reconnects.
+            if (!self.obs.liveness(io)) {
+                std.log.warn("Replication stream stalled: no wire activity within the liveness window; exiting for restart", .{});
+                return error.StreamStalled;
+            }
         }
 
         // Graceful stop: cancel and await the worker (runs its final flush/commit)

@@ -32,10 +32,10 @@ pub const CDC = struct {
 /// Observability tuning constants.
 pub const OBSERVABILITY = struct {
     // Max time with no activity on the replication wire (a change or a server
-    // keepalive) before the stream is considered dead. Drives both the /healthz
-    // liveness signal and the source's fail-fast on a silently stalled stream
-    // (a frozen or dead peer sends no FIN/RST, so it looks idle, not broken).
-    // Must exceed the server keepalive interval (~wal_sender_timeout/2, default
-    // 30s) with margin, or a healthy idle stream would trip it.
+    // keepalive) before the stream is considered dead. One signal, two readers:
+    // the /healthz probe and the receive loop's fail-fast on a silently stalled
+    // stream (a frozen or dead peer sends no FIN/RST, so it looks idle, not
+    // broken). Must exceed the server keepalive interval (~wal_sender_timeout/2,
+    // default 30s) with margin, or a healthy idle stream would trip it.
     pub const LIVENESS_MAX_STALE_SEC: i64 = 90;
 };
