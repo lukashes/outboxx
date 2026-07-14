@@ -149,7 +149,7 @@ pub const Processor = struct {
 
         // Liveness follows real wire activity (a change or a keepalive), not the
         // loop turning: an empty batch on a dead stream must not refresh it.
-        if (batch.received_message) self.obs.heartbeat(io);
+        if (batch.changes.len > 0 or batch.received_keepalive) self.obs.heartbeat(io);
 
         const producer = &self.producer;
 

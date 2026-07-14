@@ -43,10 +43,10 @@ pub const Batch = struct {
     /// the transaction's commit time). 0 when the batch carried no data (caught up).
     replication_lag_seconds: i64,
 
-    /// Whether any message (a change or a server keepalive) arrived on the wire
-    /// while building this batch. Drives the liveness heartbeat: an empty batch
-    /// with no wire activity must not look alive.
-    received_message: bool,
+    /// Whether a server keepalive arrived while building this batch. Together with
+    /// a non-empty `changes`, it tells the processor the stream is alive so it can
+    /// refresh the liveness heartbeat; an empty batch with neither is a dead stream.
+    received_keepalive: bool,
 
     allocator: std.mem.Allocator,
 
@@ -153,7 +153,7 @@ pub const PostgresSource = struct {
         }
 
         var last_confirmed_lsn: u64 = self.last_lsn; // Track LSN locally
-        var received_message = false;
+        var received_keepalive = false;
 
         // Monotonic deadline (`.awake`), so a wall-clock jump can't skew the wait.
         const deadline = std.Io.Timestamp.now(io, .awake).addDuration(.fromMilliseconds(wait_time_ms));
@@ -177,12 +177,13 @@ pub const PostgresSource = struct {
                 continue;
             }
 
-            // A message (change or keepalive) means the stream is alive.
-            received_message = true;
-
             // Extract change from the first message
             var msg = repl_msg.?;
             defer msg.deinit(self.allocator);
+
+            // A server keepalive carries no change but proves the stream is alive;
+            // changes prove it too, so liveness is refreshed on either (processor).
+            if (std.meta.activeTag(msg) == .keepalive) received_keepalive = true;
 
             const msg_lsn = try self.extractChangeFromMessage(io, batch_allocator, msg, &changes);
             last_confirmed_lsn = msg_lsn; // Update LSN (always > 0 on success)
@@ -194,6 +195,8 @@ pub const PostgresSource = struct {
 
                 var buffered_msg = next_msg.?;
                 defer buffered_msg.deinit(self.allocator);
+
+                if (std.meta.activeTag(buffered_msg) == .keepalive) received_keepalive = true;
 
                 const buffered_lsn = try self.extractChangeFromMessage(io, batch_allocator, buffered_msg, &changes);
                 last_confirmed_lsn = buffered_lsn; // Update LSN (always > 0 on success)
@@ -216,7 +219,7 @@ pub const PostgresSource = struct {
             .changes = try changes.toOwnedSlice(batch_allocator),
             .last_lsn = last_confirmed_lsn,
             .replication_lag_seconds = lag_seconds,
-            .received_message = received_message,
+            .received_keepalive = received_keepalive,
             .allocator = batch_allocator,
         };
     }
