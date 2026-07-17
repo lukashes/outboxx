@@ -176,6 +176,12 @@ pub const Processor = struct {
         var event_counts = std.ArrayList(EventCount).empty;
         defer event_counts.deinit(batch_allocator);
 
+        // With dr_msg_cb registered, a produced message counts against
+        // queue.buffering.max.messages until its delivery report is served by a
+        // poll. Serve them every KAFKA_POLL_INTERVAL sends so a large batch does
+        // not fill the queue before the single poll at the end.
+        var sent_since_poll: u32 = 0;
+
         for (batch.changes) |change_event| {
             var matched = try matchStreams(batch_allocator, self.streams, change_event);
             defer matched.deinit(batch_allocator);
@@ -197,6 +203,12 @@ pub const Processor = struct {
                 };
 
                 try tallyEvent(&event_counts, batch_allocator, stream.name, change_event.op);
+
+                sent_since_poll += 1;
+                if (sent_since_poll >= constants.CDC.KAFKA_POLL_INTERVAL) {
+                    producer.poll();
+                    sent_since_poll = 0;
+                }
 
                 self.events_processed += 1;
                 if (self.events_processed % 10000 == 0) {
