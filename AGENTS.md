@@ -75,11 +75,14 @@ Keyed by the stream's routing key (default `id`); UPDATE emits only the new row.
 
 ```json
 {"op":"INSERT","data":{"id":1,"name":"Alice"},
- "meta":{"source":"postgres","resource":"users","schema":"public","timestamp":1700000000,"lsn":null}}
+ "meta":{"source":"postgres","resource":"users","schema":"public","timestamp":1700000000,"lsn":"1/3259A308"}}
 ```
 
-pgoutput sends every value as text; the converter promotes int/float/bool OIDs
-to JSON types and keeps the rest (including `numeric`) as strings.
+`timestamp` is the transaction's commit time (Unix seconds), stable across
+replays; `lsn` is the record's WAL position (pg_lsn text form), the dedup key
+for at-least-once redeliveries. pgoutput sends every value as text; the
+converter promotes int/float/bool OIDs to JSON types and keeps the rest
+(including `numeric`) as strings.
 
 ## Configuration
 
