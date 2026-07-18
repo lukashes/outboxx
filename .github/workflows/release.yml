@@ -172,6 +172,68 @@ jobs:
           ./zig-out/bin/outboxx --version
           tar -czf "outboxx-${VERSION}-linux-${{ matrix.arch }}.tar.gz" -C zig-out/bin outboxx
 
+      # A released binary must do more than print its version: boot real
+      # services and drive one change through the whole pipeline.
+      - name: Smoke-test the binary end to end
+        run: |
+          set -euo pipefail
+          docker run -d --name pg -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:17 -c wal_level=logical
+          docker run -d --name kafka -p 9092:9092 apache/kafka:3.9.0
+
+          until docker exec pg pg_isready -U postgres >/dev/null 2>&1; do sleep 1; done
+          docker exec pg psql -U postgres -c "CREATE TABLE users (id int PRIMARY KEY, name text)"
+          until docker exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1; do sleep 2; done
+
+          cat > smoke.toml <<'TOML'
+          [metadata]
+          version = "v0"
+          [source]
+          type = "postgres"
+          [source.postgres]
+          connection_env = "POSTGRES_URL"
+          slot_name = "smoke_slot"
+          publication_name = "smoke_publication"
+          [sink]
+          type = "kafka"
+          [sink.kafka]
+          brokers = ["localhost:9092"]
+          tls = false
+          [observability]
+          address = "127.0.0.1"
+          port = 9464
+          [[streams]]
+          name = "users-smoke"
+          [streams.source]
+          resource = "users"
+          operations = ["insert"]
+          [streams.flow]
+          format = "json"
+          [streams.sink]
+          destination = "smoke.users"
+          routing_key = "id"
+          TOML
+
+          POSTGRES_URL="postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable" \
+            ./zig-out/bin/outboxx --config smoke.toml > smoke.log 2>&1 &
+          smoke_pid=$!
+
+          for _ in $(seq 1 30); do
+            grep -q "CDC processor started successfully" smoke.log && break
+            sleep 2
+          done
+          grep "CDC processor started successfully" smoke.log
+          curl -fsS -o /dev/null -w 'healthz: %{http_code}\n' http://127.0.0.1:9464/healthz
+
+          docker exec pg psql -U postgres -c "INSERT INTO users VALUES (1, 'smoke')"
+          docker exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
+            --bootstrap-server localhost:9092 --topic smoke.users \
+            --from-beginning --max-messages 1 --timeout-ms 60000 > event.json
+          grep '"op":"INSERT"' event.json
+          cat event.json
+
+          kill "$smoke_pid"
+          docker rm -f pg kafka >/dev/null
+
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
