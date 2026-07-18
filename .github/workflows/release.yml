@@ -186,7 +186,8 @@ jobs:
 
       - name: Dump service logs on failure
         if: failure()
-        run: docker-compose logs --tail=40
+        # The runner only ships the compose v2 plugin, not standalone docker-compose.
+        run: docker compose logs --tail=40
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
