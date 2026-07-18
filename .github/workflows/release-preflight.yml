@@ -1,0 +1,45 @@
+name: Release Preflight
+
+# Dry-run of the release for PRs labeled `release`: the full pipeline builds
+# (image and static binaries, with the e2e smoke) but publishes nothing, so a
+# broken release surfaces at review time, not after the tag exists. The check
+# job mirrors auto-tag's conditions, catching the cases where the merge would
+# silently not release at all.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+jobs:
+  check:
+    name: Version is releasable
+    if: contains(github.event.pull_request.labels.*.name, 'release')
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Check version and changelog
+        run: |
+          version="$(awk -F'"' '/\.version =/ {print $2; exit}' build.zig.zon)"
+          if [ -z "$version" ]; then
+            echo "failed to read .version from build.zig.zon" >&2
+            exit 1
+          fi
+          echo "version: $version"
+          if git ls-remote --exit-code origin "refs/tags/v${version}" >/dev/null; then
+            echo "v${version} is already tagged: merging would not release; bump the version" >&2
+            exit 1
+          fi
+          if ! awk -v ver="$version" '/^## / { on = ($2 == ver); next } on' CHANGELOG.md | grep -q .; then
+            echo "CHANGELOG.md has no \"## ${version}\" section: auto-tag would skip after the merge" >&2
+            exit 1
+          fi
+
+  dry-run:
+    name: Release dry run
+    if: contains(github.event.pull_request.labels.*.name, 'release')
+    uses: ./.github/workflows/release.yml
+    with:
+      dry-run: true
