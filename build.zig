@@ -15,7 +15,7 @@ pub fn build(b: *std.Build) void {
         []const u8,
         "version",
         "Version string embedded into the outboxx binary",
-    ) orelse "0.2.0";
+    ) orelse "0.3.0";
 
     // Minimum log level compiled in. Default info keeps Release/prod output clean
     // (lower levels are filtered at comptime); the load stand builds with
