@@ -41,5 +41,14 @@ jobs:
     name: Release dry run
     if: contains(github.event.pull_request.labels.*.name, 'release')
     uses: ./.github/workflows/release.yml
+    # The called workflow statically declares the write permissions its
+    # publishing steps need, and GitHub validates them at startup even though
+    # dry-run skips every one of those steps. Grant them so the call passes
+    # validation; nothing in a dry run uses the token for writes. Fork PRs
+    # cannot be granted write and would fail at startup, which is fine: only
+    # maintainer release PRs carry the `release` label.
+    permissions:
+      contents: write
+      packages: write
     with:
       dry-run: true
