@@ -142,10 +142,8 @@ jobs:
         include:
           - arch: amd64
             runner: ubuntu-24.04
-            zig_target: x86_64-linux-musl
           - arch: arm64
             runner: ubuntu-24.04-arm
-            zig_target: aarch64-linux-musl
 
     steps:
       - name: Checkout code
@@ -171,62 +169,24 @@ jobs:
       - name: Build static binary
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          ZIG_TARGET: ${{ matrix.zig_target }}
         run: |
-          deps="$(nix build .#static-deps --print-out-paths)"
-          nix develop --command bash -c "
-            export C_INCLUDE_PATH=\"$deps/include\"
-            zig build -Doptimize=ReleaseSafe -Dcpu=baseline -Dversion=\"$VERSION\" \
-              -Dtarget=\"$ZIG_TARGET\" -Dstatic-deps=true --search-prefix \"$deps\"
-          "
+          make build-static VERSION="$VERSION"
           # Native arch matches the target, so the binary must run right here.
           ./zig-out/bin/outboxx --version
           tar -czf "outboxx-${VERSION}-linux-${{ matrix.arch }}.tar.gz" -C zig-out/bin outboxx
 
-      # A released build must do more than print its version: run the full e2e
-      # suite (INSERT/UPDATE/DELETE through Postgres -> CDC -> Kafka) built
-      # against the exact static link set. Services mirror pr-checks.yml,
-      # minus the TLS listener the e2e tests do not use.
-      - name: Start Postgres and Kafka
-        run: |
-          docker run -d --name pg --network host \
-            -e POSTGRES_PASSWORD=password \
-            -e POSTGRES_DB=outboxx_test \
-            -e POSTGRES_INITDB_ARGS="-c wal_level=logical -c max_replication_slots=10 -c max_wal_senders=10 -c max_logical_replication_workers=4" \
-            postgres:17
-          docker run -d --name kafka --network host \
-            -e KAFKA_CFG_NODE_ID=1 \
-            -e KAFKA_CFG_PROCESS_ROLES=broker,controller \
-            -e KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@localhost:19093 \
-            -e KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:19093 \
-            -e KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092 \
-            -e KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT \
-            -e KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER \
-            -e KAFKA_KRAFT_CLUSTER_ID=preflight-cluster-id \
-            -e ALLOW_PLAINTEXT_LISTENER=yes \
-            -e KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE=true \
-            bitnamilegacy/kafka:latest
-          # Host-side pg_isready: the temporary initdb server listens only on
-          # the unix socket, so the TCP port only answers once the real one is up.
-          until pg_isready -h localhost -p 5432 -U postgres >/dev/null 2>&1; do sleep 1; done
-          PGPASSWORD=password psql -h localhost -p 5432 -U postgres -d outboxx_test -f dev/postgres/postgres-init.sql
-          timeout 90s bash -c 'until nc -z localhost 9092; do sleep 2; done'
+      # A released build must do more than print its version: run the e2e
+      # suite (Postgres -> CDC -> Kafka) built against the exact static link
+      # set, on the same dev environment the tests use everywhere else.
+      - name: Start the dev environment
+        run: make env-up
 
       - name: Run e2e tests against the static build
-        env:
-          ZIG_TARGET: ${{ matrix.zig_target }}
-        run: |
-          deps="$(nix build .#static-deps --print-out-paths)"
-          nix develop --command bash -c "
-            export C_INCLUDE_PATH=\"$deps/include\"
-            zig build test-e2e -Dstatic-deps=true -Dtarget=\"$ZIG_TARGET\" --search-prefix \"$deps\"
-          "
+        run: make test-e2e-static
 
       - name: Dump service logs on failure
         if: failure()
-        run: |
-          echo "=== kafka ==="; docker logs kafka 2>&1 | tail -40
-          echo "=== postgres ==="; docker logs pg 2>&1 | tail -40
+        run: docker-compose logs --tail=40
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
