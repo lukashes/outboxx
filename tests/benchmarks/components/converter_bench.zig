@@ -55,7 +55,7 @@ fn setupConverter(allocator: std.mem.Allocator) !Converter {
     };
     defer rel_msg.deinit(allocator);
 
-    _ = try converter.convert(std.testing.io, allocator, .{ .relation = rel_msg });
+    _ = try converter.convert(allocator, .{ .relation = rel_msg }, 0);
     return converter;
 }
 
@@ -94,7 +94,7 @@ const BenchConvertInsert = struct {
     message: PgOutputMessage,
 
     pub fn run(self: *BenchConvertInsert, allocator: std.mem.Allocator) void {
-        var event = (self.converter.convert(std.testing.io, allocator, self.message) catch unreachable).?;
+        var event = (self.converter.convert(allocator, self.message, 0) catch unreachable).?;
         event.deinit(allocator);
     }
 };
@@ -152,7 +152,7 @@ const BenchConvertUpdate = struct {
     message: PgOutputMessage,
 
     pub fn run(self: *BenchConvertUpdate, allocator: std.mem.Allocator) void {
-        var event = (self.converter.convert(std.testing.io, allocator, self.message) catch unreachable).?;
+        var event = (self.converter.convert(allocator, self.message, 0) catch unreachable).?;
         event.deinit(allocator);
     }
 };
@@ -190,7 +190,7 @@ const BenchConvertDelete = struct {
     message: PgOutputMessage,
 
     pub fn run(self: *BenchConvertDelete, allocator: std.mem.Allocator) void {
-        var event = (self.converter.convert(std.testing.io, allocator, self.message) catch unreachable).?;
+        var event = (self.converter.convert(allocator, self.message, 0) catch unreachable).?;
         event.deinit(allocator);
     }
 };

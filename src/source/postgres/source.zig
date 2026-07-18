@@ -28,8 +28,7 @@ pub const RelationMessage = pg_output_decoder.RelationMessage;
 pub const RelationMessageColumn = pg_output_decoder.RelationMessageColumn;
 pub const RelationRegistry = relation_registry.RelationRegistry;
 
-// Unix time of the Postgres epoch (2000-01-01 UTC), to convert commit timestamps.
-const POSTGRES_EPOCH_UNIX_SECONDS: i64 = 946684800;
+const POSTGRES_EPOCH_UNIX_SECONDS = converter.POSTGRES_EPOCH_UNIX_SECONDS;
 
 /// Batch of changes from PostgreSQL (streaming source)
 pub const Batch = struct {
@@ -185,7 +184,7 @@ pub const PostgresSource = struct {
             // changes prove it too, so liveness is refreshed on either (processor).
             if (std.meta.activeTag(msg) == .keepalive) received_keepalive = true;
 
-            const msg_lsn = try self.extractChangeFromMessage(io, batch_allocator, msg, &changes);
+            const msg_lsn = try self.extractChangeFromMessage(batch_allocator, msg, &changes);
             last_confirmed_lsn = msg_lsn; // Update LSN (always > 0 on success)
 
             // Step 2: DRAIN all buffered messages (non-blocking)
@@ -198,7 +197,7 @@ pub const PostgresSource = struct {
 
                 if (std.meta.activeTag(buffered_msg) == .keepalive) received_keepalive = true;
 
-                const buffered_lsn = try self.extractChangeFromMessage(io, batch_allocator, buffered_msg, &changes);
+                const buffered_lsn = try self.extractChangeFromMessage(batch_allocator, buffered_msg, &changes);
                 last_confirmed_lsn = buffered_lsn; // Update LSN (always > 0 on success)
             }
         }
@@ -232,7 +231,7 @@ pub const PostgresSource = struct {
     // the app exits non-zero, and the supervisor (systemd/k8s) restarts it. The LSN is
     // not confirmed, so PostgreSQL re-sends the same message; a persistent error becomes
     // a crash loop that needs operator intervention.
-    fn extractChangeFromMessage(self: *Self, io: std.Io, batch_allocator: std.mem.Allocator, msg: replication_protocol.ReplicationMessage, changes: *std.ArrayList(ChangeEvent)) !u64 {
+    fn extractChangeFromMessage(self: *Self, batch_allocator: std.mem.Allocator, msg: replication_protocol.ReplicationMessage, changes: *std.ArrayList(ChangeEvent)) !u64 {
         switch (msg) {
             .xlog_data => |xlog| {
                 var pg_msg = self.decoder.decode(batch_allocator, xlog.wal_data) catch |err| {
@@ -248,7 +247,7 @@ pub const PostgresSource = struct {
                     else => {},
                 }
 
-                const change_opt = self.converter.convert(io, batch_allocator, pg_msg) catch |err| {
+                const change_opt = self.converter.convert(batch_allocator, pg_msg, xlog.wal_start) catch |err| {
                     std.log.warn("Failed to convert message to ChangeEvent at LSN {}: {}", .{ xlog.server_wal_end, err });
                     return PostgresSourceError.ConversionFailed; // Propagate error up
                 };

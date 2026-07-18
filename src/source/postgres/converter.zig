@@ -15,6 +15,9 @@ const PgOutputMessage = pg_output_decoder.PgOutputMessage;
 const relation_registry = @import("relation_registry.zig");
 const RelationRegistry = relation_registry.RelationRegistry;
 
+/// Unix time of the Postgres epoch (2000-01-01 UTC), to convert commit timestamps.
+pub const POSTGRES_EPOCH_UNIX_SECONDS: i64 = 946684800;
+
 /// Consumer engine: turns decoded pgoutput messages into domain ChangeEvents.
 ///
 /// Owns the relation registry, kept current from RELATION messages and read when
@@ -22,11 +25,15 @@ const RelationRegistry = relation_registry.RelationRegistry;
 /// a buffer later.
 pub const Converter = struct {
     registry: RelationRegistry,
+    // Commit timestamp (us since the Postgres epoch) of the transaction being
+    // decoded, captured from BEGIN. Stamped on every event of that transaction,
+    // so a replayed event carries the same timestamp, not the processing time.
+    commit_time: i64,
 
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator) Self {
-        return .{ .registry = RelationRegistry.init(allocator) };
+        return .{ .registry = RelationRegistry.init(allocator), .commit_time = 0 };
     }
 
     pub fn deinit(self: *Self) void {
@@ -36,23 +43,28 @@ pub const Converter = struct {
     /// Convert one decoded pgoutput message to a ChangeEvent, or null when it
     /// carries no row change (BEGIN, COMMIT, RELATION, or a skipped type).
     /// RELATION updates the registry in place; data messages read column types
-    /// from it.
-    pub fn convert(self: *Self, io: std.Io, allocator: std.mem.Allocator, pg_msg: PgOutputMessage) !?ChangeEvent {
+    /// from it. `lsn` is the record's WAL position, stamped into meta.lsn as the
+    /// consumer-side dedup key for at-least-once redeliveries.
+    pub fn convert(self: *Self, allocator: std.mem.Allocator, pg_msg: PgOutputMessage, lsn: u64) !?ChangeEvent {
         switch (pg_msg) {
-            .begin, .commit, .skip => return null,
+            .begin => |b| {
+                self.commit_time = b.commit_time;
+                return null;
+            },
+            .commit, .skip => return null,
             .relation => |rel| {
                 try self.registry.register(rel);
                 return null;
             },
             .insert => |ins| {
                 const rel_info = try self.registry.get(ins.relation_id);
-                var event = ChangeEvent.init(ChangeOperation.INSERT, try buildMetadata(io, allocator, rel_info));
+                var event = ChangeEvent.init(ChangeOperation.INSERT, try self.buildMetadata(allocator, rel_info, lsn));
                 event.setInsertData(try tupleToRowData(allocator, ins.new_tuple, rel_info));
                 return event;
             },
             .update => |upd| {
                 const rel_info = try self.registry.get(upd.relation_id);
-                var event = ChangeEvent.init(ChangeOperation.UPDATE, try buildMetadata(io, allocator, rel_info));
+                var event = ChangeEvent.init(ChangeOperation.UPDATE, try self.buildMetadata(allocator, rel_info, lsn));
 
                 const new_row = try tupleToRowData(allocator, upd.new_tuple, rel_info);
                 const old_row = if (upd.old_tuple) |old_tuple|
@@ -65,24 +77,28 @@ pub const Converter = struct {
             },
             .delete => |del| {
                 const rel_info = try self.registry.get(del.relation_id);
-                var event = ChangeEvent.init(ChangeOperation.DELETE, try buildMetadata(io, allocator, rel_info));
+                var event = ChangeEvent.init(ChangeOperation.DELETE, try self.buildMetadata(allocator, rel_info, lsn));
                 event.setDeleteData(try tupleToRowData(allocator, del.old_tuple, rel_info));
                 return event;
             },
         }
     }
-};
 
-// Strings are duped so the event owns them independently of the relation registry.
-fn buildMetadata(io: std.Io, allocator: std.mem.Allocator, rel_info: anytype) !Metadata {
-    return .{
-        .source = try allocator.dupe(u8, "postgres"),
-        .resource = try allocator.dupe(u8, rel_info.relation_name),
-        .schema = try allocator.dupe(u8, rel_info.namespace),
-        .timestamp = std.Io.Timestamp.now(io, .real).toSeconds(),
-        .lsn = null,
-    };
-}
+    // Strings are duped so the event owns them independently of the relation registry.
+    fn buildMetadata(self: *Self, allocator: std.mem.Allocator, rel_info: anytype, lsn: u64) !Metadata {
+        return .{
+            .source = try allocator.dupe(u8, "postgres"),
+            .resource = try allocator.dupe(u8, rel_info.relation_name),
+            .schema = try allocator.dupe(u8, rel_info.namespace),
+            // Commit time of the surrounding transaction in Unix seconds, shifted
+            // from the Postgres epoch. 0 if no BEGIN was seen (protocol-impossible
+            // for DML on a healthy stream).
+            .timestamp = if (self.commit_time == 0) 0 else @divFloor(self.commit_time, std.time.us_per_s) + POSTGRES_EPOCH_UNIX_SECONDS,
+            // Canonical Postgres text form (X/X), matching pg_lsn output.
+            .lsn = try std.fmt.allocPrint(allocator, "{X}/{X}", .{ lsn >> 32, lsn & 0xFFFF_FFFF }),
+        };
+    }
+};
 
 fn tupleToRowData(allocator: std.mem.Allocator, tuple: anytype, rel_info: anytype) !RowData {
     var builder = RowDataHelpers.createBuilder(allocator);
@@ -257,11 +273,11 @@ test "convert: BEGIN and COMMIT yield no event" {
 
     var begin = PgOutputMessage{ .begin = .{ .final_lsn = 0, .commit_time = 0, .xid = 1 } };
     defer begin.deinit(allocator);
-    try testing.expect((try converter.convert(std.testing.io, allocator, begin)) == null);
+    try testing.expect((try converter.convert(allocator, begin, 0)) == null);
 
     var commit = PgOutputMessage{ .commit = .{ .flags = 0, .commit_lsn = 0, .end_lsn = 0, .commit_time = 0 } };
     defer commit.deinit(allocator);
-    try testing.expect((try converter.convert(std.testing.io, allocator, commit)) == null);
+    try testing.expect((try converter.convert(allocator, commit, 0)) == null);
 }
 
 test "convert: skipped message type yields no event" {
@@ -270,7 +286,7 @@ test "convert: skipped message type yields no event" {
     var converter = Converter.init(allocator);
     defer converter.deinit();
 
-    try testing.expect((try converter.convert(std.testing.io, allocator, .skip)) == null);
+    try testing.expect((try converter.convert(allocator, .skip, 0)) == null);
 }
 
 test "convert INSERT: basic message to ChangeEvent" {
@@ -302,7 +318,7 @@ test "convert INSERT: basic message to ChangeEvent" {
         .type_modifier = -1,
     };
 
-    try testing.expect((try converter.convert(std.testing.io, allocator, .{ .relation = rel_msg })) == null);
+    try testing.expect((try converter.convert(allocator, .{ .relation = rel_msg }, 0)) == null);
 
     var insert_msg = pg_output_decoder.InsertMessage{
         .relation_id = 100,
@@ -320,7 +336,12 @@ test "convert INSERT: basic message to ChangeEvent" {
     };
     defer insert_msg.new_tuple.deinit(allocator);
 
-    var event = (try converter.convert(std.testing.io, allocator, .{ .insert = insert_msg })).?;
+    // BEGIN carries the transaction's commit time; events must be stamped with
+    // it (1700000000 Unix = 753315200s past the Postgres epoch), not with now().
+    const begin = PgOutputMessage{ .begin = .{ .final_lsn = 0, .commit_time = 753_315_200_000_000, .xid = 1 } };
+    try testing.expect((try converter.convert(allocator, begin, 0)) == null);
+
+    var event = (try converter.convert(allocator, .{ .insert = insert_msg }, (1 << 32) | 0x3259A308)).?;
     defer event.deinit(allocator);
 
     // Verify: operation type
@@ -330,7 +351,8 @@ test "convert INSERT: basic message to ChangeEvent" {
     try testing.expectEqualStrings("postgres", event.meta.source);
     try testing.expectEqualStrings("users", event.meta.resource);
     try testing.expectEqualStrings("public", event.meta.schema);
-    try testing.expect(event.meta.timestamp > 0);
+    try testing.expectEqual(@as(i64, 1700000000), event.meta.timestamp);
+    try testing.expectEqualStrings("1/3259A308", event.meta.lsn.?);
 
     // Verify: insert_data present
     try testing.expect(event.data == .insert);
@@ -376,7 +398,7 @@ test "convert UPDATE: message with old and new tuples" {
         .type_modifier = -1,
     };
 
-    try testing.expect((try converter.convert(std.testing.io, allocator, .{ .relation = rel_msg })) == null);
+    try testing.expect((try converter.convert(allocator, .{ .relation = rel_msg }, 0)) == null);
 
     var update_msg = pg_output_decoder.UpdateMessage{
         .relation_id = 100,
@@ -409,17 +431,18 @@ test "convert UPDATE: message with old and new tuples" {
         .value = try allocator.dupe(u8, "Bob"),
     };
 
-    var event = (try converter.convert(std.testing.io, allocator, .{ .update = update_msg })).?;
+    var event = (try converter.convert(allocator, .{ .update = update_msg }, 0)).?;
     defer event.deinit(allocator);
 
     // Verify: operation type
     try testing.expectEqualStrings("UPDATE", event.op);
 
-    // Verify: metadata
+    // Verify: metadata (no BEGIN seen in this test -> timestamp stays 0)
     try testing.expectEqualStrings("postgres", event.meta.source);
     try testing.expectEqualStrings("users", event.meta.resource);
     try testing.expectEqualStrings("public", event.meta.schema);
-    try testing.expect(event.meta.timestamp > 0);
+    try testing.expectEqual(@as(i64, 0), event.meta.timestamp);
+    try testing.expectEqualStrings("0/0", event.meta.lsn.?);
 
     // Verify: update data present
     try testing.expect(event.data == .update);
@@ -470,7 +493,7 @@ test "convert DELETE: message to ChangeEvent" {
         .type_modifier = -1,
     };
 
-    try testing.expect((try converter.convert(std.testing.io, allocator, .{ .relation = rel_msg })) == null);
+    try testing.expect((try converter.convert(allocator, .{ .relation = rel_msg }, 0)) == null);
 
     var delete_msg = pg_output_decoder.DeleteMessage{
         .relation_id = 100,
@@ -489,7 +512,7 @@ test "convert DELETE: message to ChangeEvent" {
         .value = try allocator.dupe(u8, "Alice"),
     };
 
-    var event = (try converter.convert(std.testing.io, allocator, .{ .delete = delete_msg })).?;
+    var event = (try converter.convert(allocator, .{ .delete = delete_msg }, 0)).?;
     defer event.deinit(allocator);
 
     // Verify: operation type
@@ -757,7 +780,7 @@ test "convert INSERT: error when relation not found in registry" {
         .value = try allocator.dupe(u8, "test"),
     };
 
-    const result = converter.convert(std.testing.io, allocator, .{ .insert = insert_msg });
+    const result = converter.convert(allocator, .{ .insert = insert_msg }, 0);
 
     // Verify: error is RelationNotFound
     try testing.expectError(RelationRegistryError.RelationNotFound, result);

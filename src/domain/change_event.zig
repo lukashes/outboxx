@@ -107,8 +107,8 @@ pub const Metadata = struct {
     source: []const u8, // "postgres"
     resource: []const u8, // table/collection name
     schema: []const u8, // database schema
-    timestamp: i64, // when the change occurred
-    lsn: ?[]const u8, // Log sequence number (optional, source-specific)
+    timestamp: i64, // commit time of the change's transaction (Unix seconds)
+    lsn: ?[]const u8, // WAL position of the record (source-specific; dedup key)
 };
 
 /// A CDC change event: operation, data payload, and source metadata.
@@ -144,6 +144,7 @@ pub const ChangeEvent = struct {
         allocator.free(self.meta.source);
         allocator.free(self.meta.resource);
         allocator.free(self.meta.schema);
+        if (self.meta.lsn) |lsn| allocator.free(lsn);
 
         // Free data rows
         switch (self.data) {
