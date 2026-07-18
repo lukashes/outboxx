@@ -1,4 +1,4 @@
-FROM nixos/nix:2.24.10 AS builder
+FROM nixos/nix:2.35.1 AS builder
 
 ARG VERSION=0.2.0
 
