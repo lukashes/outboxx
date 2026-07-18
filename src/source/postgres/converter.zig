@@ -46,32 +46,51 @@ pub const Converter = struct {
             },
             .insert => |ins| {
                 const rel_info = try self.registry.get(ins.relation_id);
-                var event = ChangeEvent.init(ChangeOperation.INSERT, try buildMetadata(io, allocator, rel_info));
-                event.setInsertData(try tupleToRowData(allocator, ins.new_tuple, rel_info));
+                const metadata = try buildMetadata(io, allocator, rel_info);
+                // Metadata is built before the row and is not yet owned by any
+                // event, so free it if the row build fails (e.g. column mismatch).
+                errdefer freeMetadata(allocator, metadata);
+                const row = try tupleToRowData(allocator, ins.new_tuple, rel_info);
+                var event = ChangeEvent.init(ChangeOperation.INSERT, metadata);
+                event.setInsertData(row);
                 return event;
             },
             .update => |upd| {
                 const rel_info = try self.registry.get(upd.relation_id);
-                var event = ChangeEvent.init(ChangeOperation.UPDATE, try buildMetadata(io, allocator, rel_info));
+                const metadata = try buildMetadata(io, allocator, rel_info);
+                errdefer freeMetadata(allocator, metadata);
 
-                const new_row = try tupleToRowData(allocator, upd.new_tuple, rel_info);
+                var new_row = try tupleToRowData(allocator, upd.new_tuple, rel_info);
+                errdefer RowDataHelpers.deinit(&new_row, allocator);
                 const old_row = if (upd.old_tuple) |old_tuple|
                     try tupleToRowData(allocator, old_tuple, rel_info)
                 else
                     try allocator.alloc(domain.FieldData, 0);
 
+                var event = ChangeEvent.init(ChangeOperation.UPDATE, metadata);
                 event.setUpdateData(new_row, old_row);
                 return event;
             },
             .delete => |del| {
                 const rel_info = try self.registry.get(del.relation_id);
-                var event = ChangeEvent.init(ChangeOperation.DELETE, try buildMetadata(io, allocator, rel_info));
-                event.setDeleteData(try tupleToRowData(allocator, del.old_tuple, rel_info));
+                const metadata = try buildMetadata(io, allocator, rel_info);
+                errdefer freeMetadata(allocator, metadata);
+                const row = try tupleToRowData(allocator, del.old_tuple, rel_info);
+                var event = ChangeEvent.init(ChangeOperation.DELETE, metadata);
+                event.setDeleteData(row);
                 return event;
             },
         }
     }
 };
+
+// Free the strings buildMetadata duped, for the error path before a Metadata is
+// handed to a ChangeEvent (which would otherwise own and free them).
+fn freeMetadata(allocator: std.mem.Allocator, meta: Metadata) void {
+    allocator.free(meta.source);
+    allocator.free(meta.resource);
+    allocator.free(meta.schema);
+}
 
 // Strings are duped so the event owns them independently of the relation registry.
 fn buildMetadata(io: std.Io, allocator: std.mem.Allocator, rel_info: anytype) !Metadata {
@@ -85,6 +104,15 @@ fn buildMetadata(io: std.Io, allocator: std.mem.Allocator, rel_info: anytype) !M
 }
 
 fn tupleToRowData(allocator: std.mem.Allocator, tuple: anytype, rel_info: anytype) !RowData {
+    // pgoutput sends one TupleData column per live relation column, so the loop
+    // below indexes rel_info.columns by the tuple position. A mismatch means the
+    // decoded tuple and the registry disagree (protocol violation or a stale
+    // RELATION); fail instead of reading past the columns slice.
+    if (tuple.columns.len != rel_info.columns.len) {
+        std.log.warn("Column count mismatch for {s}.{s}: tuple has {d}, relation has {d}", .{ rel_info.namespace, rel_info.relation_name, tuple.columns.len, rel_info.columns.len });
+        return error.ColumnCountMismatch;
+    }
+
     var builder = RowDataHelpers.createBuilder(allocator);
     errdefer {
         for (builder.items) |field| {
@@ -761,4 +789,39 @@ test "convert INSERT: error when relation not found in registry" {
 
     // Verify: error is RelationNotFound
     try testing.expectError(RelationRegistryError.RelationNotFound, result);
+}
+
+test "convert INSERT: error when tuple column count differs from relation" {
+    const allocator = testing.allocator;
+
+    var converter = Converter.init(allocator);
+    defer converter.deinit();
+
+    // Register a 2-column relation (id, name).
+    var rel_msg = pg_output_decoder.RelationMessage{
+        .relation_id = 100,
+        .namespace = try allocator.dupe(u8, "public"),
+        .relation_name = try allocator.dupe(u8, "users"),
+        .replica_identity = 'd',
+        .columns = try allocator.alloc(pg_output_decoder.RelationMessageColumn, 2),
+    };
+    defer rel_msg.deinit(allocator);
+    rel_msg.columns[0] = .{ .flags = 1, .name = try allocator.dupe(u8, "id"), .data_type = 23, .type_modifier = -1 };
+    rel_msg.columns[1] = .{ .flags = 0, .name = try allocator.dupe(u8, "name"), .data_type = 25, .type_modifier = -1 };
+
+    try testing.expect((try converter.convert(std.testing.io, allocator, .{ .relation = rel_msg })) == null);
+
+    // INSERT tuple carries only 1 column: a desync that must fail, not read past
+    // the relation's columns.
+    var insert_msg = pg_output_decoder.InsertMessage{
+        .relation_id = 100,
+        .new_tuple = pg_output_decoder.TupleMessage{
+            .columns = try allocator.alloc(pg_output_decoder.TupleData, 1),
+        },
+    };
+    defer insert_msg.new_tuple.deinit(allocator);
+    insert_msg.new_tuple.columns[0] = .{ .column_type = .text, .value = try allocator.dupe(u8, "1") };
+
+    const result = converter.convert(std.testing.io, allocator, .{ .insert = insert_msg });
+    try testing.expectError(error.ColumnCountMismatch, result);
 }
