@@ -19,6 +19,10 @@ and restart cycles).
   `build.zig.zon` version, then publishes the `linux/amd64` + `linux/arm64`
   GHCR image and a GitHub release with notes taken from this file's section
   for the released version.
+- Static (musl) release binaries for `linux/amd64` and `linux/arm64`,
+  attached to the GitHub release. Each build is smoke-tested in CI end to
+  end before publishing: the binary starts against real Postgres and Kafka
+  and one INSERT is read back from the topic.
 - Auto-tagging: a merge to main whose `build.zig.zon` version has no `v*` tag
   yet (and has its section in this file) is tagged automatically and the
   release workflow is dispatched on the new tag, so a release is one merged
