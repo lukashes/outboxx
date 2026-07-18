@@ -120,17 +120,82 @@ jobs:
             echo "- Commit tag: \`${IMAGE_NAME}:sha-${GITHUB_SHA::12}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # Portable standalone binaries: static musl builds, so unlike the nix-built
+  # image binary they carry no /nix/store paths and run on any Linux.
+  binary:
+    name: Static binary (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            zig_target: x86_64-linux-musl
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            zig_target: aarch64-linux-musl
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Read version
+        id: version
+        run: |
+          version="$(awk -F'"' '/\.version =/ {print $2; exit}' build.zig.zon)"
+          if [ -z "$version" ]; then
+            echo "failed to read .version from build.zig.zon" >&2
+            exit 1
+          fi
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match build.zig.zon version v${version}" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v16
+
+      - name: Build static binary
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ZIG_TARGET: ${{ matrix.zig_target }}
+        run: |
+          deps="$(nix build .#static-deps --print-out-paths)"
+          nix develop --command bash -c "
+            export C_INCLUDE_PATH=\"$deps/include\"
+            zig build -Doptimize=ReleaseSafe -Dcpu=baseline -Dversion=\"$VERSION\" \
+              -Dtarget=\"$ZIG_TARGET\" -Dstatic-deps=true --search-prefix \"$deps\"
+          "
+          # Native arch matches the target, so the binary must run right here.
+          ./zig-out/bin/outboxx --version
+          tar -czf "outboxx-${VERSION}-linux-${{ matrix.arch }}.tar.gz" -C zig-out/bin outboxx
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.arch }}
+          path: outboxx-*.tar.gz
+          if-no-files-found: error
+
   github-release:
     name: GitHub release
     if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
-    needs: publish
+    needs: [publish, binary]
     permissions:
       contents: write
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
+
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          merge-multiple: true
 
       - name: Collect release notes
         run: |
@@ -143,13 +208,10 @@ jobs:
             exit 1
           fi
 
-      # No binary assets: the nix-built binary hardwires its ELF interpreter to
-      # a /nix/store path and only runs inside the image, which carries the
-      # whole closure. Portable standalone binaries need a static build first.
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
+          gh release create "${GITHUB_REF_NAME}" outboxx-*.tar.gz \
             --title "${GITHUB_REF_NAME}" \
             --notes-file notes.md
