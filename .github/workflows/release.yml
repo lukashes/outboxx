@@ -1,7 +1,9 @@
-name: Publish Docker Image
+name: Release
 
 on:
   workflow_dispatch:
+  push:
+    tags: ["v*.*.*"]
 
 permissions:
   contents: read
@@ -35,6 +37,12 @@ jobs:
             echo "failed to read .version from build.zig.zon" >&2
             exit 1
           fi
+          # A tag must release exactly the version the source claims, or the
+          # image/binary labels and the tag would disagree.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match build.zig.zon version v${version}" >&2
+            exit 1
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Login to GHCR
@@ -55,6 +63,25 @@ jobs:
             --tag "${IMAGE_NAME}:sha-${GITHUB_SHA::12}-${ARCH}" \
             .
           docker run --rm "${IMAGE_NAME}:${VERSION}-${ARCH}" --version
+
+      # The release binary is the exact file shipped in the image, byte for byte,
+      # not a separate build that could drift from it.
+      - name: Extract binary from image
+        env:
+          ARCH: ${{ matrix.arch }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          id="$(docker create "${IMAGE_NAME}:${VERSION}-${ARCH}")"
+          docker cp "${id}:/app/outboxx" outboxx
+          docker rm "${id}" >/dev/null
+          tar -czf "outboxx-${VERSION}-linux-${ARCH}.tar.gz" outboxx
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.arch }}
+          path: outboxx-*.tar.gz
+          if-no-files-found: error
 
       - name: Push image
         env:
@@ -111,3 +138,40 @@ jobs:
             echo "- Build tag: \`${IMAGE_NAME}:${VERSION}-${{ github.run_number }}\`"
             echo "- Commit tag: \`${IMAGE_NAME}:sha-${GITHUB_SHA::12}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  github-release:
+    name: GitHub release
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    needs: publish
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Download binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          merge-multiple: true
+
+      - name: Collect release notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          # The section for this version in CHANGELOG.md: from its "## X.Y.Z"
+          # heading (exclusive) to the next "## " heading.
+          awk -v ver="$version" '/^## / { on = ($2 == ver); next } on' CHANGELOG.md > notes.md
+          if ! [ -s notes.md ]; then
+            echo "CHANGELOG.md has no \"## ${version}\" section; move Unreleased under it before tagging" >&2
+            exit 1
+          fi
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" outboxx-*.tar.gz \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file notes.md
