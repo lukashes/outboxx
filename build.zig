@@ -170,6 +170,8 @@ pub fn build(b: *std.Build) void {
     // on --search-prefix instead. Unreferenced archive members cost nothing.
     const static_deps = b.option(bool, "static-deps", "Link the C dependencies of libpq/librdkafka explicitly (static musl builds)") orelse false;
     const link_opts: std.Build.Module.LinkSystemLibraryOptions = if (static_deps) .{ .use_pkg_config = .no } else .{};
+    // libpq needs pgcommon/pgport/ssl/crypto; librdkafka needs ssl/z/zstd.
+    const static_dep_names = [_][]const u8{ "pgcommon", "pgport", "ssl", "crypto", "z", "zstd" };
 
     // Add PostgreSQL library (libpq)
     exe.root_module.linkSystemLibrary("pq", link_opts);
@@ -178,8 +180,7 @@ pub fn build(b: *std.Build) void {
     exe.root_module.linkSystemLibrary("rdkafka", link_opts);
 
     if (static_deps) {
-        // libpq needs pgcommon/pgport/ssl/crypto; librdkafka needs ssl/z/zstd.
-        for ([_][]const u8{ "pgcommon", "pgport", "ssl", "crypto", "z", "zstd" }) |name| {
+        for (static_dep_names) |name| {
             exe.root_module.linkSystemLibrary(name, link_opts);
         }
     }
@@ -386,9 +387,16 @@ pub fn build(b: *std.Build) void {
     e2e_streaming_test.root_module.addImport("config", config_module);
     e2e_streaming_test.root_module.addImport("postgres_source", postgres_source_module);
     e2e_streaming_test.root_module.addImport("kafka_producer", kafka_producer_module);
+    // Links like the exe so `zig build test-e2e -Dstatic-deps -Dtarget=*-musl`
+    // exercises the full suite against the exact static release link set.
     e2e_streaming_test.root_module.link_libc = true;
-    e2e_streaming_test.root_module.linkSystemLibrary("pq", .{});
-    e2e_streaming_test.root_module.linkSystemLibrary("rdkafka", .{});
+    e2e_streaming_test.root_module.linkSystemLibrary("pq", link_opts);
+    e2e_streaming_test.root_module.linkSystemLibrary("rdkafka", link_opts);
+    if (static_deps) {
+        for (static_dep_names) |name| {
+            e2e_streaming_test.root_module.linkSystemLibrary(name, link_opts);
+        }
+    }
 
     const run_e2e_streaming_test = b.addRunArtifact(e2e_streaming_test);
 

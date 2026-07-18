@@ -1,4 +1,4 @@
-.PHONY: help build run test test-integration test-unit clean fmt lint dev install-deps check-deps env-up env-down env-restart env-logs env-status coverage bench bench-collect bench-report bench-compare bench-save bench-ci
+.PHONY: help build build-static run test test-integration test-unit test-e2e-static clean fmt lint dev install-deps check-deps env-up env-down env-restart env-logs env-status coverage bench bench-collect bench-report bench-compare bench-save bench-ci
 
 # Use direnv to auto-load Nix environment for local development
 # This allows commands to work without 'nix develop' wrapper
@@ -94,6 +94,26 @@ test-e2e:
 	@echo -n "Running E2E tests... "
 	$(call run_with_spinner,zig build test-e2e,E2E tests)
 
+# Static (musl) release build and its validation. Linux only: the binaries
+# target the host arch and run in place. VERSION defaults to build.zig.zon.
+VERSION ?= $(shell awk -F'"' '/\.version =/ {print $$2; exit}' build.zig.zon)
+STATIC_TARGET = $(shell uname -m)-linux-musl
+
+# Build the release binary against the static musl deps from the flake.
+build-static:
+	@deps=$$(nix build .#static-deps --print-out-paths); \
+	echo "zig build (static, $(STATIC_TARGET), $(VERSION))"; \
+	C_INCLUDE_PATH="$$deps/include" zig build -Doptimize=ReleaseSafe -Dcpu=baseline \
+		-Dversion="$(VERSION)" -Dtarget=$(STATIC_TARGET) -Dstatic-deps=true --search-prefix "$$deps"
+
+# Run the e2e suite built against the same static link set the release ships.
+# Needs the dev environment (make env-up).
+test-e2e-static:
+	@deps=$$(nix build .#static-deps --print-out-paths); \
+	echo "Running E2E tests against the static build ($(STATIC_TARGET))..."; \
+	C_INCLUDE_PATH="$$deps/include" zig build test-e2e -Dstatic-deps=true \
+		-Dtarget=$(STATIC_TARGET) --search-prefix "$$deps"
+
 # Run all tests with database setup
 test: env-up test-unit test-integration test-e2e
 
@@ -148,8 +168,9 @@ env-up:
 	./dev/kafka-tls/gen-certs.sh
 	@echo "Starting PostgreSQL development environment..."
 	docker-compose up -d
-	@echo "Waiting for PostgreSQL to be ready..."
-	@sleep 5
+	@echo "Waiting for PostgreSQL and Kafka to be ready..."
+	@timeout 60 bash -c 'until pg_isready -h localhost -p 5432 -U postgres >/dev/null 2>&1; do sleep 1; done'
+	@timeout 90 bash -c 'until (echo > /dev/tcp/localhost/9092) 2>/dev/null; do sleep 1; done'
 	@echo "Development environment is ready!"
 	@echo "PostgreSQL: localhost:5432"
 	@echo "Database: outboxx_test"
