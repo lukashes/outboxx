@@ -1,0 +1,88 @@
+name: Auto-tag Release
+
+# Mint the release tag from the version in build.zig.zon: after a merge to
+# main, if v{version} does not exist yet and CHANGELOG.md has that version's
+# section, tag the merge commit and dispatch the release workflow on it.
+#
+# Idempotent by construction: an existing tag makes every later merge a no-op,
+# so reverts and repeated runs cannot re-release. The release workflow is
+# dispatched explicitly because events created with GITHUB_TOKEN do not
+# trigger other workflows (GitHub's recursion guard), so the tag push alone
+# would not start it.
+
+on:
+  push:
+    branches: [main]
+
+# Serialize runs so two quick merges cannot race the exists-check.
+concurrency:
+  group: auto-tag-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  tag:
+    name: Tag when the version is new
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Read version
+        id: version
+        run: |
+          version="$(awk -F'"' '/\.version =/ {print $2; exit}' build.zig.zon)"
+          if [ -z "$version" ]; then
+            echo "failed to read .version from build.zig.zon" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check tag and changelog
+        id: check
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if git ls-remote --exit-code origin "refs/tags/v${VERSION}" >/dev/null; then
+            echo "v${VERSION} already exists; nothing to release" >> "$GITHUB_STEP_SUMMARY"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Require the version's CHANGELOG section before minting the tag:
+          # a missing section would otherwise fail the release only after the
+          # image is published, leaving a half-done release behind an
+          # already-existing tag.
+          if ! awk -v ver="$VERSION" '/^## / { on = ($2 == ver); next } on' CHANGELOG.md | grep -q .; then
+            echo "v${VERSION} is untagged but CHANGELOG.md has no \"## ${VERSION}\" section; not releasing" >> "$GITHUB_STEP_SUMMARY"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "release=true" >> "$GITHUB_OUTPUT"
+
+      - name: Push tag
+        if: steps.check.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "v${VERSION}" -m "Release v${VERSION}"
+          if ! git push origin "v${VERSION}"; then
+            # Lost a race with a concurrent run; fine if the tag now exists.
+            git ls-remote --exit-code origin "refs/tags/v${VERSION}" >/dev/null
+            echo "v${VERSION} was pushed by a concurrent run" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+      - name: Dispatch release workflow
+        if: steps.check.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh workflow run release.yml --ref "v${VERSION}"
+          echo "released v${VERSION}: tagged and dispatched release.yml" >> "$GITHUB_STEP_SUMMARY"
