@@ -1,8 +1,9 @@
 name: Auto-tag Release
 
 # Mint the release tag from the version in build.zig.zon: after a merge to
-# main, if v{version} does not exist yet and CHANGELOG.md has that version's
-# section, tag the merge commit and dispatch the release workflow on it.
+# main, if the version is not tagged yet and CHANGELOG.md has that version's
+# section, tag the merge commit and dispatch the release workflow on it. The
+# tag carries the Zig toolchain as build metadata: v{version}-zig{major.minor}.
 #
 # Idempotent by construction: an existing tag makes every later merge a no-op,
 # so reverts and repeated runs cannot re-release. The release workflow is
@@ -36,19 +37,24 @@ jobs:
         id: version
         run: |
           version="$(awk -F'"' '/\.version =/ {print $2; exit}' build.zig.zon)"
-          if [ -z "$version" ]; then
-            echo "failed to read .version from build.zig.zon" >&2
+          zig="$(awk -F'"' '/minimum_zig_version/ {print $2; exit}' build.zig.zon)"
+          if [ -z "$version" ] || [ -z "$zig" ]; then
+            echo "failed to read .version / .minimum_zig_version from build.zig.zon" >&2
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}-zig${zig%.*}" >> "$GITHUB_OUTPUT"
 
       - name: Check tag and changelog
         id: check
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          if git ls-remote --exit-code origin "refs/tags/v${VERSION}" >/dev/null; then
-            echo "v${VERSION} already exists; nothing to release" >> "$GITHUB_STEP_SUMMARY"
+          # A version releases exactly once, whatever zig suffix it was tagged
+          # with: a toolchain bump alone must not re-release the same version.
+          if git ls-remote origin "refs/tags/v${VERSION}" "refs/tags/v${VERSION}-*" | grep -q .; then
+            echo "${VERSION} is already tagged; nothing to release" >> "$GITHUB_STEP_SUMMARY"
             echo "release=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -66,15 +72,15 @@ jobs:
       - name: Push tag
         if: steps.check.outputs.release == 'true'
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "v${VERSION}" -m "Release v${VERSION}"
-          if ! git push origin "v${VERSION}"; then
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          if ! git push origin "${TAG}"; then
             # Lost a race with a concurrent run; fine if the tag now exists.
-            git ls-remote --exit-code origin "refs/tags/v${VERSION}" >/dev/null
-            echo "v${VERSION} was pushed by a concurrent run" >> "$GITHUB_STEP_SUMMARY"
+            git ls-remote --exit-code origin "refs/tags/${TAG}" >/dev/null
+            echo "${TAG} was pushed by a concurrent run" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
@@ -82,7 +88,7 @@ jobs:
         if: steps.check.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          gh workflow run release.yml --ref "v${VERSION}"
-          echo "released v${VERSION}: tagged and dispatched release.yml" >> "$GITHUB_STEP_SUMMARY"
+          gh workflow run release.yml --ref "${TAG}"
+          echo "released ${TAG}: tagged and dispatched release.yml" >> "$GITHUB_STEP_SUMMARY"

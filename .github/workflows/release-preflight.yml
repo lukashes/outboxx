@@ -28,8 +28,10 @@ jobs:
             exit 1
           fi
           echo "version: $version"
-          if git ls-remote --exit-code origin "refs/tags/v${version}" >/dev/null; then
-            echo "v${version} is already tagged: merging would not release; bump the version" >&2
+          # Same rule as auto-tag: any v{version} or v{version}-zig* tag
+          # means this version has already been released.
+          if git ls-remote origin "refs/tags/v${version}" "refs/tags/v${version}-*" | grep -q .; then
+            echo "${version} is already tagged: merging would not release; bump the version" >&2
             exit 1
           fi
           if ! awk -v ver="$version" '/^## / { on = ($2 == ver); next } on' CHANGELOG.md | grep -q .; then
