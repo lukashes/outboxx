@@ -21,7 +21,7 @@ REPORT_INTERVAL ?= 5
 
 MINUTES ?= 60
 
-.PHONY: infra infra-up load start-debezium start-outboxx start-all reset create-slots slots status topics offsets results logs ps
+.PHONY: infra infra-up load start-debezium start-outboxx start-all reset create-slots slots status topics offsets check-gaps results logs ps
 
 # Bring infra up and ensure slots exist, leaving any running CDC readers alone.
 infra-up:
@@ -84,6 +84,10 @@ topics:
 offsets:
 	-$(COMPOSE) exec kafka /kafka/bin/kafka-get-offsets.sh --bootstrap-server kafka:9092 --topic debezium.public.benchmark_records
 	-$(COMPOSE) exec kafka /kafka/bin/kafka-get-offsets.sh --bootstrap-server kafka:9092 --topic outboxx.public.benchmark_records
+
+# Check the outboxx topic lost no message: every assigned id must be present.
+check-gaps:
+	@COMPOSE="$(COMPOSE)" bash scripts/check-gaps.sh
 
 results:
 	@MINUTES=$(MINUTES) bash scripts/results.sh

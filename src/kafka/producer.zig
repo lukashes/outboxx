@@ -32,8 +32,27 @@ pub const KafkaProducer = struct {
     producer: ?*c.rd_kafka_t,
     allocator: std.mem.Allocator,
     topics: std.StringHashMap(*c.rd_kafka_topic_t),
+    // Heap-allocated so its address stays stable when the struct is moved into
+    // the Processor: it is handed to librdkafka as the delivery-callback opaque.
+    delivery_errors: *std.atomic.Value(u64),
 
     const Self = @This();
+
+    // librdkafka's delivery report, served during poll/flush on the calling
+    // thread. A non-zero err means the message permanently failed, so count it.
+    fn deliveryReportCallback(
+        rk: ?*c.rd_kafka_t,
+        rkmessage: [*c]const c.rd_kafka_message_t,
+        opaque_ctx: ?*anyopaque,
+    ) callconv(.c) void {
+        _ = rk;
+        if (rkmessage == null or opaque_ctx == null) return;
+        if (rkmessage[0].err == c.RD_KAFKA_RESP_ERR_NO_ERROR) return;
+
+        const counter: *std.atomic.Value(u64) = @ptrCast(@alignCast(opaque_ctx.?));
+        _ = counter.fetchAdd(1, .monotonic);
+        std.log.warn("Kafka delivery failed: {s}", .{c.rd_kafka_err2str(rkmessage[0].err)});
+    }
 
     fn logCallback(
         rk: ?*const c.rd_kafka_t,
@@ -97,6 +116,15 @@ pub const KafkaProducer = struct {
         // Set custom log callback for full control over librdkafka logs
         c.rd_kafka_conf_set_log_cb(conf, logCallback);
 
+        // Without dr_msg_cb, librdkafka discards delivery reports and flush()
+        // reports success even for messages that permanently failed. Count them
+        // via the callback opaque so the worker won't confirm unsent data.
+        const delivery_errors = try allocator.create(std.atomic.Value(u64));
+        errdefer allocator.destroy(delivery_errors);
+        delivery_errors.* = std.atomic.Value(u64).init(0);
+        c.rd_kafka_conf_set_dr_msg_cb(conf, deliveryReportCallback);
+        c.rd_kafka_conf_set_opaque(conf, delivery_errors);
+
         // Set bootstrap servers
         try setConfigSlice(allocator, conf, "bootstrap.servers", brokers, &errstr);
 
@@ -138,6 +166,7 @@ pub const KafkaProducer = struct {
             .producer = producer,
             .allocator = allocator,
             .topics = std.StringHashMap(*c.rd_kafka_topic_t).init(allocator),
+            .delivery_errors = delivery_errors,
         };
     }
 
@@ -156,6 +185,9 @@ pub const KafkaProducer = struct {
             c.rd_kafka_destroy(producer);
             std.log.debug("producer.deinit: destroyed", .{});
         }
+
+        // After rd_kafka_destroy: no callback can touch the counter anymore.
+        self.allocator.destroy(self.delivery_errors);
     }
 
     fn getOrCreateTopic(self: *Self, topic_name: []const u8) !*c.rd_kafka_topic_t {
@@ -286,6 +318,27 @@ pub const KafkaProducer = struct {
         }
     }
 
+    /// Count of messages that permanently failed delivery over the producer's
+    /// lifetime, as reported by the delivery callback. Monotonic: a non-zero
+    /// value means the at-least-once guarantee is broken and demands a restart.
+    pub fn deliveryErrorCount(self: *Self) u64 {
+        return self.delivery_errors.load(.monotonic);
+    }
+
+    /// Whether the producer hit an unrecoverable error. Idempotent-producer
+    /// fatal errors surface only here, not on individual messages. Logs the
+    /// librdkafka reason when fatal; the producer must be recreated after.
+    pub fn fatalError(self: *Self) bool {
+        const producer = self.producer orelse return false;
+
+        var errstr: [512]u8 = undefined;
+        const err = c.rd_kafka_fatal_error(producer, &errstr, errstr.len);
+        if (err == c.RD_KAFKA_RESP_ERR_NO_ERROR) return false;
+
+        std.log.err("Kafka producer fatal error: {s}", .{std.mem.sliceTo(&errstr, 0)});
+        return true;
+    }
+
     pub fn testConnection(self: *Self) !void {
         const producer = self.producer orelse return KafkaError.ConnectionTestFailed;
 
@@ -316,15 +369,35 @@ pub const KafkaProducer = struct {
 };
 
 // Unit tests
-test "KafkaProducer initialization" {
+test "delivery callback counts a permanently failed message" {
     const testing = std.testing;
-
-    // This test will only pass if Kafka is running
-    // For now, we just test the structure
     const allocator = testing.allocator;
 
-    // Test that we can create and destroy the producer structure
-    // without actually connecting to Kafka
-    _ = allocator;
-    // Mock tests can be added when a testing framework is set up
+    // Mock cluster to point the producer at; its own rd_kafka_t only hosts it.
+    var errstr: [512]u8 = undefined;
+    const mock_rk = c.rd_kafka_new(c.RD_KAFKA_PRODUCER, c.rd_kafka_conf_new(), &errstr, errstr.len);
+    try testing.expect(mock_rk != null);
+    defer c.rd_kafka_destroy(mock_rk);
+
+    const mcluster = c.rd_kafka_mock_cluster_new(mock_rk, 1);
+    try testing.expect(mcluster != null);
+    defer c.rd_kafka_mock_cluster_destroy(mcluster);
+
+    const bootstraps = std.mem.span(c.rd_kafka_mock_cluster_bootstraps(mcluster));
+    try testing.expect(c.rd_kafka_mock_topic_create(mcluster, "t", 1, 1) == c.RD_KAFKA_RESP_ERR_NO_ERROR);
+
+    // Reject the next Produce with a non-retriable error, so the message fails
+    // delivery at once instead of retrying for delivery.timeout.ms. The ApiKey
+    // for ProduceRequest is 0; RD_KAFKAP_* names are not in the public headers.
+    const produce_api_key: i16 = 0;
+    c.rd_kafka_mock_push_request_errors(mcluster, produce_api_key, 1, c.RD_KAFKA_RESP_ERR_TOPIC_AUTHORIZATION_FAILED);
+
+    var producer = try KafkaProducer.init(allocator, bootstraps, null);
+    defer producer.deinit();
+
+    try producer.sendMessage("t", "k", "{}");
+    // flush serves the delivery callback on this thread, counting the failure.
+    producer.flush(5000) catch {};
+
+    try testing.expect(producer.deliveryErrorCount() > 0);
 }

@@ -83,6 +83,13 @@ fn flushCommitWorker(
             continue;
         };
 
+        // A drained queue is not a delivered queue: a message can leave it by
+        // permanently failing. Hold the LSN if any did; the receive loop turns
+        // this into a fail-fast.
+        if (producer.deliveryErrorCount() > 0) {
+            continue;
+        }
+
         source.sendFeedback(io, lsn) catch |err| {
             std.log.err("Background LSN commit failed: {}", .{err});
             continue;
@@ -95,7 +102,7 @@ fn flushCommitWorker(
         std.log.warn("Final background flush failed: {}", .{err});
     };
 
-    if (lsn > 0) {
+    if (lsn > 0 and producer.deliveryErrorCount() == 0) {
         source.sendFeedback(io, lsn) catch |err| {
             std.log.warn("Final background LSN commit failed: {}", .{err});
         };
@@ -169,6 +176,12 @@ pub const Processor = struct {
         var event_counts = std.ArrayList(EventCount).empty;
         defer event_counts.deinit(batch_allocator);
 
+        // With dr_msg_cb registered, a produced message counts against
+        // queue.buffering.max.messages until its delivery report is served by a
+        // poll. Serve them every KAFKA_POLL_INTERVAL sends so a large batch does
+        // not fill the queue before the single poll at the end.
+        var sent_since_poll: u32 = 0;
+
         for (batch.changes) |change_event| {
             var matched = try matchStreams(batch_allocator, self.streams, change_event);
             defer matched.deinit(batch_allocator);
@@ -190,6 +203,12 @@ pub const Processor = struct {
                 };
 
                 try tallyEvent(&event_counts, batch_allocator, stream.name, change_event.op);
+
+                sent_since_poll += 1;
+                if (sent_since_poll >= constants.CDC.KAFKA_POLL_INTERVAL) {
+                    producer.poll();
+                    sent_since_poll = 0;
+                }
 
                 self.events_processed += 1;
                 if (self.events_processed % 10000 == 0) {
@@ -258,6 +277,14 @@ pub const Processor = struct {
             const batch_alloc = batch_arena.allocator();
 
             try self.processChangesToKafka(io, batch_alloc, constants.CDC.BATCH_SIZE);
+
+            // A permanent delivery failure (or fatal producer error) means data
+            // never reached Kafka. Fail fast so the slot re-sends from the last
+            // confirmed LSN after restart.
+            if (self.producer.deliveryErrorCount() > 0 or self.producer.fatalError()) {
+                std.log.warn("Kafka delivery failed; exiting for restart", .{});
+                return error.DeliveryFailed;
+            }
 
             // A stream quiet past the liveness window (no change and no keepalive)
             // is dead: a frozen or black-holed peer sends no FIN/RST, so reads just
