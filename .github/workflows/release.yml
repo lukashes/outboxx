@@ -264,12 +264,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
-      - name: Download binaries
-        uses: actions/download-artifact@v4
-        with:
-          pattern: binary-*
-          merge-multiple: true
-
       - name: Collect release notes
         run: |
           version="${GITHUB_REF_NAME#v}"
@@ -281,10 +275,13 @@ jobs:
             exit 1
           fi
 
+      # No binary assets: the nix-built binary hardwires its ELF interpreter to
+      # a /nix/store path and only runs inside the image, which carries the
+      # whole closure. Portable standalone binaries need a static build first.
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" outboxx-*.tar.gz \
+          gh release create "${GITHUB_REF_NAME}" \
             --title "${GITHUB_REF_NAME}" \
             --notes-file notes.md
