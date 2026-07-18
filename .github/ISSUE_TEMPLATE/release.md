@@ -17,12 +17,13 @@ Release PR:
 - [ ] build.zig.zon: `.version = "X.Y.Z"`
 - [ ] build.zig: the `-Dversion` fallback is `orelse "X.Y.Z"`
 - [ ] `make build && ./zig-out/bin/outboxx --version` prints X.Y.Z
-- [ ] Merge the PR. The merge is the release trigger: auto-tag mints `vX.Y.Z` and dispatches the release workflow
+- [ ] Add the `release` label: it runs the preflight dry run on the PR
+- [ ] Merge the PR. The merge is the release trigger: auto-tag mints `vX.Y.Z-zigA.B` and dispatches the release workflow
 
 Definition of Done (the merge only hands off to automation, verify the result):
 
-- [ ] Release `vX.Y.Z` is on the releases page with the notes from the
-      CHANGELOG section
+- [ ] Release `vX.Y.Z-zigA.B` is on the releases page with the notes from the
+      CHANGELOG section and the two binary tarballs attached
 - [ ] `docker run --rm ghcr.io/lukashes/outboxx:X.Y.Z --version` prints X.Y.Z
       (amd64 and arm64)
 - [ ] The X.Y.Z milestone is closed
