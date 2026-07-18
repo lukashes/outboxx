@@ -60,7 +60,10 @@
             # unlike @cImport which also reads NIX_CFLAGS_COMPILE).
             export C_INCLUDE_PATH="${pkgs.postgresql.dev}/include:${rdkafka-latest.dev}/include:''${C_INCLUDE_PATH:+:$C_INCLUDE_PATH}"
 
-            echo "Outboxx development environment ready"
+            # stderr: make's $(shell ...) runs through .make-shell / nix develop
+            # and captures stdout, so a banner there corrupts variables like
+            # STATIC_TARGET ("Outboxx ... x86_64-linux-musl").
+            echo "Outboxx development environment ready" >&2
           '';
         };
       }
