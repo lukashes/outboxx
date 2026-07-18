@@ -64,25 +64,6 @@ jobs:
             .
           docker run --rm "${IMAGE_NAME}:${VERSION}-${ARCH}" --version
 
-      # The release binary is the exact file shipped in the image, byte for byte,
-      # not a separate build that could drift from it.
-      - name: Extract binary from image
-        env:
-          ARCH: ${{ matrix.arch }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          id="$(docker create "${IMAGE_NAME}:${VERSION}-${ARCH}")"
-          docker cp "${id}:/app/outboxx" outboxx
-          docker rm "${id}" >/dev/null
-          tar -czf "outboxx-${VERSION}-linux-${ARCH}.tar.gz" outboxx
-
-      - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: binary-${{ matrix.arch }}
-          path: outboxx-*.tar.gz
-          if-no-files-found: error
-
       - name: Push image
         env:
           ARCH: ${{ matrix.arch }}
@@ -151,12 +132,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
 
-      - name: Download binaries
-        uses: actions/download-artifact@v4
-        with:
-          pattern: binary-*
-          merge-multiple: true
-
       - name: Collect release notes
         run: |
           version="${GITHUB_REF_NAME#v}"
@@ -168,10 +143,13 @@ jobs:
             exit 1
           fi
 
+      # No binary assets: the nix-built binary hardwires its ELF interpreter to
+      # a /nix/store path and only runs inside the image, which carries the
+      # whole closure. Portable standalone binaries need a static build first.
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" outboxx-*.tar.gz \
+          gh release create "${GITHUB_REF_NAME}" \
             --title "${GITHUB_REF_NAME}" \
             --notes-file notes.md
