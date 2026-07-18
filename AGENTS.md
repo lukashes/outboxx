@@ -129,8 +129,11 @@ TOML, secrets kept out of the file (see `docs/examples/config.toml`).
   `len=0` (looks idle, `CONNECTION_OK`) forever; `docker pause` reproduces it,
   60s of silence with no error. Polling faster does not help: there is no signal
   to read. The source catches this with a liveness deadline: no message (a
-  change or a server keepalive) for `LIVENESS_MAX_STALE_SEC` (90s, must exceed
-  the server keepalive interval ~`wal_sender_timeout/2`) yields `StreamStalled`
-  and fail-fast. The `/healthz` heartbeat is refreshed only by real wire
-  activity, for the same reason (an empty batch on a dead stream must not look
-  alive).
+  change or a server keepalive) for `LIVENESS_MAX_STALE_SEC` (90s) yields
+  `StreamStalled` and fail-fast. An idle stream is kept alive by our own probe:
+  each LSN feedback requests an immediate keepalive back (`reply_requested`),
+  because regular feedback suppresses the walsender's own probes (it only sends
+  one after ~`wal_sender_timeout/2` of client silence) and a quiet cluster
+  would otherwise trip the deadline in a restart loop (#111). The `/healthz`
+  heartbeat is refreshed only by real wire activity, for the same reason (an
+  empty batch on a dead stream must not look alive).

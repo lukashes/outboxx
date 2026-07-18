@@ -284,7 +284,13 @@ pub const PostgresSource = struct {
             .wal_flush_position = lsn,
             .wal_apply_position = lsn,
             .client_time = std.Io.Timestamp.now(io, .real).toSeconds(),
-            .reply_requested = false,
+            // Request an immediate keepalive back. Our regular feedback keeps the
+            // walsender quiet (it only probes after wal_sender_timeout/2 of client
+            // silence), so an idle stream would carry no inbound traffic and trip
+            // the liveness deadline (#111). The requested reply feeds liveness on
+            // every feedback cycle; a frozen peer cannot answer, so stall
+            // detection still fires.
+            .reply_requested = true,
         };
 
         self.protocol.sendStatusUpdate(io, status) catch |err| {

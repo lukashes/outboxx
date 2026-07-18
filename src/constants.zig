@@ -35,7 +35,9 @@ pub const OBSERVABILITY = struct {
     // keepalive) before the stream is considered dead. One signal, two readers:
     // the /healthz probe and the receive loop's fail-fast on a silently stalled
     // stream (a frozen or dead peer sends no FIN/RST, so it looks idle, not
-    // broken). Must exceed the server keepalive interval (~wal_sender_timeout/2,
-    // default 30s) with margin, or a healthy idle stream would trip it.
+    // broken). On an idle stream the wire is fed by the keepalive the server
+    // returns to each feedback's reply request (every KAFKA_FLUSH_INTERVAL_SEC),
+    // with the server's own probe (~wal_sender_timeout/2, default 30s) as the
+    // fallback before the first confirmed LSN. Must exceed both with margin.
     pub const LIVENESS_MAX_STALE_SEC: i64 = 90;
 };
