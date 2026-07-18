@@ -163,11 +163,26 @@ pub fn build(b: *std.Build) void {
     // Link libc for PostgreSQL and Kafka C libraries
     exe.root_module.link_libc = true;
 
+    // Static (musl) release binaries: the archives' transitive dependencies are
+    // not discovered through .so metadata, so they must be linked explicitly.
+    // pkg-config is bypassed too: it resolves to the dynamic libs in the dev
+    // shell (and zig drops literal *.a paths from Libs), so static builds rely
+    // on --search-prefix instead. Unreferenced archive members cost nothing.
+    const static_deps = b.option(bool, "static-deps", "Link the C dependencies of libpq/librdkafka explicitly (static musl builds)") orelse false;
+    const link_opts: std.Build.Module.LinkSystemLibraryOptions = if (static_deps) .{ .use_pkg_config = .no } else .{};
+
     // Add PostgreSQL library (libpq)
-    exe.root_module.linkSystemLibrary("pq", .{});
+    exe.root_module.linkSystemLibrary("pq", link_opts);
 
     // Add Kafka library (librdkafka)
-    exe.root_module.linkSystemLibrary("rdkafka", .{});
+    exe.root_module.linkSystemLibrary("rdkafka", link_opts);
+
+    if (static_deps) {
+        // libpq needs pgcommon/pgport/ssl/crypto; librdkafka needs ssl/z/zstd.
+        for ([_][]const u8{ "pgcommon", "pgport", "ssl", "crypto", "z", "zstd" }) |name| {
+            exe.root_module.linkSystemLibrary(name, link_opts);
+        }
+    }
 
     b.installArtifact(exe);
 
