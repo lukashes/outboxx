@@ -165,6 +165,24 @@ pub const ChangeEvent = struct {
         }
     }
 
+    /// Fast path for the common integer partition key: format the field into `buf`
+    /// and return the slice, without allocating. Returns null when the field is
+    /// absent or not an integer, so the caller falls back to getPartitionKeyValue.
+    /// The result borrows `buf`, which must hold at least 20 bytes (i64 min).
+    pub fn partitionKeyInt(self: *const Self, buf: []u8, field_name: []const u8) ?[]const u8 {
+        const row = switch (self.data) {
+            .insert => |data| data,
+            .delete => |data| data,
+            .update => |update_data| update_data.new,
+        };
+
+        const field_value = RowDataHelpers.getField(row, field_name) orelse return null;
+        return switch (field_value) {
+            .integer => |i| std.fmt.bufPrint(buf, "{d}", .{i}) catch unreachable,
+            else => null,
+        };
+    }
+
     /// Get partition key value from the event data
     /// For INSERT and DELETE: uses the primary data row
     /// For UPDATE: uses the new data row

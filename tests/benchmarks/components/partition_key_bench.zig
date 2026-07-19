@@ -60,10 +60,10 @@ const BenchPartitionKeyInteger = struct {
     event: ChangeEvent,
 
     pub fn run(self: *BenchPartitionKeyInteger, allocator: std.mem.Allocator) void {
-        const key = self.event.getPartitionKeyValue(allocator, "id") catch unreachable;
-        if (key) |k| {
-            allocator.free(k);
-        }
+        _ = allocator;
+        var buf: [20]u8 = undefined;
+        const key = self.event.partitionKeyInt(&buf, "id");
+        std.mem.doNotOptimizeAway(key);
     }
 };
 

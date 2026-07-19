@@ -102,7 +102,7 @@ pub const StreamFlow = struct {
 
 pub const StreamSink = struct {
     destination: []const u8, // topic/url/path/table
-    routing_key: ?[]const u8 = null, // partition_key/routing
+    routing_key: []const u8 = "id", // partition key column; defaults to the primary key
 };
 
 pub const Stream = struct {
@@ -315,9 +315,7 @@ pub const Config = struct {
 
         // Sink validation
         try validateKafkaTopicName(stream.sink.destination, "stream.sink.destination");
-        if (stream.sink.routing_key) |routing_key| {
-            try validateStringLength(routing_key, ValidationLimits.MAX_IDENTIFIER_LEN, "stream.sink.routing_key");
-        }
+        try validateStringLength(stream.sink.routing_key, ValidationLimits.MAX_IDENTIFIER_LEN, "stream.sink.routing_key");
     }
 
     fn validateStreams(allocator: std.mem.Allocator, streams: []const Stream) !void {

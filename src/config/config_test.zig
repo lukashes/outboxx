@@ -28,7 +28,7 @@ fn createTestDefault() Config {
                 .name = "test_stream",
                 .source = .{ .resource = "users", .operations = &.{"insert"} },
                 .flow = .{ .format = "json" },
-                .sink = .{ .destination = "test_topic", .routing_key = null },
+                .sink = .{ .destination = "test_topic", .routing_key = "id" },
             },
         },
     };
@@ -87,7 +87,7 @@ test "Stream.hasDeleteOperation reflects the configured operations" {
         .name = "s",
         .source = .{ .resource = "users", .operations = &.{} },
         .flow = .{ .format = "json" },
-        .sink = .{ .destination = "t", .routing_key = null },
+        .sink = .{ .destination = "t", .routing_key = "id" },
     };
 
     var insert_update = base;
@@ -261,7 +261,46 @@ test "parse stream with inline comments and optional routing_key" {
     try testing.expectEqualStrings("update", stream.source.operations[1]);
     try testing.expectEqualStrings("json", stream.flow.format);
     try testing.expectEqualStrings("outboxx.users", stream.sink.destination);
-    try testing.expectEqualStrings("id", stream.sink.routing_key.?);
+    try testing.expectEqualStrings("id", stream.sink.routing_key);
+}
+
+test "routing_key defaults to id when omitted" {
+    const toml_content =
+        \\[metadata]
+        \\version = "v0"
+        \\
+        \\[source]
+        \\type = "postgres"
+        \\
+        \\[source.postgres]
+        \\connection_env = "PG_URL"
+        \\slot_name = "slot"
+        \\publication_name = "pub"
+        \\
+        \\[sink]
+        \\type = "kafka"
+        \\
+        \\[sink.kafka]
+        \\brokers = ["kafka1:9092"]
+        \\
+        \\[[streams]]
+        \\name = "users-stream"
+        \\
+        \\[streams.source]
+        \\resource = "users"
+        \\operations = ["insert"]
+        \\
+        \\[streams.flow]
+        \\format = "json"
+        \\
+        \\[streams.sink]
+        \\destination = "outboxx.users"
+    ;
+
+    var parsed = try Config.loadFromTomlString(testing.allocator, toml_content);
+    defer parsed.deinit();
+
+    try testing.expectEqualStrings("id", parsed.value.streams[0].sink.routing_key);
 }
 
 test "parse multiple streams" {
@@ -326,7 +365,7 @@ test "parse multiple streams" {
     try testing.expect(stream1.source.operations.len == 2);
     try testing.expectEqualStrings("json", stream1.flow.format);
     try testing.expectEqualStrings("outboxx.users", stream1.sink.destination);
-    try testing.expectEqualStrings("id", stream1.sink.routing_key.?);
+    try testing.expectEqualStrings("id", stream1.sink.routing_key);
 
     const stream2 = cfg.streams[1];
     try testing.expectEqualStrings("orders-stream", stream2.name);
@@ -334,7 +373,7 @@ test "parse multiple streams" {
     try testing.expect(stream2.source.operations.len == 3);
     try testing.expectEqualStrings("delete", stream2.source.operations[2]);
     try testing.expectEqualStrings("outboxx.orders", stream2.sink.destination);
-    try testing.expectEqualStrings("order_id", stream2.sink.routing_key.?);
+    try testing.expectEqualStrings("order_id", stream2.sink.routing_key);
 }
 
 test "parse invalid boolean type fails" {
@@ -385,7 +424,7 @@ test "Config validation - unsupported format should fail" {
         .name = "test_stream",
         .source = .{ .resource = "users", .operations = &.{"insert"} },
         .flow = .{ .format = "avro" },
-        .sink = .{ .destination = "test_topic", .routing_key = null },
+        .sink = .{ .destination = "test_topic", .routing_key = "id" },
     }};
 
     try testing.expectError(error.InvalidEnumValue, cfg.validate(testing.allocator));
