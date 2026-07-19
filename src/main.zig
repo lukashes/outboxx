@@ -291,6 +291,14 @@ fn validatePostgres(allocator: std.mem.Allocator, cfg: Config, conninfo: []const
             return err;
         };
 
+        // The partition key defaults to "id" when routing_key is unset, matching
+        // getPartitionKey; a missing column would silently collapse partitioning.
+        const routing_key = stream.sink.routing_key orelse "id";
+        validator.checkColumnExists("public", stream.source.resource, routing_key) catch |err| {
+            printStatus("ERROR: Routing key validation failed for '{s}' (column '{s}'): {}\n", .{ stream.source.resource, routing_key, err });
+            return err;
+        };
+
         // Only a stream that tracks DELETE needs REPLICA IDENTITY FULL, so the
         // deleted row carries all columns. Schema is fixed to "public" for now.
         if (stream.hasDeleteOperation()) {

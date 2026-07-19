@@ -8,6 +8,7 @@ pub const ValidationError = error{
     InvalidWalLevel,
     SlotNotFound,
     TableNotFound,
+    ColumnNotFound,
     InvalidReplicaIdentity,
     QueryFailed,
     OutOfMemory,
@@ -124,6 +125,28 @@ pub const PostgresValidator = struct {
         }
 
         print("PostgreSQL validation: Table '{s}.{s}' exists ✓\n", .{ schema, table_name });
+    }
+
+    /// Check that a column exists on a table. Used for the stream's routing key:
+    /// a typo (or the default `id` on a table without one) would otherwise route
+    /// every change to the same partition, unnoticed.
+    pub fn checkColumnExists(self: *Self, schema: []const u8, table_name: []const u8, column_name: []const u8) ValidationError!void {
+        const query = std.fmt.allocPrintSentinel(self.allocator, "SELECT EXISTS (SELECT FROM information_schema.columns WHERE table_schema = '{s}' AND table_name = '{s}' AND column_name = '{s}');", .{ schema, table_name, column_name }, 0) catch return ValidationError.OutOfMemory;
+        defer self.allocator.free(query);
+
+        const result = try self.executeQuery(query.ptr);
+        defer c.PQclear(result);
+
+        const exists = c.PQgetvalue(result, 0, 0);
+        const exists_str = std.mem.span(exists);
+
+        if (!std.mem.eql(u8, exists_str, "t")) {
+            std.log.warn("PostgreSQL validation: Column '{s}' does not exist on table '{s}.{s}'", .{ column_name, schema, table_name });
+            std.log.warn("Fix: set stream.sink.routing_key to an existing column", .{});
+            return ValidationError.ColumnNotFound;
+        }
+
+        print("PostgreSQL validation: Column '{s}.{s}.{s}' exists ✓\n", .{ schema, table_name, column_name });
     }
 
     /// Require REPLICA IDENTITY FULL on a table whose stream tracks DELETE, so the

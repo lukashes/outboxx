@@ -234,13 +234,12 @@ pub const Processor = struct {
 
         const key_field = stream.sink.routing_key orelse "id";
 
-        if (change_event.getPartitionKeyValue(allocator, key_field)) |key_opt| {
-            if (key_opt) |key| {
-                return key;
-            }
-        } else |_| {}
-
-        return try allocator.dupe(u8, change_event.meta.resource);
+        // Startup validation guarantees the key column exists (and REPLICA IDENTITY
+        // FULL for delete-tracking streams), so a missing value here is not a
+        // misconfiguration to route around but an unexpected row shape. Fail fast
+        // rather than collapse the change onto a table-name partition.
+        return try change_event.getPartitionKeyValue(allocator, key_field) orelse
+            error.PartitionKeyUnavailable;
     }
 
     /// Run the batch loop until stop_signal is set, with a background flush/commit worker.
