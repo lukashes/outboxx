@@ -8,6 +8,9 @@ type = "postgres"
 connection_env = "POSTGRES_URL"
 slot_name = "outboxx_benchmark_slot"
 publication_name = "outboxx_benchmark_publication"
+# Never advance the slot, so `make load` once then `make start-outboxx` repeatedly
+# replays the same backlog from the start on every run. Not for production.
+confirm_lsn = false
 
 [sink]
 type = "kafka"

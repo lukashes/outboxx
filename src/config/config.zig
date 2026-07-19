@@ -40,6 +40,10 @@ pub const PostgresSource = struct {
     connection_env: []const u8,
     slot_name: []const u8,
     publication_name: []const u8,
+    // Load-testing aid: when false, the slot is never advanced past the first LSN,
+    // so a backlog generated once can be replayed by every restart. Keep it true in
+    // production, where advancing the slot is what makes delivery at-least-once.
+    confirm_lsn: bool = true,
 };
 
 pub const SourceConfig = struct {
