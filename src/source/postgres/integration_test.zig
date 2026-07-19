@@ -189,6 +189,86 @@ test "Streaming source: receive and convert INSERT messages to ChangeEvents" {
     std.log.info("Integration test passed!", .{});
 }
 
+test "Streaming source: confirm_lsn=false pins the slot at the first LSN" {
+    const allocator = testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(@intCast(test_helpers.nowMicros(std.testing.io)));
+    const random_suffix = prng.random().int(u32);
+    const timestamp = test_helpers.nowSeconds(std.testing.io);
+    const table_name = try std.fmt.allocPrint(allocator, "pin_test_{d}_{d}", .{ timestamp, random_suffix });
+    defer allocator.free(table_name);
+    const slot_name = try std.fmt.allocPrint(allocator, "slot_pin_{d}_{d}", .{ timestamp, random_suffix });
+    defer allocator.free(slot_name);
+    const pub_name = try std.fmt.allocPrint(allocator, "pub_pin_{d}_{d}", .{ timestamp, random_suffix });
+    defer allocator.free(pub_name);
+
+    const setup_conn = try createSetupConnection(allocator);
+    defer c.PQfinish(setup_conn);
+    defer cleanupTestEnvironment(allocator, setup_conn, table_name, slot_name, pub_name);
+
+    const create_table_sql = try test_helpers.formatSqlZ(allocator, "CREATE TABLE {s} (id SERIAL PRIMARY KEY, name TEXT)", .{table_name});
+    defer allocator.free(create_table_sql);
+    try execSQL(setup_conn, create_table_sql);
+
+    const create_pub_sql = try test_helpers.formatSqlZ(allocator, "CREATE PUBLICATION {s} FOR TABLE {s}", .{ pub_name, table_name });
+    defer allocator.free(create_pub_sql);
+    try execSQL(setup_conn, create_pub_sql);
+
+    const create_slot_sql = try test_helpers.formatSqlZ(allocator, "SELECT pg_create_logical_replication_slot('{s}', 'pgoutput')", .{slot_name});
+    defer allocator.free(create_slot_sql);
+    try execSQL(setup_conn, create_slot_sql);
+
+    const lsn_result = c.PQexec(setup_conn, "SELECT pg_current_wal_lsn()");
+    defer c.PQclear(lsn_result);
+    const start_lsn = try allocator.dupeZ(u8, std.mem.span(c.PQgetvalue(lsn_result, 0, 0)));
+    defer allocator.free(start_lsn);
+
+    // Several rows in one transaction so the first change LSN differs from the last.
+    const insert_sql = try test_helpers.formatSqlZ(allocator, "INSERT INTO {s} (name) VALUES ('r1'),('r2'),('r3'),('r4'),('r5')", .{table_name});
+    defer allocator.free(insert_sql);
+    try execSQL(setup_conn, insert_sql);
+    try execSQL(setup_conn, "SELECT pg_switch_wal()");
+
+    const conn_str = try getTestConnectionString(allocator);
+    defer allocator.free(conn_str);
+
+    var source = PostgresSource.init(allocator, slot_name, pub_name);
+    source.confirm_lsn = false;
+    defer source.deinit();
+
+    try source.connect(conn_str, start_lsn);
+
+    const batch = try source.receiveBatch(std.testing.io, allocator, 10);
+    defer {
+        var mut_batch = batch;
+        mut_batch.deinit();
+    }
+
+    try testing.expect(source.first_lsn != 0);
+    try testing.expect(source.first_lsn < batch.last_lsn);
+
+    // Feedback carries the batch's last LSN, but confirm_lsn=false must report the
+    // first LSN, so the slot pins there instead of advancing to the end.
+    try source.sendFeedback(std.testing.io, batch.last_lsn);
+
+    const query = try test_helpers.formatSqlZ(allocator, "SELECT (confirmed_flush_lsn - '0/0'::pg_lsn)::text FROM pg_replication_slots WHERE slot_name = '{s}'", .{slot_name});
+    defer allocator.free(query);
+
+    // The walsender applies feedback asynchronously, so poll for the pinned value.
+    var confirmed: u64 = 0;
+    var attempt: usize = 0;
+    while (attempt < 100) : (attempt += 1) {
+        const r = c.PQexec(setup_conn, query.ptr);
+        defer c.PQclear(r);
+        confirmed = try std.fmt.parseInt(u64, std.mem.span(c.PQgetvalue(r, 0, 0)), 10);
+        if (confirmed == source.first_lsn) break;
+        std.testing.io.sleep(.fromMilliseconds(20), .awake) catch {};
+    }
+
+    try testing.expectEqual(source.first_lsn, confirmed);
+    try testing.expect(confirmed < batch.last_lsn);
+}
+
 test "ReplicationProtocol: mixed-case slot and publication names are idempotent across restarts" {
     const allocator = testing.allocator;
 

@@ -118,6 +118,10 @@ fn run(init: std.process.Init) !void {
     printStatus("Using PostgreSQL streaming replication (pgoutput protocol)\n", .{});
 
     var source = PostgresSource.init(allocator, postgres.slot_name, postgres.publication_name);
+    source.confirm_lsn = postgres.confirm_lsn;
+    if (!postgres.confirm_lsn) {
+        std.log.warn("confirm_lsn is off: the replication slot will not advance (load-testing mode); restarts replay the same backlog and delivery is not durable", .{});
+    }
     // NOTE: source will be deinit'd by processor.deinit()
 
     printStatus("Connecting to PostgreSQL streaming replication...\n", .{});

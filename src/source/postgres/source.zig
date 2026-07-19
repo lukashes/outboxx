@@ -82,6 +82,10 @@ pub const PostgresSource = struct {
     // The stream does not expose the server WAL head during a backlog, so lag is
     // measured as wall-clock time behind this commit, like Debezium.
     last_commit_time: i64,
+    // When false, feedback always confirms first_lsn instead of advancing, pinning
+    // the slot so a load-test backlog can be replayed on every restart (see config).
+    confirm_lsn: bool,
+    first_lsn: u64, // LSN of the first change seen; the pin point when confirm_lsn is false
 
     const Self = @This();
 
@@ -98,6 +102,8 @@ pub const PostgresSource = struct {
             .converter = Converter.init(allocator),
             .last_lsn = 0,
             .last_commit_time = 0,
+            .confirm_lsn = true,
+            .first_lsn = 0,
         };
     }
 
@@ -186,6 +192,7 @@ pub const PostgresSource = struct {
 
             const msg_lsn = try self.extractChangeFromMessage(batch_allocator, msg, &changes);
             last_confirmed_lsn = msg_lsn; // Update LSN (always > 0 on success)
+            if (self.first_lsn == 0 and msg_lsn != 0) self.first_lsn = msg_lsn;
 
             // Step 2: DRAIN all buffered messages (non-blocking)
             while (changes.items.len < limit) {
@@ -199,6 +206,7 @@ pub const PostgresSource = struct {
 
                 const buffered_lsn = try self.extractChangeFromMessage(batch_allocator, buffered_msg, &changes);
                 last_confirmed_lsn = buffered_lsn; // Update LSN (always > 0 on success)
+                if (self.first_lsn == 0 and buffered_lsn != 0) self.first_lsn = buffered_lsn;
             }
         }
 
@@ -278,10 +286,16 @@ pub const PostgresSource = struct {
 
     /// Send LSN feedback to PostgreSQL (confirm processing)
     pub fn sendFeedback(self: *Self, io: std.Io, lsn: u64) PostgresSourceError!void {
+        // With confirm_lsn off, pin the slot at the first LSN seen: feedback (and its
+        // keepalive) keeps flowing, but the slot never advances, so a load-test
+        // backlog replays on every restart. first_lsn is 0 until the first change,
+        // where reporting 0 is a harmless keepalive that also does not advance.
+        const feedback_lsn = if (self.confirm_lsn) lsn else self.first_lsn;
+
         const status = StandbyStatusUpdate{
-            .wal_write_position = lsn,
-            .wal_flush_position = lsn,
-            .wal_apply_position = lsn,
+            .wal_write_position = feedback_lsn,
+            .wal_flush_position = feedback_lsn,
+            .wal_apply_position = feedback_lsn,
             .client_time = std.Io.Timestamp.now(io, .real).toSeconds(),
             // Request an immediate keepalive back. Our regular feedback keeps the
             // walsender quiet (it only probes after wal_sender_timeout/2 of client

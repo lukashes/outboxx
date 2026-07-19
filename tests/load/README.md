@@ -18,7 +18,7 @@ What each command does:
 - `make infra` starts PostgreSQL, Kafka, Kafka UI, Prometheus, Grafana, exporters, and cAdvisor. It stops Debezium/Outboxx if they exist and creates logical replication slots before any workload.
 - `make load` brings infra and slots up if needed, then generates PostgreSQL writes. It leaves any running readers in place, so lag and throughput can be watched live while the load runs. For the readers-down backlog scenario (WAL accumulating behind the slots), run `make infra` first.
 - `make start-debezium` starts only Debezium. Outboxx is stopped/removed first.
-- `make start-outboxx` starts only Outboxx. Debezium and connector-init are stopped/removed first.
+- `make start-outboxx` starts only Outboxx. Debezium and connector-init are stopped/removed first. Its config sets `confirm_lsn = false`, so the slot never advances: generate the backlog once with `make load`, then rerun `make start-outboxx` as many times as you like and each run replays the same data from the start.
 - `make start-all` starts Debezium and Outboxx together. Debezium is registered automatically.
 - `make reset` stops the stand and removes this stand's PostgreSQL, Kafka, Prometheus, and Grafana volumes.
 
