@@ -192,7 +192,7 @@ jobs:
         run: docker compose logs --tail=40
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: binary-${{ matrix.arch }}
           path: outboxx-*.tar.gz
