@@ -406,3 +406,51 @@ test "getPartitionKeyValue extracts field values" {
         try testing.expectEqualStrings("42", key.?);
     }
 }
+
+test "partitionKeyInt formats i64 boundaries and returns null for other types" {
+    const testing = std.testing;
+
+    var gpa = std.heap.DebugAllocator(.{}){};
+    defer {
+        const deinit_status = gpa.deinit();
+        if (deinit_status == .leak) {
+            std.debug.panic("Memory leak in test!", .{});
+        }
+    }
+    const allocator = gpa.allocator();
+
+    const metadata = Metadata{
+        .source = try allocator.dupe(u8, "postgres"),
+        .resource = try allocator.dupe(u8, "users"),
+        .schema = try allocator.dupe(u8, "public"),
+        .timestamp = 1234567890,
+        .lsn = null,
+    };
+
+    var event = ChangeEvent.init(ChangeOperation.INSERT, metadata);
+    defer event.deinit(allocator);
+
+    var builder = RowDataHelpers.createBuilder(allocator);
+    try RowDataHelpers.put(&builder, allocator, "min_id", FieldValueHelpers.integer(std.math.minInt(i64)));
+    try RowDataHelpers.put(&builder, allocator, "max_id", FieldValueHelpers.integer(std.math.maxInt(i64)));
+    try RowDataHelpers.put(&builder, allocator, "email", try FieldValueHelpers.text(allocator, "a@b.co"));
+    try RowDataHelpers.put(&builder, allocator, "ratio", FieldValueHelpers.float(2.5));
+    try RowDataHelpers.put(&builder, allocator, "active", FieldValueHelpers.boolean(true));
+    const row = try RowDataHelpers.finalize(&builder, allocator);
+    event.setInsertData(row);
+
+    // The result borrows buf (no allocation, no free): librdkafka copies the key.
+    var buf: [20]u8 = undefined;
+
+    // i64 min is the 20-byte worst case and has to fit buf exactly.
+    try testing.expectEqualStrings("-9223372036854775808", event.partitionKeyInt(&buf, "min_id").?);
+    try testing.expectEqualStrings("9223372036854775807", event.partitionKeyInt(&buf, "max_id").?);
+
+    // Non-integer columns return null so the caller takes the allocating slow path.
+    try testing.expect(event.partitionKeyInt(&buf, "email") == null);
+    try testing.expect(event.partitionKeyInt(&buf, "ratio") == null);
+    try testing.expect(event.partitionKeyInt(&buf, "active") == null);
+
+    // A missing column is null too.
+    try testing.expect(event.partitionKeyInt(&buf, "nonexistent") == null);
+}
