@@ -1,4 +1,4 @@
-# Postgres -> Debezium/Outboxx -> Kafka benchmark
+# Postgres -> Debezium/Outboxx/pgstream -> Kafka benchmark
 
 Local stand for generating PostgreSQL WAL first, then starting CDC readers and watching catch-up in Grafana.
 
@@ -17,9 +17,10 @@ What each command does:
 
 - `make infra` starts PostgreSQL, Kafka, Kafka UI, Prometheus, Grafana, exporters, and cAdvisor. It stops Debezium/Outboxx if they exist and creates logical replication slots before any workload.
 - `make load` brings infra and slots up if needed, then generates PostgreSQL writes. It leaves any running readers in place, so lag and throughput can be watched live while the load runs. For the readers-down backlog scenario (WAL accumulating behind the slots), run `make infra` first.
-- `make start-debezium` starts only Debezium. Outboxx is stopped/removed first.
-- `make start-outboxx` starts only Outboxx. Debezium and connector-init are stopped/removed first.
-- `make start-all` starts Debezium and Outboxx together. Debezium is registered automatically.
+- `make start-debezium` starts only Debezium. Outboxx and pgstream are stopped/removed first.
+- `make start-outboxx` starts only Outboxx. Debezium, pgstream, and connector-init are stopped/removed first.
+- `make start-pgstream` starts only pgstream. Debezium, Outboxx, and connector-init are stopped/removed first.
+- `make start-all` starts Debezium, Outboxx, and pgstream together. Debezium is registered automatically.
 - `make reset` stops the stand and removes this stand's PostgreSQL, Kafka, Prometheus, and Grafana volumes.
 
 To benchmark the local checkout, copy the example override and rebuild:
@@ -46,9 +47,9 @@ make infra LOAD_POSTGRES_PORT=15433 LOAD_KAFKA_PORT=19094 LOAD_KAFKA_CONTROLLER_
 
 ## Results
 
-`make results` reads Prometheus and prints the headline numbers for both readers draining the same WAL backlog: total events, drain time, effective throughput (events / drain window, so a short burst is not undercounted the way a 1m rate would be), and peak memory/CPU.
+`make results` reads Prometheus and prints the headline numbers for each reader draining the same WAL backlog: total events, drain time, effective throughput (events / drain window, so a short burst is not undercounted the way a 1m rate would be), and peak memory/CPU. It prints one row per tool (debezium, outboxx, pgstream) and compares outboxx against both debezium and pgstream.
 
-Example (Apple M1, mixed insert/update/delete, neither reader resource-capped):
+Example from a debezium vs outboxx run (Apple M1, mixed insert/update/delete, neither reader resource-capped). A run with pgstream started adds a third row and an `outboxx vs pgstream` block:
 
 ```
 % make results MINUTES=200
@@ -64,6 +65,17 @@ outboxx vs debezium:
 ```
 
 Set the lookback with `MINUTES=` (default 60). The window must bracket a single run, so `make reset` between runs to start each topic at 0. `mem_peak`/`cpu_peak` come from cAdvisor (container working set and cores).
+
+## pgstream
+
+[pgstream](https://github.com/xataio/pgstream) is the golang CDC reader in the comparison (from Xata), next to outboxx (zig) and debezium (java). Two things set it apart from both and shape the stand:
+
+- It decodes the WAL with the `wal2json` output plugin, not `pgoutput`. Neither the stock `postgres` image nor `debezium/postgres` ships wal2json, so the shared Postgres is built from `postgres/Dockerfile` (`postgres:18` with `postgresql-18-wal2json` added), keeping the built-in pgoutput that debezium and outboxx use.
+- It exports metrics over OTLP only, with no Prometheus endpoint to scrape. Its throughput and resource use come from kafka-exporter (topic append rate) and cAdvisor (memory/CPU), the same outward signals `make results` reads for every tool. The self-reported Grafana panels (events/sec, lag) stay debezium/outboxx only.
+
+pgstream creates its replication slot and internal schema itself through `pgstream init`, not `create-slots.sql`. The `pgstream-init` service runs that step from `create-slots`, so the wal2json slot exists before load just like the pgoutput slots. The reader runs from the prebuilt `ghcr.io/xataio/pgstream` image pinned in `docker-compose.yml`, so there is nothing to build.
+
+Config lives in `pgstream/config.yaml`. The Kafka batch is enlarged over pgstream's upstream example so it drains the backlog in batches closer to debezium's. The injector and XIDs are turned off so events carry row data instead of pgstream's internal ids (schema_id, table/column pgstream ids). The event shape itself (`action`, `columns[]`, `identity` on updates/deletes) is hardcoded in pgstream's serialiser, so it stays more verbose than outboxx's `op`/`data`/`meta`, and `REPLICA IDENTITY FULL` (needed by debezium/outboxx deletes) keeps `identity` populated; config cannot change either.
 
 ## Load Parameters
 
@@ -166,14 +178,17 @@ Topics:
 ```text
 debezium.public.benchmark_records         # Debezium
 outboxx.public.benchmark_records          # Outboxx
+pgstream.public.benchmark_records         # pgstream
 ```
 
-Grafana dashboard: **CDC / Debezium benchmark overview**. Besides the Kafka/cAdvisor
-comparison panels, Prometheus scrapes Outboxx's own `/metrics` (job `outboxx`, port
-9464) and Debezium's JMX metrics, so two panels compare each tool's self-reported
-numbers side by side: events/sec (`outboxx_events_processed_total` vs
-`debezium_postgres_streaming_totalnumberofeventsseen`) and lag behind source in
-seconds (`outboxx_replication_lag_seconds` vs Debezium's
-`millisecondsbehindsource / 1000`). Both lag metrics are wall-clock time behind the
-last committed transaction, so they share one axis. The Kafka-offset append-rate
-panel stays as an independent throughput comparison.
+Grafana ships two pairwise dashboards, each pitting outboxx against one
+competitor: **CDC: Outboxx vs Debezium** and **CDC: Outboxx vs pgstream**. They
+share the same panels: PostgreSQL write rate, Kafka append rate (kafka-exporter,
+an independent throughput view), and container memory/CPU (cAdvisor). Where both
+tools expose Prometheus metrics, two more panels compare self-reported events/sec
+and lag behind source in seconds: outboxx (`outboxx_events_processed_total`,
+`outboxx_replication_lag_seconds`) against Debezium's JMX
+(`totalnumberofeventsseen`, `millisecondsbehindsource / 1000`). The lag metrics
+are wall-clock time behind the last committed transaction, so they share one axis.
+pgstream has no Prometheus endpoint (OTLP only), so on its board the self-reported
+panels stay outboxx-only.

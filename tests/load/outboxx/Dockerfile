@@ -12,7 +12,7 @@ RUN nix develop --command echo "deps cached"
 # -Dlog_level=debug keeps ReleaseFast perf but compiles in std.log.debug so the
 # load stand can trace teardown / fail-fast behavior.
 COPY . .
-RUN nix develop --command zig build -Doptimize=ReleaseFast -Dlog_level=debug
+RUN nix develop --command zig build -Doptimize=ReleaseFast -Dlog_level=info
 
 WORKDIR /app
 EXPOSE 9464
