@@ -17,5 +17,5 @@ paths = [
   # Dev/CI scaffolding uses disposable credentials, never real secrets.
   '''^docker-compose\.yml$''',
   '''^dev/''',
-  '''^tests/load/docker-compose\.yml$''',
+  '''^tests/load/''',
 ]

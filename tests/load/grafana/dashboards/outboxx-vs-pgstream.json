@@ -9,18 +9,15 @@
         },
         "enable": true,
         "hide": true,
-        "iconColor": "rgba(0, 211, 255, 1)",
         "name": "Annotations & Alerts",
         "type": "dashboard"
       }
     ]
   },
   "editable": true,
-  "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
   "id": null,
   "links": [],
-  "liveNow": false,
   "panels": [
     {
       "datasource": {
@@ -33,27 +30,12 @@
             "mode": "palette-classic"
           },
           "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
             "axisPlacement": "auto",
-            "barAlignment": 0,
             "drawStyle": "line",
             "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "insertNulls": false,
             "lineInterpolation": "linear",
             "lineWidth": 1,
             "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
             "showPoints": "never",
             "spanNulls": false,
             "stacking": {
@@ -84,7 +66,7 @@
         "x": 0,
         "y": 0
       },
-      "id": 4,
+      "id": 1,
       "options": {
         "legend": {
           "calcs": [
@@ -142,9 +124,6 @@
             "mode": "palette-classic"
           },
           "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
             "axisPlacement": "auto",
             "drawStyle": "line",
             "fillOpacity": 10,
@@ -192,14 +171,14 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "debezium"
+              "options": "pgstream"
             },
             "properties": [
               {
                 "id": "color",
                 "value": {
                   "mode": "fixed",
-                  "fixedColor": "orange"
+                  "fixedColor": "purple"
                 }
               }
             ]
@@ -212,7 +191,7 @@
         "x": 12,
         "y": 0
       },
-      "id": 7,
+      "id": 2,
       "options": {
         "legend": {
           "calcs": [
@@ -233,8 +212,8 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "sum(rate(kafka_topic_partition_current_offset{topic=\"debezium.public.benchmark_records\"}[1m]))",
-          "legendFormat": "debezium",
+          "expr": "sum(rate(kafka_topic_partition_current_offset{topic=\"outboxx.public.benchmark_records\"}[1m]))",
+          "legendFormat": "outboxx",
           "refId": "A"
         },
         {
@@ -242,12 +221,12 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "sum(rate(kafka_topic_partition_current_offset{topic=\"outboxx.public.benchmark_records\"}[1m]))",
-          "legendFormat": "outboxx",
+          "expr": "sum(rate(kafka_topic_partition_current_offset{topic=\"pgstream.public.benchmark_records\"}[1m]))",
+          "legendFormat": "pgstream",
           "refId": "B"
         }
       ],
-      "title": "Debezium vs Outboxx Kafka append rate",
+      "title": "Kafka append rate: outboxx vs pgstream",
       "type": "timeseries"
     },
     {
@@ -261,9 +240,6 @@
             "mode": "palette-classic"
           },
           "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
             "axisPlacement": "auto",
             "drawStyle": "line",
             "fillOpacity": 10,
@@ -311,14 +287,14 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "debezium"
+              "options": "pgstream"
             },
             "properties": [
               {
                 "id": "color",
                 "value": {
                   "mode": "fixed",
-                  "fixedColor": "orange"
+                  "fixedColor": "purple"
                 }
               }
             ]
@@ -331,7 +307,7 @@
         "x": 0,
         "y": 8
       },
-      "id": 8,
+      "id": 3,
       "options": {
         "legend": {
           "calcs": [
@@ -352,12 +328,12 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "container_memory_working_set_bytes{container_label_com_docker_compose_service=~\"debezium|outboxx\"}",
+          "expr": "container_memory_working_set_bytes{container_label_com_docker_compose_service=~\"outboxx|pgstream\"}",
           "legendFormat": "{{container_label_com_docker_compose_service}}",
           "refId": "A"
         }
       ],
-      "title": "Container memory: Debezium vs Outboxx",
+      "title": "Container memory: outboxx vs pgstream",
       "type": "timeseries"
     },
     {
@@ -371,9 +347,6 @@
             "mode": "palette-classic"
           },
           "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
             "axisPlacement": "auto",
             "drawStyle": "line",
             "fillOpacity": 10,
@@ -421,14 +394,14 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "debezium"
+              "options": "pgstream"
             },
             "properties": [
               {
                 "id": "color",
                 "value": {
                   "mode": "fixed",
-                  "fixedColor": "orange"
+                  "fixedColor": "purple"
                 }
               }
             ]
@@ -441,7 +414,7 @@
         "x": 12,
         "y": 8
       },
-      "id": 9,
+      "id": 4,
       "options": {
         "legend": {
           "calcs": [
@@ -462,12 +435,12 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "sum by (container_label_com_docker_compose_service) (rate(container_cpu_usage_seconds_total{container_label_com_docker_compose_service=~\"debezium|outboxx\"}[1m]))",
+          "expr": "sum by (container_label_com_docker_compose_service) (rate(container_cpu_usage_seconds_total{container_label_com_docker_compose_service=~\"outboxx|pgstream\"}[1m]))",
           "legendFormat": "{{container_label_com_docker_compose_service}}",
           "refId": "A"
         }
       ],
-      "title": "Container CPU: Debezium vs Outboxx",
+      "title": "Container CPU: outboxx vs pgstream",
       "type": "timeseries"
     },
     {
@@ -481,9 +454,6 @@
             "mode": "palette-classic"
           },
           "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
             "axisPlacement": "auto",
             "drawStyle": "line",
             "fillOpacity": 10,
@@ -512,7 +482,38 @@
           },
           "unit": "eps"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "outboxx"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pgstream"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 8,
@@ -520,7 +521,7 @@
         "x": 0,
         "y": 16
       },
-      "id": 10,
+      "id": 5,
       "options": {
         "legend": {
           "calcs": [
@@ -542,20 +543,11 @@
             "uid": "Prometheus"
           },
           "expr": "rate(outboxx_events_processed_total[1m])",
-          "legendFormat": "outboxx (self-reported)",
+          "legendFormat": "outboxx",
           "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
-          },
-          "expr": "sum(rate(debezium_postgres_streaming_totalnumberofeventsseen[1m]))",
-          "legendFormat": "debezium (self-reported)",
-          "refId": "B"
         }
       ],
-      "title": "CDC events/sec: Outboxx vs Debezium (self-reported)",
+      "title": "CDC events/sec (self-reported): outboxx only (pgstream exports OTLP, not Prometheus)",
       "type": "timeseries"
     },
     {
@@ -569,9 +561,6 @@
             "mode": "palette-classic"
           },
           "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
             "axisPlacement": "auto",
             "drawStyle": "line",
             "fillOpacity": 10,
@@ -600,7 +589,38 @@
           },
           "unit": "s"
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "outboxx"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pgstream"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "purple"
+                }
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
         "h": 8,
@@ -608,7 +628,7 @@
         "x": 12,
         "y": 16
       },
-      "id": 11,
+      "id": 6,
       "options": {
         "legend": {
           "calcs": [
@@ -632,18 +652,9 @@
           "expr": "outboxx_replication_lag_seconds",
           "legendFormat": "outboxx",
           "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
-          },
-          "expr": "max(debezium_postgres_streaming_millisecondsbehindsource) / 1000",
-          "legendFormat": "debezium",
-          "refId": "B"
         }
       ],
-      "title": "CDC lag behind source: Outboxx vs Debezium (seconds)",
+      "title": "CDC lag behind source (seconds): outboxx only (pgstream exports OTLP, not Prometheus)",
       "type": "timeseries"
     }
   ],
@@ -651,8 +662,8 @@
   "schemaVersion": 39,
   "tags": [
     "cdc",
-    "debezium",
-    "postgres",
+    "outboxx",
+    "pgstream",
     "kafka"
   ],
   "templating": {
@@ -662,10 +673,8 @@
     "from": "now-30m",
     "to": "now"
   },
-  "timepicker": {},
   "timezone": "browser",
-  "title": "CDC / Debezium benchmark overview",
-  "uid": "cdc-debezium-benchmark",
-  "version": 1,
-  "weekStart": ""
+  "title": "CDC: Outboxx vs pgstream",
+  "uid": "outboxx-vs-pgstream",
+  "version": 1
 }

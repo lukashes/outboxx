@@ -57,7 +57,7 @@ echo "Window: last ${MINUTES}m"
 printf "%-9s %13s %10s %15s %11s %9s\n" tool events "drain(s)" "evt/s(eff)" "mem_peak" "cpu_peak"
 
 # Plain per-tool vars (macOS ships bash 3.2 without associative arrays).
-for tool in debezium outboxx; do
+for tool in debezium outboxx pgstream; do
   read -r ev s thr < <(drain "${tool}.public.benchmark_records")
   mem="$(instant "max_over_time(container_memory_working_set_bytes{container_label_com_docker_compose_service=\"$tool\"}[$win])")"
   cpu="$(instant "max_over_time(sum(rate(container_cpu_usage_seconds_total{container_label_com_docker_compose_service=\"$tool\"}[1m]))[$win:15s])")"
@@ -72,3 +72,9 @@ echo "outboxx vs debezium:"
 echo "  throughput:  $(ratio "$THR_outboxx" "$THR_debezium") (outboxx / debezium)"
 echo "  memory:      $(ratio "$MEM_debezium" "$MEM_outboxx") less (debezium / outboxx)"
 echo "  cpu peak:    $(ratio "$CPU_debezium" "$CPU_outboxx") less (debezium / outboxx)"
+
+echo
+echo "outboxx vs pgstream:"
+echo "  throughput:  $(ratio "$THR_outboxx" "$THR_pgstream") (outboxx / pgstream)"
+echo "  memory:      $(ratio "$MEM_pgstream" "$MEM_outboxx") less (pgstream / outboxx)"
+echo "  cpu peak:    $(ratio "$CPU_pgstream" "$CPU_outboxx") less (pgstream / outboxx)"

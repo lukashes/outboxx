@@ -1,6 +1,11 @@
 services:
   postgres:
-    image: postgres:16
+    # Built from ./postgres/Dockerfile: postgres:18 plus wal2json, which pgstream
+    # needs. debezium/outboxx use the built-in pgoutput. Neither the official image
+    # nor debezium/postgres ships wal2json, so we install it ourselves.
+    build:
+      context: ./postgres
+    image: cdc-postgres-wal2json:local
     container_name: cdc-postgres
     command:
       - postgres
@@ -27,7 +32,9 @@ services:
     ports:
       - "${LOAD_POSTGRES_PORT:-15432}:5432"
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      # postgres:18+ stores data in a version subdirectory and wants the volume
+      # mounted at /var/lib/postgresql (not /var/lib/postgresql/data as in <=17).
+      - postgres-data:/var/lib/postgresql
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/001-init.sql:ro
       - ./postgres/create-slots.sql:/sql/create-slots.sql:ro
       - ./postgres/slot-lag.sql:/sql/slot-lag.sql:ro
@@ -161,6 +168,32 @@ services:
       - ./outboxx/config.toml:/app/config.toml:ro
     command: ["--config", "/app/config.toml"]
     restart: unless-stopped
+
+  pgstream:
+    profiles: ["compare"]
+    image: ghcr.io/xataio/pgstream:1.2.1
+    container_name: cdc-pgstream
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    volumes:
+      - ./pgstream/config.yaml:/pgstream.yaml:ro
+    command: ["run", "-c", "/pgstream.yaml", "--log-level", "info"]
+    restart: unless-stopped
+
+  # One-shot slot + pgstream-schema setup (wal2json slot, schema_log, triggers).
+  # Analogous to connector-init for debezium; run via `docker compose run --rm`.
+  pgstream-init:
+    image: ghcr.io/xataio/pgstream:1.2.1
+    container_name: cdc-pgstream-init
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./pgstream/config.yaml:/pgstream.yaml:ro
+    command: ["init", "-c", "/pgstream.yaml"]
 
   smoke-consumer:
     image: quay.io/debezium/kafka:3.5.2.Final

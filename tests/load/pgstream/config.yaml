@@ -1,0 +1,42 @@
+# pgstream (github.com/xataio/pgstream) reader for the benchmark: Postgres CDC
+# -> Kafka, the golang counterpart to outboxx (zig) and debezium (java).
+#
+# Unlike debezium/outboxx, pgstream decodes the WAL with wal2json (not pgoutput),
+# so the shared Postgres image must ship that plugin and the slot is created by
+# `pgstream init`, not by create-slots.sql. pgstream also needs its own schema
+# (schema_log, triggers) which `init` installs; `run` only connects.
+source:
+  postgres:
+    url: "postgres://postgres:postgres@postgres:5432/bench?sslmode=disable"
+    mode: replication # replication only, no initial snapshot (matches debezium no_data)
+    replication:
+      replication_slot: "pgstream_benchmark_slot"
+      plugin:
+        include_xids: false # keep transaction ids out of the payload
+        add_tables: "public.benchmark_records" # decode only the benchmark table
+
+target:
+  kafka:
+    servers: ["kafka:9092"]
+    topic:
+      name: "pgstream.public.benchmark_records"
+      partitions: 1
+      replication_factor: 1
+      auto_create: true
+    # size is raised over the upstream example (100) so the reader drains the WAL
+    # backlog in larger batches. max_bytes stays at 1MiB to sit under Kafka's
+    # default message.max.bytes (~1MiB per record batch); it is the effective
+    # flush trigger here, since 10000 small rows exceed 1MiB first.
+    batch:
+      timeout: 1000 # flush at least once per second
+      size: 10000 # messages per batch
+      max_bytes: 1048576 # 1MiB, under the broker's default record-batch limit
+
+# Strip everything optional so the message carries row data, not pgstream
+# internals: the injector (schema_id, table/column pgstream ids) is off and no
+# transformer/filter runs. The event shape itself (action, columns[], identity
+# for updates/deletes, an empty metadata object) is hardcoded in pgstream's
+# serialiser and cannot be turned into outboxx's op/data/meta by config.
+modifiers:
+  injector:
+    enabled: false # drop pgstream metadata; emit only the row data
