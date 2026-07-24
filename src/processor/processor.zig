@@ -122,6 +122,9 @@ pub const Processor = struct {
 
     events_processed: usize,
     pending_lsn: std.atomic.Value(u64),
+    // Reused per message to format integer partition keys: an i64 is at most 20
+    // bytes, and librdkafka copies the key on produce, so no per-message alloc.
+    partition_key_buf: [20]u8,
 
     const Self = @This();
 
@@ -135,6 +138,7 @@ pub const Processor = struct {
             .obs = obs,
             .events_processed = 0,
             .pending_lsn = std.atomic.Value(u64).init(0),
+            .partition_key_buf = undefined,
         };
     }
 
@@ -230,17 +234,21 @@ pub const Processor = struct {
         change_event: ChangeEvent,
         stream: Stream,
     ) ![]const u8 {
-        _ = self;
+        const key_field = stream.sink.routing_key;
 
-        const key_field = stream.sink.routing_key orelse "id";
+        // Integer keys are the common case: format into a reusable buffer instead of
+        // allocating per message. librdkafka copies the key on produce, so the
+        // borrow only needs to outlive the sendMessage call, not the batch.
+        if (change_event.partitionKeyInt(&self.partition_key_buf, key_field)) |key| {
+            return key;
+        }
 
-        if (change_event.getPartitionKeyValue(allocator, key_field)) |key_opt| {
-            if (key_opt) |key| {
-                return key;
-            }
-        } else |_| {}
-
-        return try allocator.dupe(u8, change_event.meta.resource);
+        // Startup validation guarantees the key column exists (and REPLICA IDENTITY
+        // FULL for delete-tracking streams), so a missing value here is not a
+        // misconfiguration to route around but an unexpected row shape. Fail fast
+        // rather than collapse the change onto a table-name partition.
+        return try change_event.getPartitionKeyValue(allocator, key_field) orelse
+            error.PartitionKeyUnavailable;
     }
 
     /// Run the batch loop until stop_signal is set, with a background flush/commit worker.

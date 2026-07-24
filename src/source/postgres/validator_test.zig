@@ -81,6 +81,30 @@ test "PostgresValidator: invalid schema should error" {
     try testing.expectError(error.TableNotFound, result);
 }
 
+test "PostgresValidator: routing key column exists" {
+    const allocator = testing.allocator;
+    var validator = PostgresValidator.init(allocator);
+    defer validator.deinit();
+
+    const conn_str = "host=localhost port=5432 dbname=outboxx_test user=postgres password=password";
+
+    try validator.connect(conn_str);
+    try validator.checkColumnExists("public", "users", "id");
+}
+
+test "PostgresValidator: missing routing key column should error" {
+    const allocator = testing.allocator;
+    var validator = PostgresValidator.init(allocator);
+    defer validator.deinit();
+
+    const conn_str = "host=localhost port=5432 dbname=outboxx_test user=postgres password=password";
+
+    try validator.connect(conn_str);
+
+    const result = validator.checkColumnExists("public", "users", "nonexistent_column_xyz");
+    try testing.expectError(error.ColumnNotFound, result);
+}
+
 test "PostgresValidator: replica identity FULL passes" {
     const allocator = testing.allocator;
     var validator = PostgresValidator.init(allocator);
@@ -139,6 +163,9 @@ test "PostgresValidator: methods fail when not connected" {
 
     const table_result = validator.checkTableExists("public", "users");
     try testing.expectError(error.ConnectionFailed, table_result);
+
+    const column_result = validator.checkColumnExists("public", "users", "id");
+    try testing.expectError(error.ConnectionFailed, column_result);
 
     const identity_result = validator.checkReplicaIdentity("public", "users");
     try testing.expectError(error.ConnectionFailed, identity_result);
