@@ -6,6 +6,7 @@ const KafkaError = error{
     ProducerCreationFailed,
     TopicCreationFailed,
     MessageSendFailed,
+    QueueFull,
     FlushFailed,
     ConfigurationFailed,
     ConnectionTestFailed,
@@ -298,6 +299,9 @@ pub const KafkaProducer = struct {
 
         if (result == -1) {
             const errno = c.rd_kafka_last_error();
+            // A full local queue is backpressure, not a failure: the processor
+            // drains delivery reports and retries. Keep it a distinct error.
+            if (errno == c.RD_KAFKA_RESP_ERR__QUEUE_FULL) return KafkaError.QueueFull;
             std.log.warn("Failed to produce message: {s}", .{c.rd_kafka_err2str(errno)});
             return KafkaError.MessageSendFailed;
         }
@@ -306,6 +310,13 @@ pub const KafkaProducer = struct {
     pub fn poll(self: *Self) void {
         const producer = self.producer orelse return;
         _ = c.rd_kafka_poll(producer, 0);
+    }
+
+    // Blocking drain used only for backpressure: wait up to timeout_ms while
+    // serving delivery reports, so the queue can free up before we retry.
+    pub fn drainFor(self: *Self, timeout_ms: i32) void {
+        const producer = self.producer orelse return;
+        _ = c.rd_kafka_poll(producer, timeout_ms);
     }
 
     pub fn flush(self: *Self, timeout_ms: i32) !void {
@@ -400,4 +411,44 @@ test "delivery callback counts a permanently failed message" {
     producer.flush(5000) catch {};
 
     try testing.expect(producer.deliveryErrorCount() > 0);
+}
+
+test "sendMessage reports a full queue as error.QueueFull" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var errstr: [512]u8 = undefined;
+    const mock_rk = c.rd_kafka_new(c.RD_KAFKA_PRODUCER, c.rd_kafka_conf_new(), &errstr, errstr.len);
+    try testing.expect(mock_rk != null);
+    defer c.rd_kafka_destroy(mock_rk);
+
+    const mcluster = c.rd_kafka_mock_cluster_new(mock_rk, 1);
+    try testing.expect(mcluster != null);
+    defer c.rd_kafka_mock_cluster_destroy(mcluster);
+
+    const bootstraps = std.mem.span(c.rd_kafka_mock_cluster_bootstraps(mcluster));
+    try testing.expect(c.rd_kafka_mock_topic_create(mcluster, "t", 1, 1) == c.RD_KAFKA_RESP_ERR_NO_ERROR);
+
+    // Broker down: nothing drains, so the local queue fills and rd_kafka_produce
+    // returns QUEUE_FULL. sendMessage must surface that as the distinct
+    // error.QueueFull (backpressure), not MessageSendFailed.
+    c.rd_kafka_mock_broker_set_down(mcluster, 1);
+
+    var producer = try KafkaProducer.init(allocator, bootstraps, null);
+    defer producer.deinit();
+    // The queue holds up to queue.buffering.max.messages undeliverable messages;
+    // purge before deinit so the final flush doesn't block on the downed broker.
+    defer _ = c.rd_kafka_purge(producer.producer.?, c.RD_KAFKA_PURGE_F_QUEUE | c.RD_KAFKA_PURGE_F_INFLIGHT);
+
+    // Fill past the default 100k queue; QueueFull must arrive before this bound.
+    var got_queue_full = false;
+    var i: usize = 0;
+    while (i < 200_000) : (i += 1) {
+        producer.sendMessage("t", null, "{}") catch |err| {
+            try testing.expectEqual(error.QueueFull, err);
+            got_queue_full = true;
+            break;
+        };
+    }
+    try testing.expect(got_queue_full);
 }

@@ -27,6 +27,15 @@ pub const CDC = struct {
     pub const KAFKA_LINGER_MS = "50"; // Optimal for throughput (balance batching vs latency)
     pub const KAFKA_BATCH_SIZE = "262144"; // 256KB batches for better network utilization
     pub const KAFKA_POLL_INTERVAL: u32 = 100; // Poll every N messages (reduces syscall overhead)
+
+    // Backpressure on a full producer queue. The synchronous pipeline blocks the
+    // WAL read here, so Postgres slows too: serve delivery reports and retry until
+    // the queue drains, bounded by MAX_WAIT_MS so a wedged broker still fails fast.
+    // Sits between delivery.timeout.ms (30s: the queue can't stay full longer) and
+    // OBSERVABILITY.LIVENESS_MAX_STALE_SEC (90s), so runtime spikes ride out while a
+    // real stall still exits before liveness trips.
+    pub const KAFKA_BACKPRESSURE_MAX_WAIT_MS: i64 = 40_000;
+    pub const KAFKA_BACKPRESSURE_POLL_MS: i32 = 100; // Blocking poll between retries; serves delivery reports
 };
 
 /// Observability tuning constants.

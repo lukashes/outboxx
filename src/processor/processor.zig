@@ -151,7 +151,7 @@ pub const Processor = struct {
     }
 
     /// Receive one batch, route each change to its streams, and stage the batch LSN for commit.
-    pub fn processChangesToKafka(self: *Self, io: std.Io, batch_allocator: std.mem.Allocator, limit: u32) !void {
+    pub fn processChangesToKafka(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool), batch_allocator: std.mem.Allocator, limit: u32) !void {
         var batch = try self.source.receiveBatch(io, batch_allocator, limit);
         defer batch.deinit();
 
@@ -200,11 +200,7 @@ pub const Processor = struct {
                 const topic_name = stream.sink.destination;
                 const partition_key = try self.getPartitionKey(batch_allocator, change_event, stream);
 
-                producer.sendMessage(topic_name, partition_key, json_bytes) catch |err| {
-                    self.obs.recordProduceError();
-                    std.log.debug("processChangesToKafka: sendMessage failed, propagating {} (fail-fast)", .{err});
-                    return err;
-                };
+                try self.produceWithBackpressure(io, stop_signal, topic_name, partition_key, json_bytes);
 
                 try tallyEvent(&event_counts, batch_allocator, stream.name, change_event.op);
 
@@ -251,6 +247,53 @@ pub const Processor = struct {
             error.PartitionKeyUnavailable;
     }
 
+    // Produce one message, treating a full producer queue as backpressure rather
+    // than a failure. The pipeline is synchronous, so blocking here stalls the WAL
+    // read and slows Postgres. Serve delivery reports (which free the queue as acks
+    // land) and retry until it drains, bounded by KAFKA_BACKPRESSURE_MAX_WAIT_MS so a
+    // wedged broker still fails fast. Returns error.Shutdown when stop_signal fires
+    // mid-wait, so the caller can stop gracefully without staging the batch LSN.
+    fn produceWithBackpressure(
+        self: *Self,
+        io: std.Io,
+        stop_signal: *std.atomic.Value(bool),
+        topic_name: []const u8,
+        key: ?[]const u8,
+        payload: []const u8,
+    ) !void {
+        const producer = &self.producer;
+        var deadline: ?std.Io.Timestamp = null;
+        while (true) {
+            producer.sendMessage(topic_name, key, payload) catch |err| switch (err) {
+                error.QueueFull => {
+                    if (stop_signal.load(.monotonic)) return error.Shutdown;
+                    // A permanent delivery failure means the broker is rejecting, not
+                    // just slow: stop waiting and fail fast now.
+                    if (producer.deliveryErrorCount() > 0) return error.DeliveryFailed;
+
+                    const d = deadline orelse blk: {
+                        const nd = std.Io.Timestamp.now(io, .awake)
+                            .addDuration(.fromMilliseconds(constants.CDC.KAFKA_BACKPRESSURE_MAX_WAIT_MS));
+                        deadline = nd;
+                        break :blk nd;
+                    };
+                    if (std.Io.Timestamp.now(io, .awake).nanoseconds >= d.nanoseconds) {
+                        self.obs.recordProduceError();
+                        std.log.warn("Kafka queue full past backpressure window, failing fast", .{});
+                        return error.MessageSendFailed;
+                    }
+                    producer.drainFor(constants.CDC.KAFKA_BACKPRESSURE_POLL_MS);
+                    continue;
+                },
+                else => {
+                    self.obs.recordProduceError();
+                    return err;
+                },
+            };
+            return;
+        }
+    }
+
     /// Run the batch loop until stop_signal is set, with a background flush/commit worker.
     pub fn startStreaming(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !void {
         // The source is connected and validated before we get here, so readiness's
@@ -284,7 +327,11 @@ pub const Processor = struct {
 
             const batch_alloc = batch_arena.allocator();
 
-            try self.processChangesToKafka(io, batch_alloc, constants.CDC.BATCH_SIZE);
+            self.processChangesToKafka(io, stop_signal, batch_alloc, constants.CDC.BATCH_SIZE) catch |err| switch (err) {
+                // Backpressure saw stop_signal mid-batch: leave the loop for the graceful final flush.
+                error.Shutdown => break,
+                else => return err,
+            };
 
             // A permanent delivery failure (or fatal producer error) means data
             // never reached Kafka. Fail fast so the slot re-sends from the last
