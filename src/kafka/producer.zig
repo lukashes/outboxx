@@ -432,7 +432,7 @@ test "sendMessage reports a full queue as error.QueueFull" {
     // Broker down: nothing drains, so the local queue fills and rd_kafka_produce
     // returns QUEUE_FULL. sendMessage must surface that as the distinct
     // error.QueueFull (backpressure), not MessageSendFailed.
-    c.rd_kafka_mock_broker_set_down(mcluster, 1);
+    _ = c.rd_kafka_mock_broker_set_down(mcluster, 1);
 
     var producer = try KafkaProducer.init(allocator, bootstraps, null);
     defer producer.deinit();
