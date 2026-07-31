@@ -307,14 +307,7 @@ pub const KafkaProducer = struct {
         }
     }
 
-    pub fn poll(self: *Self) void {
-        const producer = self.producer orelse return;
-        _ = c.rd_kafka_poll(producer, 0);
-    }
-
-    // Blocking drain used only for backpressure: wait up to timeout_ms while
-    // serving delivery reports, so the queue can free up before we retry.
-    pub fn drainFor(self: *Self, timeout_ms: i32) void {
+    pub fn poll(self: *Self, timeout_ms: i32) void {
         const producer = self.producer orelse return;
         _ = c.rd_kafka_poll(producer, timeout_ms);
     }

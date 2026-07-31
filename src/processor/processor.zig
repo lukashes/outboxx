@@ -200,13 +200,13 @@ pub const Processor = struct {
                 const topic_name = stream.sink.destination;
                 const partition_key = try self.getPartitionKey(batch_allocator, change_event, stream);
 
-                try self.produceWithBackpressure(io, stop_signal, topic_name, partition_key, json_bytes);
+                try self.produceWithBackpressure(stop_signal, topic_name, partition_key, json_bytes);
 
                 try tallyEvent(&event_counts, batch_allocator, stream.name, change_event.op);
 
                 sent_since_poll += 1;
                 if (sent_since_poll >= constants.CDC.KAFKA_POLL_INTERVAL) {
-                    producer.poll();
+                    producer.poll(0);
                     sent_since_poll = 0;
                 }
 
@@ -219,7 +219,7 @@ pub const Processor = struct {
 
         for (event_counts.items) |e| self.obs.addEvents(e.count, e.stream, e.operation);
 
-        producer.poll();
+        producer.poll(0);
 
         self.pending_lsn.store(batch.last_lsn, .release);
     }
@@ -249,20 +249,19 @@ pub const Processor = struct {
 
     // Produce one message, treating a full producer queue as backpressure rather
     // than a failure. The pipeline is synchronous, so blocking here stalls the WAL
-    // read and slows Postgres. Serve delivery reports (which free the queue as acks
-    // land) and retry until it drains, bounded by KAFKA_BACKPRESSURE_MAX_WAIT_MS so a
-    // wedged broker still fails fast. Returns error.Shutdown when stop_signal fires
-    // mid-wait, so the caller can stop gracefully without staging the batch LSN.
+    // read and slows Postgres. Block on poll (it wakes on the first delivery report)
+    // to drain the queue, then retry. No deadline of our own: delivery.timeout.ms
+    // bounds how long a message can sit in the queue, and a wedged broker surfaces
+    // as deliveryErrorCount > 0 within it. Returns error.Shutdown when stop_signal
+    // fires mid-wait, so the caller can stop gracefully without staging the LSN.
     fn produceWithBackpressure(
         self: *Self,
-        io: std.Io,
         stop_signal: *std.atomic.Value(bool),
         topic_name: []const u8,
         key: ?[]const u8,
         payload: []const u8,
     ) !void {
         const producer = &self.producer;
-        var deadline: ?std.Io.Timestamp = null;
         while (true) {
             producer.sendMessage(topic_name, key, payload) catch |err| switch (err) {
                 error.QueueFull => {
@@ -270,19 +269,7 @@ pub const Processor = struct {
                     // A permanent delivery failure means the broker is rejecting, not
                     // just slow: stop waiting and fail fast now.
                     if (producer.deliveryErrorCount() > 0) return error.DeliveryFailed;
-
-                    const d = deadline orelse blk: {
-                        const nd = std.Io.Timestamp.now(io, .awake)
-                            .addDuration(.fromMilliseconds(constants.CDC.KAFKA_BACKPRESSURE_MAX_WAIT_MS));
-                        deadline = nd;
-                        break :blk nd;
-                    };
-                    if (std.Io.Timestamp.now(io, .awake).nanoseconds >= d.nanoseconds) {
-                        self.obs.recordProduceError();
-                        std.log.warn("Kafka queue full past backpressure window, failing fast", .{});
-                        return error.MessageSendFailed;
-                    }
-                    producer.drainFor(constants.CDC.KAFKA_BACKPRESSURE_POLL_MS);
+                    producer.poll(constants.CDC.KAFKA_BACKPRESSURE_POLL_MS);
                     continue;
                 },
                 else => {

@@ -29,13 +29,12 @@ pub const CDC = struct {
     pub const KAFKA_POLL_INTERVAL: u32 = 100; // Poll every N messages (reduces syscall overhead)
 
     // Backpressure on a full producer queue. The synchronous pipeline blocks the
-    // WAL read here, so Postgres slows too: serve delivery reports and retry until
-    // the queue drains, bounded by MAX_WAIT_MS so a wedged broker still fails fast.
-    // Sits between delivery.timeout.ms (30s: the queue can't stay full longer) and
-    // OBSERVABILITY.LIVENESS_MAX_STALE_SEC (90s), so runtime spikes ride out while a
-    // real stall still exits before liveness trips.
-    pub const KAFKA_BACKPRESSURE_MAX_WAIT_MS: i64 = 40_000;
-    pub const KAFKA_BACKPRESSURE_POLL_MS: i32 = 100; // Blocking poll between retries; serves delivery reports
+    // WAL read here, so Postgres slows too: block on poll (it wakes up as soon as
+    // a delivery report lands, not just on timeout) and retry produce. No deadline
+    // of our own is needed: a message can't sit in the queue past
+    // delivery.timeout.ms (30s) before its delivery report fires, so a wedged
+    // broker surfaces as deliveryErrorCount > 0 well within that window.
+    pub const KAFKA_BACKPRESSURE_POLL_MS: i32 = 5000;
 };
 
 /// Observability tuning constants.
