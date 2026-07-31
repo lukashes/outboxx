@@ -78,17 +78,12 @@ fn flushCommitWorker(
             continue;
         }
 
-        producer.flush(constants.CDC.KAFKA_FLUSH_TIMEOUT_MS) catch |err| {
+        // flush returns cleanly only once every message is delivered; an error
+        // (a permanent delivery failure) means this LSN is not safe to confirm.
+        producer.flush(null) catch |err| {
             std.log.err("Background flush failed: {}", .{err});
             continue;
         };
-
-        // A drained queue is not a delivered queue: a message can leave it by
-        // permanently failing. Hold the LSN if any did; the receive loop turns
-        // this into a fail-fast.
-        if (producer.deliveryErrorCount() > 0) {
-            continue;
-        }
 
         source.sendFeedback(io, lsn) catch |err| {
             std.log.err("Background LSN commit failed: {}", .{err});
@@ -98,14 +93,17 @@ fn flushCommitWorker(
 
     const lsn = pending_lsn.load(.acquire);
 
-    producer.flush(constants.CDC.KAFKA_FLUSH_TIMEOUT_MS) catch |err| {
-        std.log.warn("Final background flush failed: {}", .{err});
-    };
-
-    if (lsn > 0 and producer.deliveryErrorCount() == 0) {
-        source.sendFeedback(io, lsn) catch |err| {
-            std.log.warn("Final background LSN commit failed: {}", .{err});
-        };
+    // Confirm the final LSN only if the flush fully drained. A failed flush leaves
+    // messages un-delivered, and advancing the slot past them would break
+    // at-least-once on the next restart.
+    if (producer.flush(null)) |_| {
+        if (lsn > 0) {
+            source.sendFeedback(io, lsn) catch |err| {
+                std.log.warn("Final background LSN commit failed: {}", .{err});
+            };
+        }
+    } else |err| {
+        std.log.warn("Final flush failed; not confirming LSN {}: {}", .{ lsn, err });
     }
 
     std.log.debug("Flush/commit worker stopped", .{});
@@ -163,8 +161,6 @@ pub const Processor = struct {
         // loop turning: an empty batch on a dead stream must not refresh it.
         if (batch.changes.len > 0 or batch.received_keepalive) self.obs.heartbeat(io);
 
-        const producer = &self.producer;
-
         if (batch.changes.len == 0) {
             self.pending_lsn.store(batch.last_lsn, .release);
             self.obs.setLag(0); // drained everything available -> caught up
@@ -180,12 +176,6 @@ pub const Processor = struct {
         var event_counts = std.ArrayList(EventCount).empty;
         defer event_counts.deinit(batch_allocator);
 
-        // With dr_msg_cb registered, a produced message counts against
-        // queue.buffering.max.messages until its delivery report is served by a
-        // poll. Serve them every KAFKA_POLL_INTERVAL sends so a large batch does
-        // not fill the queue before the single poll at the end.
-        var sent_since_poll: u32 = 0;
-
         for (batch.changes) |change_event| {
             var matched = try matchStreams(batch_allocator, self.streams, change_event);
             defer matched.deinit(batch_allocator);
@@ -200,15 +190,19 @@ pub const Processor = struct {
                 const topic_name = stream.sink.destination;
                 const partition_key = try self.getPartitionKey(batch_allocator, change_event, stream);
 
-                try self.produceWithBackpressure(stop_signal, topic_name, partition_key, json_bytes);
+                // A full queue is backpressure, not failure: send blocks (stalling
+                // the WAL read, so Postgres slows too) and retries. Shutdown and a
+                // permanent delivery failure propagate as-is; anything else is a
+                // produce error worth recording before it fails the pipeline.
+                self.producer.send(stop_signal, topic_name, partition_key, json_bytes) catch |err| switch (err) {
+                    error.Shutdown, error.DeliveryFailed => return err,
+                    else => {
+                        self.obs.recordProduceError();
+                        return err;
+                    },
+                };
 
                 try tallyEvent(&event_counts, batch_allocator, stream.name, change_event.op);
-
-                sent_since_poll += 1;
-                if (sent_since_poll >= constants.CDC.KAFKA_POLL_INTERVAL) {
-                    producer.poll(0);
-                    sent_since_poll = 0;
-                }
 
                 self.events_processed += 1;
                 if (self.events_processed % 10000 == 0) {
@@ -218,8 +212,6 @@ pub const Processor = struct {
         }
 
         for (event_counts.items) |e| self.obs.addEvents(e.count, e.stream, e.operation);
-
-        producer.poll(0);
 
         self.pending_lsn.store(batch.last_lsn, .release);
     }
@@ -245,40 +237,6 @@ pub const Processor = struct {
         // rather than collapse the change onto a table-name partition.
         return try change_event.getPartitionKeyValue(allocator, key_field) orelse
             error.PartitionKeyUnavailable;
-    }
-
-    // Produce one message, treating a full producer queue as backpressure rather
-    // than a failure. The pipeline is synchronous, so blocking here stalls the WAL
-    // read and slows Postgres. Block on poll (it wakes on the first delivery report)
-    // to drain the queue, then retry. No deadline of our own: delivery.timeout.ms
-    // bounds how long a message can sit in the queue, and a wedged broker surfaces
-    // as deliveryErrorCount > 0 within it. Returns error.Shutdown when stop_signal
-    // fires mid-wait, so the caller can stop gracefully without staging the LSN.
-    fn produceWithBackpressure(
-        self: *Self,
-        stop_signal: *std.atomic.Value(bool),
-        topic_name: []const u8,
-        key: ?[]const u8,
-        payload: []const u8,
-    ) !void {
-        const producer = &self.producer;
-        while (true) {
-            producer.sendMessage(topic_name, key, payload) catch |err| switch (err) {
-                error.QueueFull => {
-                    if (stop_signal.load(.monotonic)) return error.Shutdown;
-                    // A permanent delivery failure means the broker is rejecting, not
-                    // just slow: stop waiting and fail fast now.
-                    if (producer.deliveryErrorCount() > 0) return error.DeliveryFailed;
-                    producer.poll(constants.CDC.KAFKA_BACKPRESSURE_POLL_MS);
-                    continue;
-                },
-                else => {
-                    self.obs.recordProduceError();
-                    return err;
-                },
-            };
-            return;
-        }
     }
 
     /// Run the batch loop until stop_signal is set, with a background flush/commit worker.

@@ -77,7 +77,6 @@ const BenchKafkaSend = struct {
         for (0..batch_size) |_| {
             self.producer.sendMessage("bench_topic", "key_123", payload) catch unreachable;
         }
-        self.producer.poll(0);
     }
 };
 
@@ -88,7 +87,6 @@ const BenchKafkaProduce = struct {
     pub fn run(self: *BenchKafkaProduce, allocator: std.mem.Allocator) void {
         _ = allocator;
         self.producer.produce("bench_topic", self.messages) catch unreachable;
-        self.producer.poll(0);
     }
 };
 
@@ -109,7 +107,7 @@ test "benchmark KafkaProducer sendMessage" {
     defer bench.deinit();
 
     _ = try producer.sendMessage("bench_topic", "warmup", "warmup");
-    try producer.flush(1000);
+    try producer.flush(null);
 
     alloc_count = 0;
 
@@ -159,7 +157,7 @@ test "benchmark KafkaProducer produce" {
     }
 
     _ = try producer.produce("bench_topic", batch);
-    try producer.flush(1000);
+    try producer.flush(null);
 
     alloc_count = 0;
 

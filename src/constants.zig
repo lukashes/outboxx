@@ -28,13 +28,15 @@ pub const CDC = struct {
     pub const KAFKA_BATCH_SIZE = "262144"; // 256KB batches for better network utilization
     pub const KAFKA_POLL_INTERVAL: u32 = 100; // Poll every N messages (reduces syscall overhead)
 
-    // Backpressure on a full producer queue. The synchronous pipeline blocks the
-    // WAL read here, so Postgres slows too: block on poll (it wakes up as soon as
-    // a delivery report lands, not just on timeout) and retry produce. No deadline
-    // of our own is needed: a message can't sit in the queue past
-    // delivery.timeout.ms (30s) before its delivery report fires, so a wedged
-    // broker surfaces as deliveryErrorCount > 0 well within that window.
-    pub const KAFKA_BACKPRESSURE_POLL_MS: i32 = 5000;
+    // Poll slice while draining the producer queue: flush loops on it until the
+    // queue empties, and backpressure reuses flush on a full queue. Blocking poll
+    // wakes as soon as a delivery report lands, not just on timeout. No overall
+    // deadline of our own: a message can't sit in the queue past delivery.timeout.ms
+    // (30s) before its delivery report fires, so a wedged broker surfaces as a
+    // failed delivery well within that window (and the 90s liveness limit). The
+    // slice only bounds how often the drain loop rechecks the queue, delivery
+    // errors, and the stop signal.
+    pub const KAFKA_FLUSH_POLL_MS: i32 = 5000;
 };
 
 /// Observability tuning constants.
