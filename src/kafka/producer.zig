@@ -37,8 +37,8 @@ pub const KafkaProducer = struct {
     // the Processor: it is handed to librdkafka as the delivery-callback opaque.
     delivery_errors: *std.atomic.Value(u64),
     // Sends since the last poll. A produced message holds a queue slot until its
-    // delivery report is served, so sendMessage self-drains every
-    // KAFKA_POLL_INTERVAL sends and callers never poll by hand.
+    // delivery report is served, so send() self-drains every KAFKA_POLL_INTERVAL
+    // messages and callers never poll by hand.
     sent_since_poll: u32 = 0,
 
     const Self = @This();
@@ -313,14 +313,6 @@ pub const KafkaProducer = struct {
             std.log.warn("Failed to produce message: {s}", .{c.rd_kafka_err2str(errno)});
             return KafkaError.MessageSendFailed;
         }
-
-        // Serve delivery reports periodically so a long run of sends does not fill
-        // the queue between flushes and so failures surface without waiting for one.
-        self.sent_since_poll += 1;
-        if (self.sent_since_poll >= constants.CDC.KAFKA_POLL_INTERVAL) {
-            self.poll(0);
-            self.sent_since_poll = 0;
-        }
     }
 
     // Raw event pump: serves delivery reports and frees queue slots. Private
@@ -351,6 +343,14 @@ pub const KafkaProducer = struct {
                 },
                 else => return err,
             };
+
+            // Serve delivery reports periodically so a long run of sends does not fill
+            // the queue between flushes and so failures surface without waiting for one.
+            self.sent_since_poll += 1;
+            if (self.sent_since_poll >= constants.CDC.KAFKA_POLL_INTERVAL) {
+                self.poll(0);
+                self.sent_since_poll = 0;
+            }
             return;
         }
     }
