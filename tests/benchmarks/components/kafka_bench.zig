@@ -69,15 +69,18 @@ const MockCluster = struct {
 };
 
 // KafkaProducer setup is heavy (rd_kafka initialization, mock cluster), prepared outside benchmark
+// Benchmarks send(), the production entrypoint: raw sendMessage no longer drains
+// on its own, so a poll-less loop would fill the queue. send() self-polls, and on
+// this healthy mock broker the queue never fills, so backpressure never triggers.
 const BenchKafkaSend = struct {
     producer: *KafkaProducer,
+    stop_signal: *std.atomic.Value(bool),
 
     pub fn run(self: *BenchKafkaSend, allocator: std.mem.Allocator) void {
         _ = allocator;
         for (0..batch_size) |_| {
-            self.producer.sendMessage("bench_topic", "key_123", payload) catch unreachable;
+            self.producer.send(self.stop_signal, "bench_topic", "key_123", payload) catch unreachable;
         }
-        self.producer.poll();
     }
 };
 
@@ -88,11 +91,10 @@ const BenchKafkaProduce = struct {
     pub fn run(self: *BenchKafkaProduce, allocator: std.mem.Allocator) void {
         _ = allocator;
         self.producer.produce("bench_topic", self.messages) catch unreachable;
-        self.producer.poll();
     }
 };
 
-test "benchmark KafkaProducer sendMessage" {
+test "benchmark KafkaProducer send" {
     var mock = try MockCluster.init();
     defer mock.deinit();
 
@@ -109,13 +111,14 @@ test "benchmark KafkaProducer sendMessage" {
     defer bench.deinit();
 
     _ = try producer.sendMessage("bench_topic", "warmup", "warmup");
-    try producer.flush(1000);
+    try producer.flush(null);
 
     alloc_count = 0;
 
-    const bench_send = BenchKafkaSend{ .producer = &producer };
+    var stop_signal = std.atomic.Value(bool).init(false);
+    const bench_send = BenchKafkaSend{ .producer = &producer, .stop_signal = &stop_signal };
 
-    try bench.addParam("KafkaProducer.sendMessage", &bench_send, .{
+    try bench.addParam("KafkaProducer.send", &bench_send, .{
         .iterations = message_iterations,
         .track_allocations = true,
     });
@@ -159,7 +162,7 @@ test "benchmark KafkaProducer produce" {
     }
 
     _ = try producer.produce("bench_topic", batch);
-    try producer.flush(1000);
+    try producer.flush(null);
 
     alloc_count = 0;
 

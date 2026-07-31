@@ -78,17 +78,12 @@ fn flushCommitWorker(
             continue;
         }
 
-        producer.flush(constants.CDC.KAFKA_FLUSH_TIMEOUT_MS) catch |err| {
+        // flush returns cleanly only once every message is delivered; an error
+        // (a permanent delivery failure) means this LSN is not safe to confirm.
+        producer.flush(null) catch |err| {
             std.log.err("Background flush failed: {}", .{err});
             continue;
         };
-
-        // A drained queue is not a delivered queue: a message can leave it by
-        // permanently failing. Hold the LSN if any did; the receive loop turns
-        // this into a fail-fast.
-        if (producer.deliveryErrorCount() > 0) {
-            continue;
-        }
 
         source.sendFeedback(io, lsn) catch |err| {
             std.log.err("Background LSN commit failed: {}", .{err});
@@ -98,14 +93,17 @@ fn flushCommitWorker(
 
     const lsn = pending_lsn.load(.acquire);
 
-    producer.flush(constants.CDC.KAFKA_FLUSH_TIMEOUT_MS) catch |err| {
-        std.log.warn("Final background flush failed: {}", .{err});
-    };
-
-    if (lsn > 0 and producer.deliveryErrorCount() == 0) {
-        source.sendFeedback(io, lsn) catch |err| {
-            std.log.warn("Final background LSN commit failed: {}", .{err});
-        };
+    // Confirm the final LSN only if the flush fully drained. A failed flush leaves
+    // messages un-delivered, and advancing the slot past them would break
+    // at-least-once on the next restart.
+    if (producer.flush(null)) |_| {
+        if (lsn > 0) {
+            source.sendFeedback(io, lsn) catch |err| {
+                std.log.warn("Final background LSN commit failed: {}", .{err});
+            };
+        }
+    } else |err| {
+        std.log.warn("Final flush failed; not confirming LSN {}: {}", .{ lsn, err });
     }
 
     std.log.debug("Flush/commit worker stopped", .{});
@@ -151,7 +149,7 @@ pub const Processor = struct {
     }
 
     /// Receive one batch, route each change to its streams, and stage the batch LSN for commit.
-    pub fn processChangesToKafka(self: *Self, io: std.Io, batch_allocator: std.mem.Allocator, limit: u32) !void {
+    pub fn processChangesToKafka(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool), batch_allocator: std.mem.Allocator, limit: u32) !void {
         var batch = try self.source.receiveBatch(io, batch_allocator, limit);
         defer batch.deinit();
 
@@ -162,8 +160,6 @@ pub const Processor = struct {
         // Liveness follows real wire activity (a change or a keepalive), not the
         // loop turning: an empty batch on a dead stream must not refresh it.
         if (batch.changes.len > 0 or batch.received_keepalive) self.obs.heartbeat(io);
-
-        const producer = &self.producer;
 
         if (batch.changes.len == 0) {
             self.pending_lsn.store(batch.last_lsn, .release);
@@ -180,12 +176,6 @@ pub const Processor = struct {
         var event_counts = std.ArrayList(EventCount).empty;
         defer event_counts.deinit(batch_allocator);
 
-        // With dr_msg_cb registered, a produced message counts against
-        // queue.buffering.max.messages until its delivery report is served by a
-        // poll. Serve them every KAFKA_POLL_INTERVAL sends so a large batch does
-        // not fill the queue before the single poll at the end.
-        var sent_since_poll: u32 = 0;
-
         for (batch.changes) |change_event| {
             var matched = try matchStreams(batch_allocator, self.streams, change_event);
             defer matched.deinit(batch_allocator);
@@ -200,19 +190,19 @@ pub const Processor = struct {
                 const topic_name = stream.sink.destination;
                 const partition_key = try self.getPartitionKey(batch_allocator, change_event, stream);
 
-                producer.sendMessage(topic_name, partition_key, json_bytes) catch |err| {
-                    self.obs.recordProduceError();
-                    std.log.debug("processChangesToKafka: sendMessage failed, propagating {} (fail-fast)", .{err});
-                    return err;
+                // A full queue is backpressure, not failure: send blocks (stalling
+                // the WAL read, so Postgres slows too) and retries. Shutdown and a
+                // permanent delivery failure propagate as-is; anything else is a
+                // produce error worth recording before it fails the pipeline.
+                self.producer.send(stop_signal, topic_name, partition_key, json_bytes) catch |err| switch (err) {
+                    error.Shutdown, error.DeliveryFailed => return err,
+                    else => {
+                        self.obs.recordProduceError();
+                        return err;
+                    },
                 };
 
                 try tallyEvent(&event_counts, batch_allocator, stream.name, change_event.op);
-
-                sent_since_poll += 1;
-                if (sent_since_poll >= constants.CDC.KAFKA_POLL_INTERVAL) {
-                    producer.poll();
-                    sent_since_poll = 0;
-                }
 
                 self.events_processed += 1;
                 if (self.events_processed % 10000 == 0) {
@@ -222,8 +212,6 @@ pub const Processor = struct {
         }
 
         for (event_counts.items) |e| self.obs.addEvents(e.count, e.stream, e.operation);
-
-        producer.poll();
 
         self.pending_lsn.store(batch.last_lsn, .release);
     }
@@ -284,7 +272,11 @@ pub const Processor = struct {
 
             const batch_alloc = batch_arena.allocator();
 
-            try self.processChangesToKafka(io, batch_alloc, constants.CDC.BATCH_SIZE);
+            self.processChangesToKafka(io, stop_signal, batch_alloc, constants.CDC.BATCH_SIZE) catch |err| switch (err) {
+                // Backpressure saw stop_signal mid-batch: leave the loop for the graceful final flush.
+                error.Shutdown => break,
+                else => return err,
+            };
 
             // A permanent delivery failure (or fatal producer error) means data
             // never reached Kafka. Fail fast so the slot re-sends from the last

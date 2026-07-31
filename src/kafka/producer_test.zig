@@ -111,7 +111,7 @@ test "KafkaProducer can send message to topic" {
     try producer.sendMessage(test_topic, test_key, test_message);
 
     // Flush to ensure message is sent
-    try producer.flush(5000);
+    try producer.flush(null);
 
     // Verify the message was actually written to Kafka
     const message_written = verifyMessageWritten(allocator, "localhost:9092", test_topic, test_message, null) catch false;
@@ -148,7 +148,7 @@ test "KafkaProducer can send messages to multiple topics" {
     }
 
     // Flush all messages
-    try producer.flush(5000);
+    try producer.flush(null);
 
     // Verify at least one message was written
     const first_topic = topics[0];
@@ -214,7 +214,7 @@ test "KafkaProducer memory management" {
 
         try producer.sendMessage(topic, "memory_test", message);
 
-        try producer.flush(1000);
+        try producer.flush(null);
     }
 
     std.debug.print("Memory management test completed successfully\n", .{});
@@ -254,7 +254,7 @@ test "KafkaProducer connects over TLS and verifies the broker with a CA" {
     const topic = "test.kafka.tls";
     const message = "{\"operation\":\"INSERT\",\"table\":\"tls_table\",\"data\":\"tls_data\"}";
     try producer.sendMessage(topic, "tls_key", message);
-    try producer.flush(5000);
+    try producer.flush(null);
 
     const written = verifyMessageWritten(allocator, brokers, topic, message, ca) catch false;
     if (written) {

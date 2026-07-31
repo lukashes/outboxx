@@ -6,6 +6,7 @@ const KafkaError = error{
     ProducerCreationFailed,
     TopicCreationFailed,
     MessageSendFailed,
+    QueueFull,
     FlushFailed,
     ConfigurationFailed,
     ConnectionTestFailed,
@@ -35,6 +36,10 @@ pub const KafkaProducer = struct {
     // Heap-allocated so its address stays stable when the struct is moved into
     // the Processor: it is handed to librdkafka as the delivery-callback opaque.
     delivery_errors: *std.atomic.Value(u64),
+    // Sends since the last poll. A produced message holds a queue slot until its
+    // delivery report is served, so send() self-drains every KAFKA_POLL_INTERVAL
+    // messages and callers never poll by hand.
+    sent_since_poll: u32 = 0,
 
     const Self = @This();
 
@@ -272,6 +277,10 @@ pub const KafkaProducer = struct {
         }
 
         std.log.debug("Batch sent: {d} messages to topic {s}", .{ sent, topic_name });
+
+        // Drain the batch's delivery reports so the queue does not grow unbounded
+        // across calls.
+        self.poll(0);
     }
 
     pub fn sendMessage(self: *Self, topic_name: []const u8, key: ?[]const u8, message: []const u8) !void {
@@ -298,24 +307,74 @@ pub const KafkaProducer = struct {
 
         if (result == -1) {
             const errno = c.rd_kafka_last_error();
+            // A full local queue is backpressure, not a failure: send() drains it
+            // and retries. Keep it a distinct error so send() can tell it apart.
+            if (errno == c.RD_KAFKA_RESP_ERR__QUEUE_FULL) return KafkaError.QueueFull;
             std.log.warn("Failed to produce message: {s}", .{c.rd_kafka_err2str(errno)});
             return KafkaError.MessageSendFailed;
         }
     }
 
-    pub fn poll(self: *Self) void {
+    // Raw event pump: serves delivery reports and frees queue slots. Private
+    // plumbing behind send/flush, which own how long to block.
+    fn poll(self: *Self, timeout_ms: i32) void {
         const producer = self.producer orelse return;
-        _ = c.rd_kafka_poll(producer, 0);
+        _ = c.rd_kafka_poll(producer, timeout_ms);
     }
 
-    pub fn flush(self: *Self, timeout_ms: i32) !void {
+    /// Produce one message, treating a full local queue as backpressure rather
+    /// than an error. The pipeline is synchronous, so blocking here stalls the WAL
+    /// read and slows Postgres to match. On a full queue, flush drains it (which
+    /// also fails fast if any message permanently failed) and we retry. Returns
+    /// error.Shutdown if stop_signal fires while waiting, so the caller can stop
+    /// without staging an un-delivered LSN.
+    pub fn send(
+        self: *Self,
+        stop_signal: *std.atomic.Value(bool),
+        topic_name: []const u8,
+        key: ?[]const u8,
+        payload: []const u8,
+    ) !void {
+        while (true) {
+            self.sendMessage(topic_name, key, payload) catch |err| switch (err) {
+                error.QueueFull => {
+                    try self.flush(stop_signal);
+                    continue;
+                },
+                else => return err,
+            };
+
+            // Serve delivery reports periodically so a long run of sends does not fill
+            // the queue between flushes and so failures surface without waiting for one.
+            self.sent_since_poll += 1;
+            if (self.sent_since_poll >= constants.CDC.KAFKA_POLL_INTERVAL) {
+                self.poll(0);
+                self.sent_since_poll = 0;
+            }
+            return;
+        }
+    }
+
+    /// Block until every produced message has been delivered, draining delivery
+    /// reports as they arrive. A clean return means the local queue is empty and
+    /// no message failed, so the caller may safely confirm the LSN. Returns
+    /// error.DeliveryFailed if any message permanently failed (a drained queue is
+    /// not a delivered queue) or error.Shutdown if stop_signal fires mid-drain.
+    /// No overall deadline of our own: delivery.timeout.ms bounds how long a
+    /// message can sit in the queue, so the loop always terminates within it.
+    pub fn flush(self: *Self, stop_signal: ?*std.atomic.Value(bool)) !void {
         const producer = self.producer orelse return KafkaError.FlushFailed;
 
-        const err = c.rd_kafka_flush(producer, timeout_ms);
-        if (err != c.RD_KAFKA_RESP_ERR_NO_ERROR) {
-            std.log.warn("Kafka flush failed: {s}", .{c.rd_kafka_err2str(err)});
-            return KafkaError.FlushFailed;
+        while (c.rd_kafka_outq_len(producer) > 0) {
+            if (self.deliveryErrorCount() > 0) return error.DeliveryFailed;
+            if (stop_signal) |s| {
+                if (s.load(.monotonic)) return error.Shutdown;
+            }
+            self.poll(constants.CDC.KAFKA_FLUSH_POLL_MS);
         }
+        // The last poll may have emptied the queue via a failed delivery; catch it
+        // so a clean return always means every message was actually delivered.
+        if (self.deliveryErrorCount() > 0) return error.DeliveryFailed;
     }
 
     /// Count of messages that permanently failed delivery over the producer's
@@ -397,7 +456,47 @@ test "delivery callback counts a permanently failed message" {
 
     try producer.sendMessage("t", "k", "{}");
     // flush serves the delivery callback on this thread, counting the failure.
-    producer.flush(5000) catch {};
+    producer.flush(null) catch {};
 
     try testing.expect(producer.deliveryErrorCount() > 0);
+}
+
+test "sendMessage reports a full queue as error.QueueFull" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var errstr: [512]u8 = undefined;
+    const mock_rk = c.rd_kafka_new(c.RD_KAFKA_PRODUCER, c.rd_kafka_conf_new(), &errstr, errstr.len);
+    try testing.expect(mock_rk != null);
+    defer c.rd_kafka_destroy(mock_rk);
+
+    const mcluster = c.rd_kafka_mock_cluster_new(mock_rk, 1);
+    try testing.expect(mcluster != null);
+    defer c.rd_kafka_mock_cluster_destroy(mcluster);
+
+    const bootstraps = std.mem.span(c.rd_kafka_mock_cluster_bootstraps(mcluster));
+    try testing.expect(c.rd_kafka_mock_topic_create(mcluster, "t", 1, 1) == c.RD_KAFKA_RESP_ERR_NO_ERROR);
+
+    // Broker down: nothing drains, so the local queue fills and rd_kafka_produce
+    // returns QUEUE_FULL. sendMessage must surface that as the distinct
+    // error.QueueFull (backpressure), not MessageSendFailed.
+    _ = c.rd_kafka_mock_broker_set_down(mcluster, 1);
+
+    var producer = try KafkaProducer.init(allocator, bootstraps, null);
+    defer producer.deinit();
+    // The queue holds up to queue.buffering.max.messages undeliverable messages;
+    // purge before deinit so the final flush doesn't block on the downed broker.
+    defer _ = c.rd_kafka_purge(producer.producer.?, c.RD_KAFKA_PURGE_F_QUEUE | c.RD_KAFKA_PURGE_F_INFLIGHT);
+
+    // Fill past the default 100k queue; QueueFull must arrive before this bound.
+    var got_queue_full = false;
+    var i: usize = 0;
+    while (i < 200_000) : (i += 1) {
+        producer.sendMessage("t", null, "{}") catch |err| {
+            try testing.expectEqual(error.QueueFull, err);
+            got_queue_full = true;
+            break;
+        };
+    }
+    try testing.expect(got_queue_full);
 }
