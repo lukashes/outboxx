@@ -444,8 +444,6 @@ fn readU16(bytes: []const u8) u16 {
 
 const testing = std.testing;
 
-const decoder_mod = @This();
-
 // Helper to build binary messages
 fn writeU64(buffer: []u8, value: u64) void {
     buffer[0] = @intCast((value >> 56) & 0xFF);
@@ -786,7 +784,7 @@ test "PgOutputDecoder: invalid message type" {
     const data = [_]u8{'X'}; // Unknown message type
 
     const result = pg_decoder.decode(allocator, &data);
-    try testing.expectError(decoder_mod.DecoderError.UnknownMessageType, result);
+    try testing.expectError(DecoderError.UnknownMessageType, result);
 }
 
 test "PgOutputDecoder: truncate, type and origin decode to skip" {

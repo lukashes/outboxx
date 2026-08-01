@@ -106,8 +106,6 @@ pub const RelationRegistry = struct {
 
 const testing = std.testing;
 
-const relation_registry_mod = @This();
-
 fn createTestRelation(allocator: std.mem.Allocator, relation_id: u32, namespace: []const u8, relation_name: []const u8) !RelationMessage {
     const namespace_owned = try allocator.dupe(u8, namespace);
     errdefer allocator.free(namespace_owned);
@@ -232,7 +230,7 @@ test "RelationRegistry: get non-existent relation" {
     defer registry.deinit();
 
     const result = registry.get(99999);
-    try testing.expectError(relation_registry_mod.RelationRegistryError.RelationNotFound, result);
+    try testing.expectError(RelationRegistryError.RelationNotFound, result);
 }
 
 test "RelationRegistry: contains checks" {

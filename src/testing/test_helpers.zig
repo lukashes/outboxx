@@ -1,5 +1,5 @@
 const std = @import("std");
-const config_module = @import("../src/config/config.zig");
+const config_module = @import("../config/config.zig");
 const Stream = config_module.Stream;
 const StreamSource = config_module.StreamSource;
 const StreamFlow = config_module.StreamFlow;

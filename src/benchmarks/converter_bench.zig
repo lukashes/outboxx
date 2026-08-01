@@ -1,7 +1,7 @@
 const std = @import("std");
 const zbench = @import("zbench");
-const postgres_source = @import("../../../src/source/postgres/source.zig");
-const bench_helpers = @import("../bench_helpers.zig");
+const postgres_source = @import("../source/postgres/source.zig");
+const bench_helpers = @import("bench_helpers.zig");
 
 const PgOutputMessage = postgres_source.PgOutputMessage;
 const InsertMessage = postgres_source.InsertMessage;

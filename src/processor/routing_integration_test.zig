@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-const test_helpers = @import("../../tests/test_helpers.zig");
+const test_helpers = @import("../testing/test_helpers.zig");
 const getTestConnectionString = test_helpers.getTestConnectionString;
 
 const PostgresSource = @import("../source/postgres/source.zig").PostgresSource;

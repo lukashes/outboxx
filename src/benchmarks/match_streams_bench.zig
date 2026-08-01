@@ -1,9 +1,9 @@
 const std = @import("std");
 const zbench = @import("zbench");
-const config_module = @import("../../../src/config/config.zig");
-const bench_helpers = @import("../bench_helpers.zig");
-const processor_mod = @import("../../../src/processor/processor.zig");
-const domain = @import("../../../src/domain/change_event.zig");
+const config_module = @import("../config/config.zig");
+const bench_helpers = @import("bench_helpers.zig");
+const processor_mod = @import("../processor/processor.zig");
+const domain = @import("../domain/change_event.zig");
 
 const Stream = config_module.Stream;
 const StreamSource = config_module.StreamSource;

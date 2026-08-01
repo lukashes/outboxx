@@ -70,12 +70,11 @@ pub fn build(b: *std.Build) void {
     addCHeadersT(b, c_dev);
     const c_dev_module = c_dev.createModule();
 
-    // Every internal source file is reached by relative path, so each binary is a
-    // single module. The only named imports are external packages and the
-    // generated build_options; addExternals wires them onto a module in one shot.
-    // Registering one a file never imports is harmless: a module is analyzed only
-    // when actually @imported. Tests/benchmarks get the dev "c" (mock cluster);
-    // the product binaries get prod "c".
+    // Every internal file is reached by relative path, so each binary is one
+    // module; only external packages and generated build_options are named
+    // imports. addExternals wires them onto a module (an unused one is harmless:
+    // a module is analyzed only when imported). Tests/benchmarks get the dev "c"
+    // with the mock cluster, product binaries the prod "c".
     const externals: Externals = .{
         .build_options = build_options,
         .toml = toml_module,
@@ -108,10 +107,8 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
-    // Unit tests (no external services)
-    // Unit tests run as one aggregate binary rooted at src/unit_tests.zig; see
-    // that file for why the suite is rooted at src/ instead of per test file.
-    // source.zig reaches the libpq path (via replication_protocol), hence linkPg.
+    // Unit tests run as one aggregate binary; see src/unit_tests.zig. source.zig
+    // reaches the libpq path (via replication_protocol), hence linkPg.
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/unit_tests.zig"),
@@ -127,7 +124,7 @@ pub fn build(b: *std.Build) void {
     // (repo root, see that file). They reach both the libpq and librdkafka paths.
     const integration_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("integration_tests.zig"),
+            .root_source_file = b.path("src/integration_tests.zig"),
             .target = target,
             .optimize = optimize,
         }),
@@ -146,7 +143,7 @@ pub fn build(b: *std.Build) void {
     // E2E: full pipeline (PostgreSQL -> CDC -> Kafka). Links like the exe so
     // `zig build test-e2e -Dstatic-deps -Dtarget=*-musl` exercises the full suite
     // against the exact static release link set.
-    const e2e_streaming_test = addUnitTest(b, "e2e_tests.zig", target, optimize, externals, c_dev_module);
+    const e2e_streaming_test = addUnitTest(b, "src/e2e_tests.zig", target, optimize, externals, c_dev_module);
     e2e_streaming_test.root_module.link_libc = true;
     e2e_streaming_test.root_module.linkSystemLibrary("pq", link_opts);
     e2e_streaming_test.root_module.linkSystemLibrary("rdkafka", link_opts);
@@ -216,13 +213,13 @@ pub fn build(b: *std.Build) void {
     const zbench_dep = b.dependency("zbench", .{ .target = target, .optimize = .ReleaseFast });
     const zbench_module = zbench_dep.module("zbench");
 
-    const serializer_bench = addBench(b, "serializer_bench", "serializer_bench_root.zig", target, externals, c_dev_module, zbench_module);
-    const decoder_bench = addBench(b, "decoder_bench", "decoder_bench_root.zig", target, externals, c_dev_module, zbench_module);
-    const match_streams_bench = addBench(b, "match_streams_bench", "match_streams_bench_root.zig", target, externals, c_dev_module, zbench_module);
-    const partition_key_bench = addBench(b, "partition_key_bench", "partition_key_bench_root.zig", target, externals, c_dev_module, zbench_module);
-    const converter_bench = addBench(b, "converter_bench", "converter_bench_root.zig", target, externals, c_dev_module, zbench_module);
+    const serializer_bench = addBench(b, "serializer_bench", "src/serializer_bench_root.zig", target, externals, c_dev_module, zbench_module);
+    const decoder_bench = addBench(b, "decoder_bench", "src/decoder_bench_root.zig", target, externals, c_dev_module, zbench_module);
+    const match_streams_bench = addBench(b, "match_streams_bench", "src/match_streams_bench_root.zig", target, externals, c_dev_module, zbench_module);
+    const partition_key_bench = addBench(b, "partition_key_bench", "src/partition_key_bench_root.zig", target, externals, c_dev_module, zbench_module);
+    const converter_bench = addBench(b, "converter_bench", "src/converter_bench_root.zig", target, externals, c_dev_module, zbench_module);
 
-    const kafka_bench = addBench(b, "kafka_bench", "kafka_bench_root.zig", target, externals, c_dev_module, zbench_module);
+    const kafka_bench = addBench(b, "kafka_bench", "src/kafka_bench_root.zig", target, externals, c_dev_module, zbench_module);
     linkKafka(kafka_bench.root_module);
 
     const bench_step = b.step("bench", "Compile component benchmarks");

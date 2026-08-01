@@ -421,8 +421,6 @@ pub const Config = struct {
 
 const testing = std.testing;
 
-const config = @This();
-
 // Valid config built from static data. No allocations, so nothing to free.
 fn createTestDefault() Config {
     return .{
@@ -501,7 +499,7 @@ test "createTestDefault" {
 }
 
 test "Stream.hasDeleteOperation reflects the configured operations" {
-    const base: config.Stream = .{
+    const base: Stream = .{
         .name = "s",
         .source = .{ .resource = "users", .operations = &.{} },
         .flow = .{ .format = "json" },
@@ -518,10 +516,10 @@ test "Stream.hasDeleteOperation reflects the configured operations" {
 }
 
 test "supported adapter types are implemented" {
-    try testing.expectEqual(@as(usize, 1), config.SupportedValues.SOURCE_TYPES.len);
-    try testing.expectEqualStrings("postgres", config.SupportedValues.SOURCE_TYPES[0]);
-    try testing.expectEqual(@as(usize, 1), config.SupportedValues.SINK_TYPES.len);
-    try testing.expectEqualStrings("kafka", config.SupportedValues.SINK_TYPES[0]);
+    try testing.expectEqual(@as(usize, 1), SupportedValues.SOURCE_TYPES.len);
+    try testing.expectEqualStrings("postgres", SupportedValues.SOURCE_TYPES[0]);
+    try testing.expectEqual(@as(usize, 1), SupportedValues.SINK_TYPES.len);
+    try testing.expectEqualStrings("kafka", SupportedValues.SINK_TYPES[0]);
 }
 
 // TOML parsing tests
@@ -894,9 +892,9 @@ test "Config validation - full SASL over TLS passes" {
 }
 
 test "securityProtocol derives from tls and sasl" {
-    const testing_sasl: config.KafkaSasl = .{ .mechanism = "PLAIN", .username = "app", .password_env = "PW" };
+    const testing_sasl: KafkaSasl = .{ .mechanism = "PLAIN", .username = "app", .password_env = "PW" };
 
-    var kafka: config.KafkaSink = .{ .brokers = &.{"b:9092"}, .tls = false };
+    var kafka: KafkaSink = .{ .brokers = &.{"b:9092"}, .tls = false };
     try testing.expectEqualStrings("plaintext", kafka.securityProtocol());
 
     kafka.tls = true;

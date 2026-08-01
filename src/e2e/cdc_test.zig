@@ -1,12 +1,12 @@
 const std = @import("std");
 const testing = std.testing;
-const test_helpers = @import("../test_helpers.zig");
+const test_helpers = @import("../testing/test_helpers.zig");
 
-const Processor = @import("../../src/processor/processor.zig").Processor;
-const Observability = @import("../../src/processor/processor.zig").Observability;
-const PostgresSource = @import("../../src/source/postgres/source.zig").PostgresSource;
-const KafkaProducer = @import("../../src/sink/kafka/producer.zig").KafkaProducer;
-const Stream = @import("../../src/config/config.zig").Stream;
+const Processor = @import("../processor/processor.zig").Processor;
+const Observability = @import("../processor/processor.zig").Observability;
+const PostgresSource = @import("../source/postgres/source.zig").PostgresSource;
+const KafkaProducer = @import("../sink/kafka/producer.zig").KafkaProducer;
+const Stream = @import("../config/config.zig").Stream;
 const c = test_helpers.c;
 
 // E2E Test: CDC Pipeline Verification

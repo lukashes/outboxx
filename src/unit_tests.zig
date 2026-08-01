@@ -1,12 +1,7 @@
-//! Aggregate root for the unit test suite.
-//!
-//! Unit tests live inline in the business-logic file (project convention);
-//! *_test.zig is reserved for tests that need external services. This root
-//! pulls in the source files that carry inline tests so `zig build test` runs
-//! them as one binary. Zig confines a module to its root file's directory, so
-//! rooting here (src/) lets each file reach the rest of the tree by relative
-//! import with a single instance per type. Same pattern as TigerBeetle's
-//! src/unit_tests.zig; add a source file here when it gains its first inline test.
+// Root of the unit-test binary: it runs the inline tests of the source files
+// below. Rooted at src/ because a Zig module can only import files under its
+// root file's directory, so a deeper root could not reach the whole tree.
+// Add a source file here when it gains its first inline test.
 comptime {
     _ = @import("config/config.zig");
     _ = @import("observability/observability.zig");
