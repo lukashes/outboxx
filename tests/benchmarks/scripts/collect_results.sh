@@ -66,6 +66,9 @@ time_us_of() {
         ms) val=$(echo "scale=6; $val * 1000" | bc) ;;
         s) val=$(echo "scale=6; $val * 1000000" | bc) ;;
     esac
+    # bc drops the leading zero on sub-1 results (e.g. .107 for 107ns), which is
+    # invalid JSON; restore it so a sub-microsecond benchmark still parses.
+    [[ "$val" == .* ]] && val="0$val"
     echo "$val"
 }
 

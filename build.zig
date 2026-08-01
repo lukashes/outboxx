@@ -216,13 +216,13 @@ pub fn build(b: *std.Build) void {
     const zbench_dep = b.dependency("zbench", .{ .target = target, .optimize = .ReleaseFast });
     const zbench_module = zbench_dep.module("zbench");
 
-    const serializer_bench = addBench(b, "serializer_bench", "tests/benchmarks/components/serializer_bench.zig", target, externals, c_dev_module, zbench_module);
-    const decoder_bench = addBench(b, "decoder_bench", "tests/benchmarks/components/decoder_bench.zig", target, externals, c_dev_module, zbench_module);
-    const match_streams_bench = addBench(b, "match_streams_bench", "tests/benchmarks/components/match_streams_bench.zig", target, externals, c_dev_module, zbench_module);
-    const partition_key_bench = addBench(b, "partition_key_bench", "tests/benchmarks/components/partition_key_bench.zig", target, externals, c_dev_module, zbench_module);
-    const converter_bench = addBench(b, "converter_bench", "tests/benchmarks/components/converter_bench.zig", target, externals, c_dev_module, zbench_module);
+    const serializer_bench = addBench(b, "serializer_bench", "serializer_bench_root.zig", target, externals, c_dev_module, zbench_module);
+    const decoder_bench = addBench(b, "decoder_bench", "decoder_bench_root.zig", target, externals, c_dev_module, zbench_module);
+    const match_streams_bench = addBench(b, "match_streams_bench", "match_streams_bench_root.zig", target, externals, c_dev_module, zbench_module);
+    const partition_key_bench = addBench(b, "partition_key_bench", "partition_key_bench_root.zig", target, externals, c_dev_module, zbench_module);
+    const converter_bench = addBench(b, "converter_bench", "converter_bench_root.zig", target, externals, c_dev_module, zbench_module);
 
-    const kafka_bench = addBench(b, "kafka_bench", "tests/benchmarks/components/kafka_bench.zig", target, externals, c_dev_module, zbench_module);
+    const kafka_bench = addBench(b, "kafka_bench", "kafka_bench_root.zig", target, externals, c_dev_module, zbench_module);
     linkKafka(kafka_bench.root_module);
 
     const bench_step = b.step("bench", "Compile component benchmarks");
