@@ -1,84 +1,84 @@
 {
-  "timestamp": "2026-06-28T06:17:58Z",
+  "timestamp": "2026-08-02T03:05:30Z",
   "runs": 5,
   "aggregate": "min",
   "benchmarks": {
     "JsonSerializer": {
-      "time_avg_us": 26.364,
-      "memory_bytes": 505,
+      "time_avg_us": 26.735,
+      "memory_bytes": 545,
       "allocations": 3
     }
 ,
     "PgOutputDecoder": {
-      "time_avg_us": 49.392,
-      "memory_bytes": 243,
+      "time_avg_us": 53.19,
+      "memory_bytes": 267,
       "allocations": 6
     }
 ,
     "matchStreams found": {
-      "time_avg_us": 9.904,
-      "memory_bytes": 96,
+      "time_avg_us": 9.032,
+      "memory_bytes": 192,
       "allocations": 1
     }
 ,
     "matchStreams not found": {
-      "time_avg_us": .0280,
+      "time_avg_us": 0.024000,
       "memory_bytes": 0,
       "allocations": 0
     }
 ,
     "getPartitionKeyValue integer": {
-      "time_avg_us": 29.709,
-      "memory_bytes": 137,
-      "allocations": 3
+      "time_avg_us": 0.019000,
+      "memory_bytes": 0,
+      "allocations": 0
     }
 ,
     "getPartitionKeyValue string": {
-      "time_avg_us": 9.983,
+      "time_avg_us": 8.705,
       "memory_bytes": 36,
       "allocations": 1
     }
 ,
     "getPartitionKeyValue boolean": {
-      "time_avg_us": 9.053,
+      "time_avg_us": 8.216,
       "memory_bytes": 4,
       "allocations": 1
     }
 ,
     "getPartitionKeyValue not found": {
-      "time_avg_us": .0200,
+      "time_avg_us": 0.019000,
       "memory_bytes": 0,
       "allocations": 0
     }
 ,
-    "KafkaProducer sendMessage": {
-      "time_avg_us": 340.726,
+    "KafkaProducer send": {
+      "time_avg_us": 189.158,
       "memory_bytes": 0,
       "allocations": 0
     }
 ,
     "KafkaProducer produce": {
-      "time_avg_us": 116.072,
+      "time_avg_us": 89.091,
       "memory_bytes": 0,
       "allocations": 1
     }
 ,
     "Converter INSERT": {
-      "time_avg_us": 131.665,
-      "memory_bytes": 643,
-      "allocations": 15
+      "time_avg_us": 111.393,
+      "memory_bytes": 829,
+      "allocations": 14
     }
 ,
     "Converter UPDATE": {
-      "time_avg_us": 230.735,
-      "memory_bytes": 976,
-      "allocations": 27
+      "time_avg_us": 202.085,
+      "memory_bytes": 0,
+      "allocations": 23
     }
 ,
     "Converter DELETE": {
-      "time_avg_us": 131.48,
-      "memory_bytes": 643,
-      "allocations": 15
+      "time_avg_us": 120.219,
+      "memory_bytes": 829,
+      "allocations": 14
     }
 
   }

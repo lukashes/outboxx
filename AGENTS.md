@@ -62,14 +62,14 @@ src/
   observability/             OpenTelemetry facade + Prometheus/health HTTP server
   config/config.zig          TOML structs, env-var loading, validation
   testing/, e2e/, benchmarks/   test helpers, E2E test, component benchmarks
-  {unit,integration,e2e}_tests.zig, *_bench_root.zig   suite + bench entry roots
+  {unit,integration,e2e}_test_root.zig, bench_test_root.zig   suite + bench entry roots
 tests/  load/ + benchmarks/{scripts,results,baseline}   load stand + bench data
 ```
 
 Unit tests live inline in the business-logic file; a `*_test.zig` file is a test
 that needs external services. Each suite compiles as one binary from an aggregate
-root under `src/` (`unit_tests.zig`, `integration_tests.zig`, `e2e_tests.zig`;
-benchmarks via `*_bench_root.zig`), because a Zig module can import only files
+root under `src/` (`unit_test_root.zig`, `integration_test_root.zig`,
+`e2e_test_root.zig`; the component benchmarks via `bench_test_root.zig`), because a Zig module can import only files
 under its root file's directory. Imports are relative file paths; only external
 packages (`toml`, `opentelemetry-sdk`, `zbench`), the translate-c `c` module, and
 generated `build_options` are named.

@@ -58,7 +58,7 @@ help:
 	@echo "  cd tests/load && make help - Postgres -> CDC -> Kafka benchmark with Grafana"
 	@echo ""
 	@echo "Component Benchmarks:"
-	@echo "  make bench         - Run component benchmarks (view results in terminal)"
+	@echo "  make bench         - Run component benchmarks (BENCH_FILTER=Name for a subset)"
 	@echo "  make bench-compare - Compare current run with baseline (min of BENCH_RUNS passes)"
 	@echo "  make bench-ci      - Compare + write markdown report (used by CI for PR comments)"
 	@echo "  make bench-save    - Save current results as new baseline (BENCH_RUNS=N, default 5)"
@@ -199,21 +199,12 @@ env-status:
 # The stand lives in tests/load/ with its own Makefile: cd tests/load && make help
 
 # Component Benchmarks (zbench)
+# Narrow to a subset with BENCH_FILTER (recompiles): BENCH_FILTER=Converter make bench
 bench:
 	@echo "Compiling component benchmarks..."
-	@zig build bench >/dev/null 2>&1
+	@zig build bench $(if $(BENCH_FILTER),'-Dbench-filter=$(BENCH_FILTER)') >/dev/null 2>&1
 	@echo "Running benchmarks..."
-	@./zig-out/bin/serializer_bench
-	@echo ""
-	@./zig-out/bin/decoder_bench
-	@echo ""
-	@./zig-out/bin/match_streams_bench
-	@echo ""
-	@./zig-out/bin/partition_key_bench
-	@echo ""
-	@./zig-out/bin/kafka_bench
-	@echo ""
-	@./zig-out/bin/converter_bench
+	@./zig-out/bin/component_bench
 
 # Build the benchmark binaries and collect one set of results into
 # tests/benchmarks/results/current.json (min of BENCH_RUNS passes). This is the

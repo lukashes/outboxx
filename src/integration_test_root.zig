@@ -1,5 +1,5 @@
 // Root of the integration-test binary (needs Postgres + Kafka): it spans
-// several src/ subtrees, so its module root sits at src/. See src/unit_tests.zig.
+// several src/ subtrees, so its module root sits at src/. See src/unit_test_root.zig.
 comptime {
     _ = @import("sink/kafka/producer.zig");
     _ = @import("sink/kafka/producer_test.zig");

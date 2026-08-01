@@ -11,7 +11,8 @@ BIN_DIR="$BENCH_DIR/../../zig-out/bin"
 #   BENCH_RUNS=9 make bench-save
 BENCH_RUNS="${BENCH_RUNS:-5}"
 
-BENCHES=(serializer_bench decoder_bench match_streams_bench partition_key_bench kafka_bench converter_bench)
+# One binary holds the whole component-benchmark suite (see src/bench_test_root.zig).
+BENCHES=(component_bench)
 
 # Colors
 GREEN='\033[0;32m'
@@ -26,8 +27,8 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
 # --- Run the whole suite BENCH_RUNS times -----------------------------------
-# Running the full suite each pass (rather than one binary N times in a row)
-# keeps cache conditions realistic between repeated runs of the same binary.
+# Re-running the binary per pass (not once) lets us keep each benchmark's
+# minimum time across passes, which is far less noisy than a single sample.
 for ((pass = 1; pass <= BENCH_RUNS; pass++)); do
     echo -e "${YELLOW}Pass ${pass}/${BENCH_RUNS}...${NC}"
     for bench in "${BENCHES[@]}"; do
