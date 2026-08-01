@@ -301,7 +301,6 @@ pub const PostgresSource = struct {
 
 const testing = std.testing;
 
-
 test "PostgresSource: init and deinit" {
     const allocator = testing.allocator;
 
