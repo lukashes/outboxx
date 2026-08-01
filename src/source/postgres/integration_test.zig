@@ -1,13 +1,13 @@
 const std = @import("std");
 const testing = std.testing;
 
-const test_helpers = @import("test_helpers");
+const test_helpers = @import("../../../tests/test_helpers.zig");
 const getTestConnectionString = test_helpers.getTestConnectionString;
 
-const domain = @import("domain");
+const domain = @import("../../domain/change_event.zig");
 const ChangeOperation = domain.ChangeOperation;
 
-const constants = @import("constants");
+const constants = @import("../../constants.zig");
 
 const source_mod = @import("source.zig");
 const PostgresSource = source_mod.PostgresSource;

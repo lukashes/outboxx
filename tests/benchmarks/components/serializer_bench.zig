@@ -1,8 +1,8 @@
 const std = @import("std");
 const zbench = @import("zbench");
-const domain = @import("domain");
-const json_serialization = @import("json_serialization");
-const bench_helpers = @import("bench_helpers");
+const domain = @import("../../../src/domain/change_event.zig");
+const json_serialization = @import("../../../src/serialization/json.zig");
+const bench_helpers = @import("../bench_helpers.zig");
 
 const ChangeEvent = domain.ChangeEvent;
 const ChangeOperation = domain.ChangeOperation;

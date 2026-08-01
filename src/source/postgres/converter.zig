@@ -1,5 +1,5 @@
 const std = @import("std");
-const domain = @import("domain");
+const domain = @import("../../domain/change_event.zig");
 const ChangeEvent = domain.ChangeEvent;
 const ChangeOperation = domain.ChangeOperation;
 const Metadata = domain.Metadata;
@@ -7,7 +7,7 @@ const RowData = domain.RowData;
 const RowDataHelpers = domain.RowDataHelpers;
 const FieldValueHelpers = domain.FieldValueHelpers;
 const FieldValue = domain.FieldValue;
-const constants = @import("constants");
+const constants = @import("../../constants.zig");
 
 const pg_output_decoder = @import("pg_output_decoder.zig");
 const PgOutputMessage = pg_output_decoder.PgOutputMessage;
