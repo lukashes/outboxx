@@ -1,5 +1,5 @@
 const std = @import("std");
-const domain = @import("domain");
+const domain = @import("../domain/change_event.zig");
 const ChangeEvent = domain.ChangeEvent;
 const DataSection = domain.DataSection;
 const FieldData = domain.FieldData;

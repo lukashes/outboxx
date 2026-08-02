@@ -8,7 +8,7 @@ const readI64BigEndian = replication.readI64BigEndian;
 const writeU64BigEndian = replication.writeU64BigEndian;
 const writeI64BigEndian = replication.writeI64BigEndian;
 
-const test_helpers = @import("test_helpers");
+const test_helpers = @import("../../testing/test_helpers.zig");
 const getTestConnectionString = test_helpers.getTestConnectionString;
 
 test "readU64BigEndian: basic value" {

@@ -1,6 +1,6 @@
 const std = @import("std");
 const c = @import("c"); // C bindings (build-system translate-c)
-const constants = @import("constants");
+const constants = @import("../../constants.zig");
 
 const KafkaError = error{
     ProducerCreationFailed,

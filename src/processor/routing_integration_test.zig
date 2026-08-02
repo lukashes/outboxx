@@ -1,12 +1,12 @@
 const std = @import("std");
 const testing = std.testing;
 
-const test_helpers = @import("test_helpers");
+const test_helpers = @import("../testing/test_helpers.zig");
 const getTestConnectionString = test_helpers.getTestConnectionString;
 
-const PostgresSource = @import("postgres_source").PostgresSource;
-const matchStreams = @import("cdc_processor").matchStreams;
-const Stream = @import("config").Stream;
+const PostgresSource = @import("../source/postgres/source.zig").PostgresSource;
+const matchStreams = @import("processor.zig").matchStreams;
+const Stream = @import("../config/config.zig").Stream;
 
 const c = @import("c"); // C bindings (build-system translate-c)
 

@@ -1,7 +1,7 @@
 const std = @import("std");
-const domain = @import("domain");
+const domain = @import("../../domain/change_event.zig");
 const ChangeEvent = domain.ChangeEvent;
-const constants = @import("constants");
+const constants = @import("../../constants.zig");
 
 const replication_protocol = @import("replication_protocol.zig");
 const ReplicationProtocol = replication_protocol.ReplicationProtocol;
@@ -298,3 +298,32 @@ pub const PostgresSource = struct {
         };
     }
 };
+
+const testing = std.testing;
+
+test "PostgresSource: init and deinit" {
+    const allocator = testing.allocator;
+
+    var source = PostgresSource.init(allocator, "test_slot", "test_pub");
+    defer source.deinit();
+
+    try testing.expectEqual(@as(u64, 0), source.last_lsn);
+}
+
+test "Batch: deinit with empty changes" {
+    const allocator = testing.allocator;
+
+    const changes = try allocator.alloc(@import("../../domain/change_event.zig").ChangeEvent, 0);
+
+    var batch = Batch{
+        .changes = changes,
+        .last_lsn = 12345,
+        .replication_lag_seconds = 0,
+        .received_keepalive = false,
+        .allocator = allocator,
+    };
+    defer batch.deinit();
+
+    try testing.expectEqual(@as(u64, 12345), batch.last_lsn);
+    try testing.expectEqual(@as(usize, 0), batch.changes.len);
+}

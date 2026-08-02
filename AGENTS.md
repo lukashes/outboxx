@@ -58,16 +58,21 @@ src/
     relation_registry.zig    relation_id -> table metadata
     validator.zig            startup checks: version, wal_level, tables
   processor/processor.zig    pipeline, stream matching, flush/commit worker
-  kafka/producer.zig         librdkafka wrapper (TLS/SASL)
+  sink/kafka/producer.zig    librdkafka wrapper (TLS/SASL)
   observability/             OpenTelemetry facade + Prometheus/health HTTP server
   config/config.zig          TOML structs, env-var loading, validation
-tests/  test_helpers.zig, e2e/, benchmarks/, load/
+  testing/, e2e/, benchmarks/   test helpers, E2E test, component benchmarks
+  {unit,integration,e2e}_test_root.zig, bench_test_root.zig   suite + bench entry roots
+tests/  load/ + benchmarks/{scripts,results,baseline}   load stand + bench data
 ```
 
-Unit/integration tests are colocated as `*_test.zig`; E2E lives under
-`tests/e2e/`. `build.zig` wires modules by name (`domain`, `config`,
-`constants`, `postgres_source`, `kafka_producer`, `json_serialization`, `c`);
-imports use these names, not file paths.
+Unit tests live inline in the business-logic file; a `*_test.zig` file is a test
+that needs external services. Each suite compiles as one binary from an aggregate
+root under `src/` (`unit_test_root.zig`, `integration_test_root.zig`,
+`e2e_test_root.zig`; the component benchmarks via `bench_test_root.zig`), because a Zig module can import only files
+under its root file's directory. Imports are relative file paths; only external
+packages (`toml`, `opentelemetry-sdk`, `zbench`), the translate-c `c` module, and
+generated `build_options` are named.
 
 ## Message format
 

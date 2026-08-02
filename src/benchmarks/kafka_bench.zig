@@ -1,7 +1,7 @@
 const std = @import("std");
 const zbench = @import("zbench");
-const kafka_producer = @import("kafka_producer");
-const bench_helpers = @import("bench_helpers");
+const kafka_producer = @import("../sink/kafka/producer.zig");
+const bench_helpers = @import("bench_helpers.zig");
 
 const KafkaProducer = kafka_producer.KafkaProducer;
 const CountingAllocator = bench_helpers.CountingAllocator;

@@ -1,17 +1,17 @@
 const std = @import("std");
 
-const PostgresSource = @import("postgres_source").PostgresSource;
-const Batch = @import("postgres_source").Batch;
+const PostgresSource = @import("../source/postgres/source.zig").PostgresSource;
+const Batch = @import("../source/postgres/source.zig").Batch;
 
-const KafkaProducer = @import("kafka_producer").KafkaProducer;
-const Stream = @import("config").Stream;
+const KafkaProducer = @import("../sink/kafka/producer.zig").KafkaProducer;
+const Stream = @import("../config/config.zig").Stream;
 
-const domain = @import("domain");
+const domain = @import("../domain/change_event.zig");
 const ChangeEvent = domain.ChangeEvent;
-const json_serializer = @import("json_serialization");
+const json_serializer = @import("../serialization/json.zig");
 const JsonSerializer = json_serializer.JsonSerializer;
-const constants = @import("constants");
-pub const Observability = @import("observability").Observability;
+const constants = @import("../constants.zig");
+pub const Observability = @import("../observability/observability.zig").Observability;
 
 // Per-batch tally of routed change events by stream and operation, so the events
 // counter is updated once per distinct combo instead of once per routed change.

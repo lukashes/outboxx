@@ -1,15 +1,15 @@
 const std = @import("std");
-const config_mod = @import("config");
+const config_mod = @import("config/config.zig");
 const Config = config_mod.Config;
 const Processor = @import("processor/processor.zig").Processor;
-const PostgresSource = @import("postgres_source").PostgresSource;
-const kafka_producer = @import("kafka_producer");
+const PostgresSource = @import("source/postgres/source.zig").PostgresSource;
+const kafka_producer = @import("sink/kafka/producer.zig");
 const KafkaProducer = kafka_producer.KafkaProducer;
 const PostgresValidator = @import("source/postgres/validator.zig").PostgresValidator;
 const builtin = @import("builtin");
 const posix = std.posix;
-const constants = @import("constants");
-const observability = @import("observability");
+const constants = @import("constants.zig");
+const observability = @import("observability/observability.zig");
 const Observability = observability.Observability;
 
 // Log level is a build option (-Dlog_level=..., default info), so lower levels
