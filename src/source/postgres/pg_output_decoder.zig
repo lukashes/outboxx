@@ -363,6 +363,7 @@ pub const PgOutputDecoder = struct {
 
         var old_tuple: ?TupleMessage = null;
         if (tuple_type == 'O' or tuple_type == 'K') {
+            if (pos + 2 > data.len) return DecoderError.InvalidMessage;
             const column_count = readU16(data[pos .. pos + 2]);
             pos += 2;
 
@@ -377,6 +378,7 @@ pub const PgOutputDecoder = struct {
             return DecoderError.InvalidMessage;
         }
 
+        if (pos + 2 > data.len) return DecoderError.InvalidMessage;
         const new_column_count = readU16(data[pos .. pos + 2]);
         pos += 2;
 
@@ -695,6 +697,18 @@ test "PgOutputDecoder: decode UPDATE message with old tuple" {
     // Check new tuple
     try testing.expectEqual(@as(usize, 1), msg.update.new_tuple.columns.len);
     try testing.expectEqualStrings("new_name", msg.update.new_tuple.columns[0].value.?);
+}
+
+test "PgOutputDecoder: UPDATE truncated before a column count" {
+    const allocator = testing.allocator;
+    var pg_decoder = PgOutputDecoder.init(allocator);
+
+    // 'U' + relation_id(4) + tuple flag, then nothing: the column_count read must
+    // not slice past the end. 'O' hits the old-tuple guard, 'N' the new-tuple one.
+    for ([_]u8{ 'O', 'N' }) |flag| {
+        const data = [_]u8{ 'U', 0, 0, 0, 1, flag };
+        try testing.expectError(DecoderError.InvalidMessage, pg_decoder.decode(allocator, &data));
+    }
 }
 
 test "PgOutputDecoder: decode DELETE message" {
