@@ -101,6 +101,10 @@ pub const Converter = struct {
 };
 
 fn tupleToRowData(allocator: std.mem.Allocator, tuple: anytype, rel_info: anytype) !RowData {
+    // A tuple with more columns than the relation would index past rel_info.columns:
+    // panic under ReleaseSafe, silent corruption under ReleaseFast.
+    if (tuple.columns.len != rel_info.columns.len) return error.ColumnCountMismatch;
+
     var builder = RowDataHelpers.createBuilder(allocator);
     errdefer {
         for (builder.items) |field| {
@@ -757,6 +761,36 @@ test "tupleToRowData: unchanged TOAST column becomes the placeholder" {
     try testing.expectEqualStrings("body", row_data[1].name);
     try testing.expect(row_data[1].value == .string);
     try testing.expectEqualStrings(constants.UNKNOWN_VALUE_PLACEHOLDER, row_data[1].value.string);
+}
+
+test "tupleToRowData: error when tuple arity differs from relation" {
+    const allocator = testing.allocator;
+
+    var registry = RelationRegistry.init(allocator);
+    defer registry.deinit();
+
+    var rel_msg = pg_output_decoder.RelationMessage{
+        .relation_id = 400,
+        .namespace = try allocator.dupe(u8, "public"),
+        .relation_name = try allocator.dupe(u8, "users"),
+        .replica_identity = 'd',
+        .columns = try allocator.alloc(pg_output_decoder.RelationMessageColumn, 2),
+    };
+    defer rel_msg.deinit(allocator);
+    rel_msg.columns[0] = .{ .flags = 1, .name = try allocator.dupe(u8, "id"), .data_type = 23, .type_modifier = -1 };
+    rel_msg.columns[1] = .{ .flags = 0, .name = try allocator.dupe(u8, "name"), .data_type = 25, .type_modifier = -1 };
+    try registry.register(rel_msg);
+
+    // One column against a two-column relation: indexing rel_info.columns[i]
+    // would run past the end without the arity check.
+    var tuple = pg_output_decoder.TupleMessage{
+        .columns = try allocator.alloc(pg_output_decoder.TupleData, 1),
+    };
+    defer tuple.deinit(allocator);
+    tuple.columns[0] = .{ .column_type = .text, .value = try allocator.dupe(u8, "42") };
+
+    const rel_info = try registry.get(400);
+    try testing.expectError(error.ColumnCountMismatch, tupleToRowData(allocator, tuple, rel_info));
 }
 
 test "convert INSERT: error when relation not found in registry" {
