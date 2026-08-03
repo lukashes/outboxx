@@ -55,7 +55,8 @@ services:
       KAFKA_TLS_CLIENT_AUTH: none
       # Auto-create topics for CDC
       KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
-      KAFKA_CFG_NUM_PARTITIONS: 3
+      # One partition so keyed messages stay in consumed order for E2E asserts.
+      KAFKA_CFG_NUM_PARTITIONS: 1
       KAFKA_CFG_DEFAULT_REPLICATION_FACTOR: 1
     networks:
       - outboxx-network
