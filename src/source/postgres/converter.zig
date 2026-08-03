@@ -89,8 +89,9 @@ pub const Converter = struct {
         return .{
             .source = try allocator.dupe(u8, "postgres"),
             // Fully-qualified name (schema.table); the downstream stream match is a
-            // plain string compare, so the schema is part of the identity here.
-            .resource = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ rel_info.namespace, rel_info.relation_name }),
+            // plain string compare, so the schema is part of the identity. concat is
+            // one allocation; allocPrint's growing writer would take several.
+            .resource = try std.mem.concat(allocator, u8, &[_][]const u8{ rel_info.namespace, ".", rel_info.relation_name }),
             // Commit time of the surrounding transaction in Unix seconds, shifted
             // from the Postgres epoch. 0 if no BEGIN was seen (protocol-impossible
             // for DML on a healthy stream).
