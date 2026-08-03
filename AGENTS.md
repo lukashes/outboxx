@@ -80,7 +80,7 @@ Keyed by the stream's routing key (default `id`); UPDATE emits only the new row.
 
 ```json
 {"op":"INSERT","data":{"id":1,"name":"Alice"},
- "meta":{"source":"postgres","resource":"users","schema":"public","timestamp":1700000000,"lsn":"1/3259A308"}}
+ "meta":{"source":"postgres","resource":"public.users","timestamp":1700000000,"lsn":"1/3259A308"}}
 ```
 
 `timestamp` is the transaction's commit time (Unix seconds), stable across

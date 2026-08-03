@@ -108,45 +108,44 @@ pub const PostgresValidator = struct {
         print("PostgreSQL validation: wal_level = '{s}' ✓\n", .{wal_level_str});
     }
 
-    pub fn checkTableExists(self: *Self, schema: []const u8, table_name: []const u8) ValidationError!void {
-        const query = std.fmt.allocPrintSentinel(self.allocator, "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = '{s}' AND table_name = '{s}');", .{ schema, table_name }, 0) catch return ValidationError.OutOfMemory;
+    pub fn checkTableExists(self: *Self, resource: []const u8) ValidationError!void {
+        // to_regclass resolves the whole `schema.table` name (a bare name via
+        // search_path) and returns NULL when it does not exist, so the resource
+        // stays one opaque string here.
+        const query = std.fmt.allocPrintSentinel(self.allocator, "SELECT to_regclass('{s}') IS NOT NULL;", .{resource}, 0) catch return ValidationError.OutOfMemory;
         defer self.allocator.free(query);
 
         const result = try self.executeQuery(query.ptr);
         defer c.PQclear(result);
 
-        const exists = c.PQgetvalue(result, 0, 0);
-        const exists_str = std.mem.span(exists);
-
-        if (!std.mem.eql(u8, exists_str, "t")) {
-            std.log.warn("PostgreSQL validation: Table '{s}.{s}' does not exist", .{ schema, table_name });
-            std.log.warn("Fix: Create the table or check the table name in configuration", .{});
+        const exists = std.mem.span(c.PQgetvalue(result, 0, 0));
+        if (!std.mem.eql(u8, exists, "t")) {
+            std.log.warn("PostgreSQL validation: Table '{s}' does not exist", .{resource});
+            std.log.warn("Fix: create the table or check the resource name in configuration", .{});
             return ValidationError.TableNotFound;
         }
 
-        print("PostgreSQL validation: Table '{s}.{s}' exists ✓\n", .{ schema, table_name });
+        print("PostgreSQL validation: Table '{s}' exists ✓\n", .{resource});
     }
 
     /// Check that a column exists on a table. Used for the stream's routing key:
     /// a typo (or the default `id` on a table without one) would otherwise route
     /// every change to the same partition, unnoticed.
-    pub fn checkColumnExists(self: *Self, schema: []const u8, table_name: []const u8, column_name: []const u8) ValidationError!void {
-        const query = std.fmt.allocPrintSentinel(self.allocator, "SELECT EXISTS (SELECT FROM information_schema.columns WHERE table_schema = '{s}' AND table_name = '{s}' AND column_name = '{s}');", .{ schema, table_name, column_name }, 0) catch return ValidationError.OutOfMemory;
+    pub fn checkColumnExists(self: *Self, resource: []const u8, column_name: []const u8) ValidationError!void {
+        const query = std.fmt.allocPrintSentinel(self.allocator, "SELECT EXISTS (SELECT FROM pg_attribute WHERE attrelid = to_regclass('{s}') AND attname = '{s}' AND attnum > 0 AND NOT attisdropped);", .{ resource, column_name }, 0) catch return ValidationError.OutOfMemory;
         defer self.allocator.free(query);
 
         const result = try self.executeQuery(query.ptr);
         defer c.PQclear(result);
 
-        const exists = c.PQgetvalue(result, 0, 0);
-        const exists_str = std.mem.span(exists);
-
-        if (!std.mem.eql(u8, exists_str, "t")) {
-            std.log.warn("PostgreSQL validation: Column '{s}' does not exist on table '{s}.{s}'", .{ column_name, schema, table_name });
+        const exists = std.mem.span(c.PQgetvalue(result, 0, 0));
+        if (!std.mem.eql(u8, exists, "t")) {
+            std.log.warn("PostgreSQL validation: Column '{s}' does not exist on table '{s}'", .{ column_name, resource });
             std.log.warn("Fix: set stream.sink.routing_key to an existing column", .{});
             return ValidationError.ColumnNotFound;
         }
 
-        print("PostgreSQL validation: Column '{s}.{s}.{s}' exists ✓\n", .{ schema, table_name, column_name });
+        print("PostgreSQL validation: Column '{s}.{s}' exists ✓\n", .{ resource, column_name });
     }
 
     /// Require REPLICA IDENTITY FULL on a table whose stream tracks DELETE, so the
@@ -154,8 +153,8 @@ pub const PostgresValidator = struct {
     /// drops the non-key columns from the DELETE old row, breaking the documented
     /// format. Call only for delete-tracking streams: FULL is irrelevant otherwise
     /// and only inflates UPDATE WAL.
-    pub fn checkReplicaIdentity(self: *Self, schema: []const u8, table_name: []const u8) ValidationError!void {
-        const query = try std.fmt.allocPrintSentinel(self.allocator, "SELECT c.relreplident FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = '{s}' AND c.relname = '{s}';", .{ schema, table_name }, 0);
+    pub fn checkReplicaIdentity(self: *Self, resource: []const u8) ValidationError!void {
+        const query = try std.fmt.allocPrintSentinel(self.allocator, "SELECT relreplident FROM pg_class WHERE oid = to_regclass('{s}');", .{resource}, 0);
         defer self.allocator.free(query);
 
         const result = try self.executeQuery(query.ptr);
@@ -164,19 +163,19 @@ pub const PostgresValidator = struct {
         // checkTableExists runs first, so an empty result only happens on a race
         // (the table was dropped between the two queries).
         if (c.PQntuples(result) == 0) {
-            std.log.warn("PostgreSQL validation: Table '{s}.{s}' not found while checking replica identity", .{ schema, table_name });
+            std.log.warn("PostgreSQL validation: Table '{s}' not found while checking replica identity", .{resource});
             return ValidationError.TableNotFound;
         }
 
         const identity = std.mem.span(c.PQgetvalue(result, 0, 0));
 
         if (identity.len == 0 or identity[0] != 'f') {
-            std.log.warn("PostgreSQL validation: Table '{s}.{s}' has REPLICA IDENTITY {s}, but this stream tracks DELETE and needs the full old row", .{ schema, table_name, replicaIdentityName(identity) });
-            std.log.warn("Fix: ALTER TABLE {s}.{s} REPLICA IDENTITY FULL", .{ schema, table_name });
+            std.log.warn("PostgreSQL validation: Table '{s}' has REPLICA IDENTITY {s}, but this stream tracks DELETE and needs the full old row", .{ resource, replicaIdentityName(identity) });
+            std.log.warn("Fix: ALTER TABLE {s} REPLICA IDENTITY FULL", .{resource});
             return ValidationError.InvalidReplicaIdentity;
         }
 
-        print("PostgreSQL validation: Table '{s}.{s}' REPLICA IDENTITY FULL ✓\n", .{ schema, table_name });
+        print("PostgreSQL validation: Table '{s}' REPLICA IDENTITY FULL ✓\n", .{resource});
     }
 };
 

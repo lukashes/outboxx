@@ -286,23 +286,25 @@ fn validatePostgres(allocator: std.mem.Allocator, cfg: Config, conninfo: []const
     try validator.checkWalLevel();
 
     for (cfg.streams) |stream| {
-        validator.checkTableExists("public", stream.source.resource) catch |err| {
-            printStatus("ERROR: Table validation failed for '{s}': {}\n", .{ stream.source.resource, err });
+        const resource = stream.source.resource;
+
+        validator.checkTableExists(resource) catch |err| {
+            printStatus("ERROR: Table validation failed for '{s}': {}\n", .{ resource, err });
             return err;
         };
 
         // A missing routing key column would silently collapse partitioning.
         const routing_key = stream.sink.routing_key;
-        validator.checkColumnExists("public", stream.source.resource, routing_key) catch |err| {
-            printStatus("ERROR: Routing key validation failed for '{s}' (column '{s}'): {}\n", .{ stream.source.resource, routing_key, err });
+        validator.checkColumnExists(resource, routing_key) catch |err| {
+            printStatus("ERROR: Routing key validation failed for '{s}' (column '{s}'): {}\n", .{ resource, routing_key, err });
             return err;
         };
 
         // Only a stream that tracks DELETE needs REPLICA IDENTITY FULL, so the
-        // deleted row carries all columns. Schema is fixed to "public" for now.
+        // deleted row carries all columns.
         if (stream.hasDeleteOperation()) {
-            validator.checkReplicaIdentity("public", stream.source.resource) catch |err| {
-                printStatus("ERROR: Replica identity validation failed for '{s}': {}\n", .{ stream.source.resource, err });
+            validator.checkReplicaIdentity(resource) catch |err| {
+                printStatus("ERROR: Replica identity validation failed for '{s}': {}\n", .{ resource, err });
                 return err;
             };
         }

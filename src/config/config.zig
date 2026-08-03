@@ -92,7 +92,10 @@ pub const SinkConfig = struct {
 };
 
 pub const StreamSource = struct {
-    resource: []const u8, // table/collection/index
+    // Fully-qualified resource name (Postgres: schema.table). A bare name is
+    // accepted and normalized to the public schema when the config is loaded, so
+    // everything downstream treats the resource as one opaque string.
+    resource: []const u8,
     operations: []const []const u8, // ["insert", "update", "delete"]
 };
 
@@ -147,17 +150,23 @@ pub const Config = struct {
     pub fn loadFromTomlFile(io: std.Io, allocator: std.mem.Allocator, file_path: []const u8) !toml.Parsed(Config) {
         var parser = toml.Parser(Config).init(allocator);
         defer parser.deinit();
-        return parser.parseFile(io, file_path) catch |err| {
+        var parsed = parser.parseFile(io, file_path) catch |err| {
             std.log.warn("Failed to parse config file '{s}': {}", .{ file_path, err });
             return err;
         };
+        errdefer parsed.deinit();
+        try normalizeResources(&parsed);
+        return parsed;
     }
 
     /// Parse a config string; caller owns and must deinit the returned result.
     pub fn loadFromTomlString(allocator: std.mem.Allocator, content: []const u8) !toml.Parsed(Config) {
         var parser = toml.Parser(Config).init(allocator);
         defer parser.deinit();
-        return parser.parseString(content);
+        var parsed = try parser.parseString(content);
+        errdefer parsed.deinit();
+        try normalizeResources(&parsed);
+        return parsed;
     }
 
     /// Read the Kafka SASL password from the environment; caller owns the result.
@@ -253,6 +262,22 @@ pub const Config = struct {
         }
     }
 
+    // A table reference, optionally schema-qualified as "schema.table". Each part
+    // is a Postgres identifier; more than one dot is rejected, since without
+    // quoted identifiers a dot can only separate schema from table.
+    fn validateResource(value: []const u8, field_name: []const u8) !void {
+        const dot = std.mem.indexOfScalar(u8, value, '.') orelse
+            return validatePostgresIdentifier(value, field_name);
+
+        if (std.mem.indexOfScalarPos(u8, value, dot + 1, '.') != null) {
+            std.log.warn("Invalid {s}: '{s}' has more than one '.'; expected \"schema.table\"", .{ field_name, value });
+            return error.InvalidIdentifierFormat;
+        }
+
+        try validatePostgresIdentifier(value[0..dot], field_name);
+        try validatePostgresIdentifier(value[dot + 1 ..], field_name);
+    }
+
     // Kafka topic charset: a-z, A-Z, 0-9, '.', '_', '-'.
     fn validateKafkaTopicName(value: []const u8, field_name: []const u8) !void {
         try validateStringLength(value, ValidationLimits.MAX_KAFKA_TOPIC_LEN, field_name);
@@ -307,7 +332,7 @@ pub const Config = struct {
         try validateStreamName(stream.name, "stream.name");
 
         // Source validation
-        try validatePostgresIdentifier(stream.source.resource, "stream.source.resource");
+        try validateResource(stream.source.resource, "stream.source.resource");
         try validateOperations(allocator, stream.source.operations);
 
         // Flow validation
@@ -417,6 +442,20 @@ pub const Config = struct {
         }
         try validateStreams(allocator, self.streams);
     }
+
+    // Part of the load contract: rewrite each bare stream resource to a
+    // fully-qualified `schema.table`, defaulting to the public schema, so the
+    // processor and the source-side validator treat the resource as one opaque
+    // name. Runs right after parsing; names are (re)allocated in the Parsed arena
+    // and live as long as the config.
+    fn normalizeResources(parsed: *toml.Parsed(Config)) !void {
+        const arena = parsed.arena.allocator();
+        for (@constCast(parsed.value.streams)) |*stream| {
+            if (std.mem.indexOfScalar(u8, stream.source.resource, '.') == null) {
+                stream.source.resource = try std.fmt.allocPrint(arena, "public.{s}", .{stream.source.resource});
+            }
+        }
+    }
 };
 
 const testing = std.testing;
@@ -513,6 +552,49 @@ test "Stream.hasDeleteOperation reflects the configured operations" {
     var with_delete = base;
     with_delete.source.operations = &.{ "insert", "delete" };
     try testing.expect(with_delete.hasDeleteOperation());
+}
+
+test "load normalizes a bare resource to the public schema" {
+    var parsed = try Config.loadFromTomlString(testing.allocator, valid_config_toml);
+    defer parsed.deinit();
+    try testing.expectEqualStrings("public.users", parsed.value.streams[0].source.resource);
+}
+
+test "load leaves a schema-qualified resource unchanged" {
+    const toml_content =
+        \\[metadata]
+        \\version = "v0"
+        \\
+        \\[source]
+        \\type = "postgres"
+        \\
+        \\[source.postgres]
+        \\connection_env = "PG_URL"
+        \\slot_name = "slot"
+        \\publication_name = "pub"
+        \\
+        \\[sink]
+        \\type = "kafka"
+        \\
+        \\[sink.kafka]
+        \\brokers = ["kafka1:9092"]
+        \\
+        \\[[streams]]
+        \\name = "app-users"
+        \\
+        \\[streams.source]
+        \\resource = "app.users"
+        \\operations = ["insert"]
+        \\
+        \\[streams.flow]
+        \\format = "json"
+        \\
+        \\[streams.sink]
+        \\destination = "outboxx.app_users"
+    ;
+    var parsed = try Config.loadFromTomlString(testing.allocator, toml_content);
+    defer parsed.deinit();
+    try testing.expectEqualStrings("app.users", parsed.value.streams[0].source.resource);
 }
 
 test "supported adapter types are implemented" {
@@ -671,7 +753,7 @@ test "parse stream with inline comments and optional routing_key" {
     try testing.expect(cfg.streams.len == 1);
     const stream = cfg.streams[0];
     try testing.expectEqualStrings("users-stream", stream.name);
-    try testing.expectEqualStrings("users", stream.source.resource);
+    try testing.expectEqualStrings("public.users", stream.source.resource);
     try testing.expect(stream.source.operations.len == 2);
     try testing.expectEqualStrings("insert", stream.source.operations[0]);
     try testing.expectEqualStrings("update", stream.source.operations[1]);
@@ -777,7 +859,7 @@ test "parse multiple streams" {
 
     const stream1 = cfg.streams[0];
     try testing.expectEqualStrings("users-stream", stream1.name);
-    try testing.expectEqualStrings("users", stream1.source.resource);
+    try testing.expectEqualStrings("public.users", stream1.source.resource);
     try testing.expect(stream1.source.operations.len == 2);
     try testing.expectEqualStrings("json", stream1.flow.format);
     try testing.expectEqualStrings("outboxx.users", stream1.sink.destination);
@@ -785,7 +867,7 @@ test "parse multiple streams" {
 
     const stream2 = cfg.streams[1];
     try testing.expectEqualStrings("orders-stream", stream2.name);
-    try testing.expectEqualStrings("orders", stream2.source.resource);
+    try testing.expectEqualStrings("public.orders", stream2.source.resource);
     try testing.expect(stream2.source.operations.len == 3);
     try testing.expectEqualStrings("delete", stream2.source.operations[2]);
     try testing.expectEqualStrings("outboxx.orders", stream2.sink.destination);
@@ -832,6 +914,39 @@ test "Config validation - unsupported version" {
     var cfg = createTestDefault();
     cfg.metadata.version = "1";
     try testing.expectError(error.UnsupportedConfigVersion, cfg.validate(testing.allocator));
+}
+
+test "Config validation - schema-qualified resource passes" {
+    var cfg = createTestDefault();
+    cfg.streams = &.{.{
+        .name = "test_stream",
+        .source = .{ .resource = "app.users", .operations = &.{"insert"} },
+        .flow = .{ .format = "json" },
+        .sink = .{ .destination = "test_topic", .routing_key = "id" },
+    }};
+    try cfg.validate(testing.allocator);
+}
+
+test "Config validation - resource with more than one dot fails" {
+    var cfg = createTestDefault();
+    cfg.streams = &.{.{
+        .name = "test_stream",
+        .source = .{ .resource = "db.app.users", .operations = &.{"insert"} },
+        .flow = .{ .format = "json" },
+        .sink = .{ .destination = "test_topic", .routing_key = "id" },
+    }};
+    try testing.expectError(error.InvalidIdentifierFormat, cfg.validate(testing.allocator));
+}
+
+test "Config validation - resource with empty schema fails" {
+    var cfg = createTestDefault();
+    cfg.streams = &.{.{
+        .name = "test_stream",
+        .source = .{ .resource = ".users", .operations = &.{"insert"} },
+        .flow = .{ .format = "json" },
+        .sink = .{ .destination = "test_topic", .routing_key = "id" },
+    }};
+    try testing.expectError(error.EmptyString, cfg.validate(testing.allocator));
 }
 
 test "Config validation - unsupported format should fail" {

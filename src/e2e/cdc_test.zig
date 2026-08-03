@@ -60,6 +60,7 @@ test "E2E: INSERT operation - full pipeline verification" {
     // Create stream configuration
     const stream_config = try test_helpers.createTestStreamConfig(allocator, table_name, topic_name);
     defer allocator.free(stream_config.name);
+    defer allocator.free(stream_config.source.resource);
 
     // Create source
     // NOTE: source will be deinit'd by processor.deinit() - no need for defer here
@@ -136,8 +137,7 @@ test "E2E: INSERT operation - full pipeline verification" {
         try test_helpers.assertJsonField(msg, "op", "INSERT");
 
         // Verify metadata
-        try test_helpers.assertJsonField(msg, "meta.resource", table_name);
-        try test_helpers.assertJsonField(msg, "meta.schema", "public");
+        try test_helpers.assertJsonField(msg, "meta.resource", stream_config.source.resource);
         try test_helpers.assertJsonField(msg, "meta.source", "postgres");
         try test_helpers.assertJsonHasField(msg, "meta.timestamp");
 
@@ -200,6 +200,7 @@ test "E2E: UPDATE operation - full pipeline verification" {
     // Create stream configuration
     const stream_config = try test_helpers.createTestStreamConfig(allocator, table_name, topic_name);
     defer allocator.free(stream_config.name);
+    defer allocator.free(stream_config.source.resource);
 
     // Create source
     // NOTE: source will be deinit'd by processor.deinit() - no need for defer here
@@ -278,7 +279,7 @@ test "E2E: UPDATE operation - full pipeline verification" {
     try test_helpers.assertJsonField(messages[0], "data.name", "Alice");
 
     try test_helpers.assertJsonField(messages[1], "op", "UPDATE");
-    try test_helpers.assertJsonField(messages[1], "meta.resource", table_name);
+    try test_helpers.assertJsonField(messages[1], "meta.resource", stream_config.source.resource);
     try test_helpers.assertJsonField(messages[1], "data.name", "Alice Updated");
 
     const data_obj_1 = messages[1].value.object.get("data").?.object;
@@ -333,6 +334,7 @@ test "E2E: DELETE operation - full pipeline verification" {
     // Create stream configuration
     const stream_config = try test_helpers.createTestStreamConfig(allocator, table_name, topic_name);
     defer allocator.free(stream_config.name);
+    defer allocator.free(stream_config.source.resource);
 
     // Create source
     // NOTE: source will be deinit'd by processor.deinit() - no need for defer here
@@ -420,12 +422,10 @@ test "E2E: DELETE operation - full pipeline verification" {
 
         if (std.mem.eql(u8, op, "INSERT")) {
             insert_count += 1;
-            try test_helpers.assertJsonField(msg, "meta.resource", table_name);
-            try test_helpers.assertJsonField(msg, "meta.schema", "public");
+            try test_helpers.assertJsonField(msg, "meta.resource", stream_config.source.resource);
         } else if (std.mem.eql(u8, op, "DELETE")) {
             delete_count += 1;
-            try test_helpers.assertJsonField(msg, "meta.resource", table_name);
-            try test_helpers.assertJsonField(msg, "meta.schema", "public");
+            try test_helpers.assertJsonField(msg, "meta.resource", stream_config.source.resource);
         }
     }
 
