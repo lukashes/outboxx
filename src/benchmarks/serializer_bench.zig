@@ -24,7 +24,6 @@ fn buildChangeEvent(allocator: std.mem.Allocator) !ChangeEvent {
     const metadata = Metadata{
         .source = try allocator.dupe(u8, "postgres"),
         .resource = try allocator.dupe(u8, "users"),
-        .schema = try allocator.dupe(u8, "public"),
         .timestamp = 1234567890,
         .lsn = null,
     };

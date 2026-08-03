@@ -105,8 +105,7 @@ pub const DataSection = union(enum) {
 /// Source metadata for a change event.
 pub const Metadata = struct {
     source: []const u8, // "postgres"
-    resource: []const u8, // table/collection name
-    schema: []const u8, // database schema
+    resource: []const u8, // fully-qualified resource name (Postgres: schema.table)
     timestamp: i64, // commit time of the change's transaction (Unix seconds)
     lsn: ?[]const u8, // WAL position of the record (source-specific; dedup key)
 };
@@ -143,7 +142,6 @@ pub const ChangeEvent = struct {
         // Free metadata strings (owned by ChangeEvent)
         allocator.free(self.meta.source);
         allocator.free(self.meta.resource);
-        allocator.free(self.meta.schema);
         if (self.meta.lsn) |lsn| allocator.free(lsn);
 
         // Free data rows
@@ -225,7 +223,6 @@ test "ChangeEvent creation and memory management" {
     const metadata = Metadata{
         .source = try allocator.dupe(u8, "postgres"),
         .resource = try allocator.dupe(u8, "users"),
-        .schema = try allocator.dupe(u8, "public"),
         .timestamp = 1234567890,
         .lsn = null,
     };
@@ -288,7 +285,6 @@ test "UPDATE event with old and new data" {
     const metadata = Metadata{
         .source = try allocator.dupe(u8, "postgres"),
         .resource = try allocator.dupe(u8, "users"),
-        .schema = try allocator.dupe(u8, "public"),
         .timestamp = 1234567890,
         .lsn = null,
     };
@@ -338,7 +334,6 @@ test "getPartitionKeyValue extracts field values" {
         const metadata = Metadata{
             .source = try allocator.dupe(u8, "postgres"),
             .resource = try allocator.dupe(u8, "users"),
-            .schema = try allocator.dupe(u8, "public"),
             .timestamp = 1234567890,
             .lsn = null,
         };
@@ -381,7 +376,6 @@ test "getPartitionKeyValue extracts field values" {
         const metadata = Metadata{
             .source = try allocator.dupe(u8, "postgres"),
             .resource = try allocator.dupe(u8, "users"),
-            .schema = try allocator.dupe(u8, "public"),
             .timestamp = 1234567890,
             .lsn = null,
         };
@@ -422,7 +416,6 @@ test "partitionKeyInt formats i64 boundaries and returns null for other types" {
     const metadata = Metadata{
         .source = try allocator.dupe(u8, "postgres"),
         .resource = try allocator.dupe(u8, "users"),
-        .schema = try allocator.dupe(u8, "public"),
         .timestamp = 1234567890,
         .lsn = null,
     };

@@ -52,7 +52,7 @@ port = 9464          # conventional OpenTelemetry Prometheus exporter port
 name = "users-stream"
 
 [streams.source]
-resource = "users"                           # table name (public schema)
+resource = "users"                           # table; use "schema.table" for a non-public schema (default: public)
 operations = ["insert", "update", "delete"]  # subset of insert | update | delete
 
 [streams.flow]

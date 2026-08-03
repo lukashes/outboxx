@@ -31,12 +31,10 @@ fn tallyEvent(list: *std.ArrayList(EventCount), allocator: std.mem.Allocator, st
 pub fn matchStreams(allocator: std.mem.Allocator, streams: []const Stream, change: ChangeEvent) !std.ArrayList(Stream) {
     var matched = std.ArrayList(Stream).empty;
 
-    // Streams target the public schema (startup validation enforces it), so a
-    // change from any other schema must not match even when the table name
-    // collides. Routing tables from other schemas is #50.
-    if (!std.mem.eql(u8, change.meta.schema, "public")) return matched;
-
     for (streams) |stream| {
+        // Resource is a fully-qualified name on both sides (config normalized to
+        // schema.table, the source tags each change likewise), so identity is a
+        // plain string compare and stays source-agnostic.
         if (!std.mem.eql(u8, stream.source.resource, change.meta.resource)) {
             continue;
         }

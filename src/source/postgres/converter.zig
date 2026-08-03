@@ -88,8 +88,9 @@ pub const Converter = struct {
     fn buildMetadata(self: *Self, allocator: std.mem.Allocator, rel_info: anytype, lsn: u64) !Metadata {
         return .{
             .source = try allocator.dupe(u8, "postgres"),
-            .resource = try allocator.dupe(u8, rel_info.relation_name),
-            .schema = try allocator.dupe(u8, rel_info.namespace),
+            // Fully-qualified name (schema.table); the downstream stream match is a
+            // plain string compare, so the schema is part of the identity here.
+            .resource = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ rel_info.namespace, rel_info.relation_name }),
             // Commit time of the surrounding transaction in Unix seconds, shifted
             // from the Postgres epoch. 0 if no BEGIN was seen (protocol-impossible
             // for DML on a healthy stream).
@@ -353,8 +354,7 @@ test "convert INSERT: basic message to ChangeEvent" {
 
     // Verify: metadata
     try testing.expectEqualStrings("postgres", event.meta.source);
-    try testing.expectEqualStrings("users", event.meta.resource);
-    try testing.expectEqualStrings("public", event.meta.schema);
+    try testing.expectEqualStrings("public.users", event.meta.resource);
     try testing.expectEqual(@as(i64, 1700000000), event.meta.timestamp);
     try testing.expectEqualStrings("1/3259A308", event.meta.lsn.?);
 
@@ -443,8 +443,7 @@ test "convert UPDATE: message with old and new tuples" {
 
     // Verify: metadata (no BEGIN seen in this test -> timestamp stays 0)
     try testing.expectEqualStrings("postgres", event.meta.source);
-    try testing.expectEqualStrings("users", event.meta.resource);
-    try testing.expectEqualStrings("public", event.meta.schema);
+    try testing.expectEqualStrings("public.users", event.meta.resource);
     try testing.expectEqual(@as(i64, 0), event.meta.timestamp);
     try testing.expectEqualStrings("0/0", event.meta.lsn.?);
 
@@ -524,8 +523,7 @@ test "convert DELETE: message to ChangeEvent" {
 
     // Verify: metadata
     try testing.expectEqualStrings("postgres", event.meta.source);
-    try testing.expectEqualStrings("users", event.meta.resource);
-    try testing.expectEqualStrings("public", event.meta.schema);
+    try testing.expectEqualStrings("public.users", event.meta.resource);
 
     // Verify: delete_data present
     try testing.expect(event.data == .delete);

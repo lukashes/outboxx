@@ -92,9 +92,35 @@ pub const SinkConfig = struct {
 };
 
 pub const StreamSource = struct {
-    resource: []const u8, // table/collection/index
+    // Fully-qualified resource: table/collection/index as "schema.table". A bare
+    // name is accepted and normalized to the public schema by qualifyResources.
+    resource: []const u8,
     operations: []const []const u8, // ["insert", "update", "delete"]
+
+    /// A resource split into namespace and object name. For Postgres this is
+    /// schema + table.
+    pub const Qualified = struct {
+        schema: []const u8,
+        name: []const u8,
+    };
+
+    /// Split `resource` on its '.' into schema and table, for the source-side
+    /// validator that queries the two separately. qualifyResources runs first, so
+    /// a dot is present; a bare name still falls back to the public schema.
+    pub fn qualifiedResource(self: StreamSource) Qualified {
+        if (std.mem.indexOfScalar(u8, self.resource, '.')) |dot| {
+            return .{ .schema = self.resource[0..dot], .name = self.resource[dot + 1 ..] };
+        }
+        return .{ .schema = "public", .name = self.resource };
+    }
 };
+
+/// Fully-qualify a resource name as `schema.table`, defaulting a bare name (no
+/// '.') to the `public` schema. Caller owns the result.
+pub fn qualifyResourceName(allocator: std.mem.Allocator, resource: []const u8) ![]const u8 {
+    if (std.mem.indexOfScalar(u8, resource, '.') != null) return allocator.dupe(u8, resource);
+    return std.fmt.allocPrint(allocator, "public.{s}", .{resource});
+}
 
 pub const StreamFlow = struct {
     format: []const u8,
@@ -253,6 +279,22 @@ pub const Config = struct {
         }
     }
 
+    // A table reference, optionally schema-qualified as "schema.table". Each part
+    // is a Postgres identifier; more than one dot is rejected, since without
+    // quoted identifiers a dot can only separate schema from table.
+    fn validateResource(value: []const u8, field_name: []const u8) !void {
+        const dot = std.mem.indexOfScalar(u8, value, '.') orelse
+            return validatePostgresIdentifier(value, field_name);
+
+        if (std.mem.indexOfScalarPos(u8, value, dot + 1, '.') != null) {
+            std.log.warn("Invalid {s}: '{s}' has more than one '.'; expected \"schema.table\"", .{ field_name, value });
+            return error.InvalidIdentifierFormat;
+        }
+
+        try validatePostgresIdentifier(value[0..dot], field_name);
+        try validatePostgresIdentifier(value[dot + 1 ..], field_name);
+    }
+
     // Kafka topic charset: a-z, A-Z, 0-9, '.', '_', '-'.
     fn validateKafkaTopicName(value: []const u8, field_name: []const u8) !void {
         try validateStringLength(value, ValidationLimits.MAX_KAFKA_TOPIC_LEN, field_name);
@@ -307,7 +349,7 @@ pub const Config = struct {
         try validateStreamName(stream.name, "stream.name");
 
         // Source validation
-        try validatePostgresIdentifier(stream.source.resource, "stream.source.resource");
+        try validateResource(stream.source.resource, "stream.source.resource");
         try validateOperations(allocator, stream.source.operations);
 
         // Flow validation
@@ -417,6 +459,19 @@ pub const Config = struct {
         }
         try validateStreams(allocator, self.streams);
     }
+
+    /// Rewrite each stream's `resource` into its fully-qualified `schema.table`
+    /// form (a bare name defaults to the public schema), so the processor matches
+    /// it against the source's qualified resource with a plain compare. Call once
+    /// after validate(). Mutates the stream slice in place, so it must be the
+    /// mutable arena memory from the TOML parser; pass that arena's allocator
+    /// (`parsed.arena.allocator()`) so the rewritten names share the config's
+    /// lifetime.
+    pub fn qualifyResources(self: Config, allocator: std.mem.Allocator) !void {
+        for (@constCast(self.streams)) |*stream| {
+            stream.source.resource = try qualifyResourceName(allocator, stream.source.resource);
+        }
+    }
 };
 
 const testing = std.testing;
@@ -513,6 +568,36 @@ test "Stream.hasDeleteOperation reflects the configured operations" {
     var with_delete = base;
     with_delete.source.operations = &.{ "insert", "delete" };
     try testing.expect(with_delete.hasDeleteOperation());
+}
+
+test "qualifiedResource splits schema.table and defaults to public" {
+    const bare: StreamSource = .{ .resource = "users", .operations = &.{} };
+    const q1 = bare.qualifiedResource();
+    try testing.expectEqualStrings("public", q1.schema);
+    try testing.expectEqualStrings("users", q1.name);
+
+    const qualified: StreamSource = .{ .resource = "app.users", .operations = &.{} };
+    const q2 = qualified.qualifiedResource();
+    try testing.expectEqualStrings("app", q2.schema);
+    try testing.expectEqualStrings("users", q2.name);
+}
+
+test "qualifyResourceName defaults a bare name to public and keeps a qualified one" {
+    const bare = try qualifyResourceName(testing.allocator, "users");
+    defer testing.allocator.free(bare);
+    try testing.expectEqualStrings("public.users", bare);
+
+    const qualified = try qualifyResourceName(testing.allocator, "app.users");
+    defer testing.allocator.free(qualified);
+    try testing.expectEqualStrings("app.users", qualified);
+}
+
+test "qualifyResources rewrites bare stream resources in place" {
+    var parsed = try Config.loadFromTomlString(testing.allocator, valid_config_toml);
+    defer parsed.deinit();
+
+    try parsed.value.qualifyResources(parsed.arena.allocator());
+    try testing.expectEqualStrings("public.users", parsed.value.streams[0].source.resource);
 }
 
 test "supported adapter types are implemented" {
@@ -832,6 +917,39 @@ test "Config validation - unsupported version" {
     var cfg = createTestDefault();
     cfg.metadata.version = "1";
     try testing.expectError(error.UnsupportedConfigVersion, cfg.validate(testing.allocator));
+}
+
+test "Config validation - schema-qualified resource passes" {
+    var cfg = createTestDefault();
+    cfg.streams = &.{.{
+        .name = "test_stream",
+        .source = .{ .resource = "app.users", .operations = &.{"insert"} },
+        .flow = .{ .format = "json" },
+        .sink = .{ .destination = "test_topic", .routing_key = "id" },
+    }};
+    try cfg.validate(testing.allocator);
+}
+
+test "Config validation - resource with more than one dot fails" {
+    var cfg = createTestDefault();
+    cfg.streams = &.{.{
+        .name = "test_stream",
+        .source = .{ .resource = "db.app.users", .operations = &.{"insert"} },
+        .flow = .{ .format = "json" },
+        .sink = .{ .destination = "test_topic", .routing_key = "id" },
+    }};
+    try testing.expectError(error.InvalidIdentifierFormat, cfg.validate(testing.allocator));
+}
+
+test "Config validation - resource with empty schema fails" {
+    var cfg = createTestDefault();
+    cfg.streams = &.{.{
+        .name = "test_stream",
+        .source = .{ .resource = ".users", .operations = &.{"insert"} },
+        .flow = .{ .format = "json" },
+        .sink = .{ .destination = "test_topic", .routing_key = "id" },
+    }};
+    try testing.expectError(error.EmptyString, cfg.validate(testing.allocator));
 }
 
 test "Config validation - unsupported format should fail" {

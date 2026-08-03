@@ -82,29 +82,23 @@ pub fn createTestTable(conn: *c.PGconn, allocator: std.mem.Allocator, table_name
     _ = c.PQexec(conn, replica_sql_z.ptr);
 }
 
-/// Create test stream configuration
+/// Create test stream configuration. `table_name` may be bare or schema-qualified;
+/// the resource is normalized the same way the config loader does, so it matches
+/// the source's qualified `meta.resource`. Caller frees `name` and `source.resource`.
 pub fn createTestStreamConfig(allocator: std.mem.Allocator, table_name: []const u8, topic_name: []const u8) !Stream {
-    const source = StreamSource{
-        .resource = table_name,
-        .operations = &[_][]const u8{ "insert", "update", "delete" },
-    };
-
-    const flow = StreamFlow{
-        .format = "json",
-    };
-
-    const sink = StreamSink{
-        .destination = topic_name,
-        .routing_key = "id",
-    };
+    const resource = try config_module.qualifyResourceName(allocator, table_name);
+    errdefer allocator.free(resource);
 
     const name = try allocator.dupe(u8, table_name);
 
     return Stream{
         .name = name,
-        .source = source,
-        .flow = flow,
-        .sink = sink,
+        .source = StreamSource{
+            .resource = resource,
+            .operations = &[_][]const u8{ "insert", "update", "delete" },
+        },
+        .flow = StreamFlow{ .format = "json" },
+        .sink = StreamSink{ .destination = topic_name, .routing_key = "id" },
     };
 }
 

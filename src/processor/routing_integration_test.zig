@@ -38,7 +38,7 @@ fn execSQL(conn: *c.PGconn, sql: [:0]const u8) !void {
     }
 }
 
-test "matchStreams: a change from another schema is not routed to a public stream" {
+test "matchStreams: each change is routed to the stream matching its schema" {
     const allocator = testing.allocator;
 
     var prng = std.Random.DefaultPrng.init(@intCast(test_helpers.nowMicros(std.testing.io)));
@@ -72,9 +72,9 @@ test "matchStreams: a change from another schema is not routed to a public strea
         execSQL(setup_conn, drop_public) catch {};
     }
 
-    // public.<table>: what the stream targets. A same-named table in another
-    // schema is also published, so its change reaches the decoder and must be
-    // dropped by matchStreams, not routed as if it were public.<table>.
+    // A same-named table exists in two schemas, both published. Their changes
+    // reach the decoder tagged with their real schema, so matchStreams must send
+    // each to the stream targeting that schema, not collapse them by table name.
     const create_public = try test_helpers.formatSqlZ(allocator, "CREATE TABLE {s} (id SERIAL PRIMARY KEY, name TEXT)", .{table_name});
     defer allocator.free(create_public);
     try execSQL(setup_conn, create_public);
@@ -121,28 +121,40 @@ test "matchStreams: a change from another schema is not routed to a public strea
         mut_batch.deinit();
     }
 
-    const stream = try test_helpers.createTestStreamConfig(allocator, table_name, "unused_topic");
-    defer allocator.free(stream.name);
-    const streams = [_]Stream{stream};
+    // One stream per schema: the public one uses a bare resource (defaults to
+    // public), the other qualifies it as "schema.table".
+    const stream_public = try test_helpers.createTestStreamConfig(allocator, table_name, "unused_public");
+    defer allocator.free(stream_public.name);
+    defer allocator.free(stream_public.source.resource);
 
-    // Both inserts arrive tagged with their real schema; only the public one
-    // matches the stream, the other-schema change matches nothing.
+    const other_resource = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ other_schema, table_name });
+    defer allocator.free(other_resource);
+    const stream_other = try test_helpers.createTestStreamConfig(allocator, other_resource, "unused_other");
+    defer allocator.free(stream_other.name);
+    defer allocator.free(stream_other.source.resource);
+
+    const streams = [_]Stream{ stream_public, stream_other };
+
+    // Each insert matches exactly the stream whose fully-qualified resource equals
+    // the change's, so the public row lands on the public stream and the
+    // other-schema row on the other stream, despite the shared table name.
     var public_matched: usize = 0;
-    var other_dropped: usize = 0;
+    var other_matched: usize = 0;
     for (batch.changes) |change| {
         var matched = try matchStreams(allocator, &streams, change);
         defer matched.deinit(allocator);
 
-        if (std.mem.eql(u8, change.meta.schema, "public")) {
-            try testing.expectEqual(@as(usize, 1), matched.items.len);
+        try testing.expectEqual(@as(usize, 1), matched.items.len);
+        try testing.expectEqualStrings(change.meta.resource, matched.items[0].source.resource);
+
+        if (std.mem.eql(u8, change.meta.resource, stream_public.source.resource)) {
             public_matched += 1;
         } else {
-            try testing.expectEqualStrings(other_schema, change.meta.schema);
-            try testing.expectEqual(@as(usize, 0), matched.items.len);
-            other_dropped += 1;
+            try testing.expectEqualStrings(stream_other.source.resource, change.meta.resource);
+            other_matched += 1;
         }
     }
 
     try testing.expectEqual(@as(usize, 1), public_matched);
-    try testing.expectEqual(@as(usize, 1), other_dropped);
+    try testing.expectEqual(@as(usize, 1), other_matched);
 }

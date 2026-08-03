@@ -4,6 +4,17 @@ All notable changes to Outboxx are documented here.
 
 ## Unreleased
 
+### Added
+
+- Streams can target tables in any schema. Set `resource = "schema.table"` in a
+  stream's source; a bare name still defaults to the `public` schema.
+
+### Changed
+
+- `meta.resource` is the fully-qualified name (`public.users`, was `users`) and
+  `meta.schema` is removed. A consumer that needs the schema splits
+  `meta.resource` on its first `.`.
+
 ## 0.3.0 - 2026-07-18
 
 First GA release: the at-least-once guarantee is now enforced end to end and

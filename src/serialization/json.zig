@@ -32,8 +32,6 @@ pub const JsonSerializer = struct {
         try encodeString(event.meta.source, writer);
         try writer.writeAll(",\"resource\":");
         try encodeString(event.meta.resource, writer);
-        try writer.writeAll(",\"schema\":");
-        try encodeString(event.meta.schema, writer);
         try writer.writeAll(",\"timestamp\":");
         try writer.print("{d}", .{event.meta.timestamp});
 
@@ -149,7 +147,6 @@ test "JsonSerializer serialize INSERT event" {
     const metadata = Metadata{
         .source = try allocator.dupe(u8, "postgres"),
         .resource = try allocator.dupe(u8, "users"),
-        .schema = try allocator.dupe(u8, "public"),
         .timestamp = 1234567890,
         .lsn = null,
     };
@@ -194,7 +191,6 @@ test "JsonSerializer serialize UPDATE event" {
     const metadata = Metadata{
         .source = try allocator.dupe(u8, "postgres"),
         .resource = try allocator.dupe(u8, "users"),
-        .schema = try allocator.dupe(u8, "public"),
         .timestamp = 1234567890,
         .lsn = null,
     };
@@ -240,7 +236,6 @@ test "JsonSerializer rejects non-finite float" {
     const metadata = Metadata{
         .source = try allocator.dupe(u8, "postgres"),
         .resource = try allocator.dupe(u8, "users"),
-        .schema = try allocator.dupe(u8, "public"),
         .timestamp = 1234567890,
         .lsn = null,
     };
@@ -272,7 +267,6 @@ test "JsonSerializer validate JSON output is parseable" {
     const metadata = Metadata{
         .source = try allocator.dupe(u8, "postgres"),
         .resource = try allocator.dupe(u8, "users"),
-        .schema = try allocator.dupe(u8, "public"),
         .timestamp = 1234567890,
         .lsn = null,
     };
@@ -317,7 +311,6 @@ test "JsonSerializer string escaping" {
     const metadata = Metadata{
         .source = try allocator.dupe(u8, "postgres"),
         .resource = try allocator.dupe(u8, "users"),
-        .schema = try allocator.dupe(u8, "public"),
         .timestamp = 1234567890,
         .lsn = null,
     };
@@ -359,7 +352,6 @@ test "JsonSerializer escapes control characters and quoted field names" {
     const metadata = Metadata{
         .source = try allocator.dupe(u8, "postgres"),
         .resource = try allocator.dupe(u8, "users"),
-        .schema = try allocator.dupe(u8, "public"),
         .timestamp = 1234567890,
         .lsn = null,
     };

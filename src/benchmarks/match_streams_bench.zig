@@ -14,13 +14,12 @@ const CountingAllocator = bench_helpers.CountingAllocator;
 
 const iterations = 100000;
 
-// An INSERT on public.<resource>; matchStreams only reads op/schema/resource, so
-// data is left unset by ChangeEvent.init.
+// An INSERT on <resource>; matchStreams only reads op and resource, so data is
+// left unset by ChangeEvent.init.
 fn insertChange(resource: []const u8) ChangeEvent {
     return ChangeEvent.init(.INSERT, .{
         .source = "postgres",
         .resource = resource,
-        .schema = "public",
         .timestamp = 0,
         .lsn = null,
     });

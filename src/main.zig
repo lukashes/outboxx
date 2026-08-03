@@ -90,6 +90,9 @@ fn run(init: std.process.Init) !void {
     const config = parsed.value;
 
     try config.validate(allocator);
+    // Normalize bare resource names to schema.table so the processor matches them
+    // against the source's qualified names. Names live in the Parsed arena.
+    try config.qualifyResources(parsed.arena.allocator());
 
     const conninfo = try config.loadPostgresConninfo(allocator, init.environ_map);
     defer allocator.free(conninfo);
@@ -286,22 +289,24 @@ fn validatePostgres(allocator: std.mem.Allocator, cfg: Config, conninfo: []const
     try validator.checkWalLevel();
 
     for (cfg.streams) |stream| {
-        validator.checkTableExists("public", stream.source.resource) catch |err| {
+        const target = stream.source.qualifiedResource();
+
+        validator.checkTableExists(target.schema, target.name) catch |err| {
             printStatus("ERROR: Table validation failed for '{s}': {}\n", .{ stream.source.resource, err });
             return err;
         };
 
         // A missing routing key column would silently collapse partitioning.
         const routing_key = stream.sink.routing_key;
-        validator.checkColumnExists("public", stream.source.resource, routing_key) catch |err| {
+        validator.checkColumnExists(target.schema, target.name, routing_key) catch |err| {
             printStatus("ERROR: Routing key validation failed for '{s}' (column '{s}'): {}\n", .{ stream.source.resource, routing_key, err });
             return err;
         };
 
         // Only a stream that tracks DELETE needs REPLICA IDENTITY FULL, so the
-        // deleted row carries all columns. Schema is fixed to "public" for now.
+        // deleted row carries all columns.
         if (stream.hasDeleteOperation()) {
-            validator.checkReplicaIdentity("public", stream.source.resource) catch |err| {
+            validator.checkReplicaIdentity(target.schema, target.name) catch |err| {
                 printStatus("ERROR: Replica identity validation failed for '{s}': {}\n", .{ stream.source.resource, err });
                 return err;
             };
