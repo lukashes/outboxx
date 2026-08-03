@@ -51,7 +51,7 @@ test "PostgresValidator: table existence check requires PostgreSQL" {
     const conn_str = "host=localhost port=5432 dbname=outboxx_test user=postgres password=password";
 
     try validator.connect(conn_str);
-    try validator.checkTableExists("public", "users");
+    try validator.checkTableExists("public.users");
     std.log.info("PostgreSQL validation: Table existence check passed", .{});
 }
 
@@ -64,7 +64,7 @@ test "PostgresValidator: table not found should error" {
 
     try validator.connect(conn_str);
 
-    const result = validator.checkTableExists("public", "nonexistent_table_xyz");
+    const result = validator.checkTableExists("public.nonexistent_table_xyz");
     try testing.expectError(error.TableNotFound, result);
 }
 
@@ -77,7 +77,7 @@ test "PostgresValidator: invalid schema should error" {
 
     try validator.connect(conn_str);
 
-    const result = validator.checkTableExists("nonexistent_schema_xyz", "users");
+    const result = validator.checkTableExists("nonexistent_schema_xyz.users");
     try testing.expectError(error.TableNotFound, result);
 }
 
@@ -89,7 +89,7 @@ test "PostgresValidator: routing key column exists" {
     const conn_str = "host=localhost port=5432 dbname=outboxx_test user=postgres password=password";
 
     try validator.connect(conn_str);
-    try validator.checkColumnExists("public", "users", "id");
+    try validator.checkColumnExists("public.users", "id");
 }
 
 test "PostgresValidator: missing routing key column should error" {
@@ -101,7 +101,7 @@ test "PostgresValidator: missing routing key column should error" {
 
     try validator.connect(conn_str);
 
-    const result = validator.checkColumnExists("public", "users", "nonexistent_column_xyz");
+    const result = validator.checkColumnExists("public.users", "nonexistent_column_xyz");
     try testing.expectError(error.ColumnNotFound, result);
 }
 
@@ -114,7 +114,7 @@ test "PostgresValidator: replica identity FULL passes" {
 
     try validator.connect(conn_str);
     // users is set to REPLICA IDENTITY FULL by the dev init script.
-    try validator.checkReplicaIdentity("public", "users");
+    try validator.checkReplicaIdentity("public.users");
 }
 
 test "PostgresValidator: replica identity not FULL should error" {
@@ -127,7 +127,7 @@ test "PostgresValidator: replica identity not FULL should error" {
     try validator.connect(conn_str);
     // system_logs keeps the default replica identity (the init script never
     // alters it), so a delete-tracking stream on it must be rejected.
-    const result = validator.checkReplicaIdentity("public", "system_logs");
+    const result = validator.checkReplicaIdentity("public.system_logs");
     try testing.expectError(error.InvalidReplicaIdentity, result);
 }
 
@@ -161,13 +161,13 @@ test "PostgresValidator: methods fail when not connected" {
     const wal_result = validator.checkWalLevel();
     try testing.expectError(error.ConnectionFailed, wal_result);
 
-    const table_result = validator.checkTableExists("public", "users");
+    const table_result = validator.checkTableExists("public.users");
     try testing.expectError(error.ConnectionFailed, table_result);
 
-    const column_result = validator.checkColumnExists("public", "users", "id");
+    const column_result = validator.checkColumnExists("public.users", "id");
     try testing.expectError(error.ConnectionFailed, column_result);
 
-    const identity_result = validator.checkReplicaIdentity("public", "users");
+    const identity_result = validator.checkReplicaIdentity("public.users");
     try testing.expectError(error.ConnectionFailed, identity_result);
 }
 

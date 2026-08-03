@@ -86,7 +86,12 @@ pub fn createTestTable(conn: *c.PGconn, allocator: std.mem.Allocator, table_name
 /// the resource is normalized the same way the config loader does, so it matches
 /// the source's qualified `meta.resource`. Caller frees `name` and `source.resource`.
 pub fn createTestStreamConfig(allocator: std.mem.Allocator, table_name: []const u8, topic_name: []const u8) !Stream {
-    const resource = try config_module.qualifyResourceName(allocator, table_name);
+    // Mirror the config loader: a bare name resolves to the public schema, so the
+    // stream resource matches the source's qualified meta.resource.
+    const resource = if (std.mem.indexOfScalar(u8, table_name, '.') != null)
+        try allocator.dupe(u8, table_name)
+    else
+        try std.fmt.allocPrint(allocator, "public.{s}", .{table_name});
     errdefer allocator.free(resource);
 
     const name = try allocator.dupe(u8, table_name);
