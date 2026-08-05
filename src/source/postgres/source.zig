@@ -106,8 +106,11 @@ pub const PostgresSource = struct {
         self.converter.deinit();
     }
 
-    /// Connect to PostgreSQL and start replication
-    pub fn connect(self: *Self, connection_string: []const u8, start_lsn: []const u8) PostgresSourceError!void {
+    /// Connect to PostgreSQL and ensure the publication and replication slot
+    /// exist, without starting the stream. Split from startReplication so a
+    /// caller can run an initial snapshot between slot creation and streaming;
+    /// on a freshly created slot the start LSN is captured here (see startLsn).
+    pub fn connect(self: *Self, connection_string: []const u8) PostgresSourceError!void {
         self.protocol.connect(connection_string) catch |err| {
             std.log.warn("Failed to connect with replication protocol: {}", .{err});
             return PostgresSourceError.ConnectionFailed;
@@ -124,13 +127,22 @@ pub const PostgresSource = struct {
             std.log.warn("Failed to create replication slot: {}", .{err});
             return PostgresSourceError.ConnectionFailed;
         };
+    }
 
+    /// Start logical replication from start_lsn. Call after connect.
+    pub fn startReplication(self: *Self, start_lsn: []const u8) PostgresSourceError!void {
         self.protocol.startReplication(start_lsn) catch |err| {
             std.log.warn("Failed to start replication: {}", .{err});
             return PostgresSourceError.ReplicationFailed;
         };
 
         std.log.info("Streaming replication started from LSN: {s}", .{start_lsn});
+    }
+
+    /// The slot's start LSN when it was created in this run, or null if the slot
+    /// already existed (pass "0/0" to resume from its confirmed position).
+    pub fn startLsn(self: *const Self) ?[]const u8 {
+        return self.protocol.startLsn();
     }
 
     /// Receive batch of changes from PostgreSQL (default wait time from constants)

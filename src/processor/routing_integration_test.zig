@@ -113,7 +113,8 @@ test "matchStreams: each change is routed to the stream matching its schema" {
 
     var source = PostgresSource.init(allocator, slot_name, pub_name);
     defer source.deinit();
-    try source.connect(conn_str, start_lsn);
+    try source.connect(conn_str);
+    try source.startReplication(start_lsn);
 
     const batch = try source.receiveBatch(std.testing.io, allocator, 10);
     defer {

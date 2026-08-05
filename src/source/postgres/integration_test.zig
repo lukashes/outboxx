@@ -159,7 +159,8 @@ test "Streaming source: receive and convert INSERT messages to ChangeEvents" {
     var source = PostgresSource.init(allocator, slot_name, pub_name);
     defer source.deinit(); // Source defer - declared SECOND, executes FIRST (before cleanup)
 
-    try source.connect(conn_str, start_lsn);
+    try source.connect(conn_str);
+    try source.startReplication(start_lsn);
 
     std.log.info("Streaming source connected, receiving batch...", .{});
 
@@ -302,7 +303,8 @@ test "Streaming source: UPDATE operation E2E with old and new tuples" {
     var source = PostgresSource.init(allocator, slot_name, pub_name);
     defer source.deinit();
 
-    try source.connect(conn_str, start_lsn);
+    try source.connect(conn_str);
+    try source.startReplication(start_lsn);
 
     const batch = try source.receiveBatch(std.testing.io, allocator, 10);
     defer {
@@ -430,7 +432,8 @@ test "Streaming source: unchanged TOAST column becomes the placeholder" {
     var source = PostgresSource.init(allocator, slot_name, pub_name);
     defer source.deinit();
 
-    try source.connect(conn_str, start_lsn);
+    try source.connect(conn_str);
+    try source.startReplication(start_lsn);
 
     const batch = try source.receiveBatch(std.testing.io, allocator, 10);
     defer {
@@ -544,7 +547,8 @@ test "Streaming source: DELETE operation E2E" {
     var source = PostgresSource.init(allocator, slot_name, pub_name);
     defer source.deinit();
 
-    try source.connect(conn_str, start_lsn);
+    try source.connect(conn_str);
+    try source.startReplication(start_lsn);
 
     const batch = try source.receiveBatch(std.testing.io, allocator, 10);
     defer {
@@ -654,7 +658,8 @@ test "Streaming source: Multiple batches with limit parameter" {
     var source = PostgresSource.init(allocator, slot_name, pub_name);
     defer source.deinit();
 
-    try source.connect(conn_str, start_lsn);
+    try source.connect(conn_str);
+    try source.startReplication(start_lsn);
 
     var total_changes: usize = 0;
     var batch_count: usize = 0;
@@ -743,7 +748,8 @@ test "Streaming source: Timeout behavior with no data" {
     var source = PostgresSource.init(allocator, slot_name, pub_name);
     defer source.deinit();
 
-    try source.connect(conn_str, start_lsn);
+    try source.connect(conn_str);
+    try source.startReplication(start_lsn);
 
     std.log.info("Waiting for timeout with no data (1 second)...", .{});
 
@@ -767,4 +773,46 @@ test "Streaming source: Timeout behavior with no data" {
     try testing.expect(elapsed <= 1500);
 
     std.log.info("Timeout test passed: empty batch returned gracefully after timeout", .{});
+}
+
+test "Streaming source: created slot captures the consistent point and streams from it" {
+    const allocator = testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(@intCast(test_helpers.nowMicros(std.testing.io)));
+    const random_suffix = prng.random().int(u32);
+    const timestamp = test_helpers.nowSeconds(std.testing.io);
+
+    const table_name = try std.fmt.allocPrint(allocator, "cp_test_{d}_{d}", .{ timestamp, random_suffix });
+    defer allocator.free(table_name);
+    const slot_name = try std.fmt.allocPrint(allocator, "slot_cp_{d}_{d}", .{ timestamp, random_suffix });
+    defer allocator.free(slot_name);
+    const pub_name = try std.fmt.allocPrint(allocator, "pub_cp_{d}_{d}", .{ timestamp, random_suffix });
+    defer allocator.free(pub_name);
+
+    const setup_conn = try createSetupConnection(allocator);
+    defer c.PQfinish(setup_conn);
+    // Declared first, runs last (after source.deinit closes the connection).
+    defer cleanupTestEnvironment(allocator, setup_conn, table_name, slot_name, pub_name);
+
+    const create_table_sql = try test_helpers.formatSqlZ(allocator, "CREATE TABLE {s} (id SERIAL PRIMARY KEY, name TEXT)", .{table_name});
+    defer allocator.free(create_table_sql);
+    try execSQL(setup_conn, create_table_sql);
+
+    const conn_str = try getTestConnectionString(allocator);
+    defer allocator.free(conn_str);
+
+    var source = PostgresSource.init(allocator, slot_name, pub_name);
+    defer source.deinit();
+
+    // Create the publication and slot through the protocol (not pre-created via
+    // SQL), so CREATE_REPLICATION_SLOT runs and its start LSN is captured.
+    try source.connect(conn_str);
+
+    try testing.expect(source.startLsn() != null);
+    const start_lsn = source.startLsn().?;
+    // pg_lsn text form is "X/X".
+    try testing.expect(std.mem.indexOfScalar(u8, start_lsn, '/') != null);
+
+    // The captured point is a valid start LSN: streaming begins there.
+    try source.startReplication(start_lsn);
 }
