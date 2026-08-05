@@ -8,6 +8,10 @@ const PostgresSource = @import("../source/postgres/source.zig").PostgresSource;
 const matchStreams = @import("processor.zig").matchStreams;
 const Stream = @import("../config/config.zig").Stream;
 
+const domain = @import("../domain/change_event.zig");
+const ChangeEvent = domain.ChangeEvent;
+const ChangeOperation = domain.ChangeOperation;
+
 const c = @import("c"); // C bindings (build-system translate-c)
 
 // Source is imported through the postgres_source module (not a relative path) so
@@ -158,4 +162,50 @@ test "matchStreams: each change is routed to the stream matching its schema" {
 
     try testing.expectEqual(@as(usize, 1), public_matched);
     try testing.expectEqual(@as(usize, 1), other_matched);
+}
+
+// Pure routing check (no services): a READ event goes through the same
+// case-insensitive operation match as any change, so opting into the snapshot is
+// just listing "read" in a stream's operations.
+test "matchStreams: a READ event routes only to streams that opt into read" {
+    const allocator = testing.allocator;
+
+    var event = ChangeEvent.init(ChangeOperation.READ, .{
+        .source = "postgres",
+        .resource = "public.users",
+        .timestamp = 0,
+        .lsn = null,
+    });
+    // matchStreams reads only op and meta.resource; give it an empty row so the
+    // event is well-formed without allocating field values.
+    const empty_row = try allocator.alloc(domain.FieldData, 0);
+    defer allocator.free(empty_row);
+    event.setInsertData(empty_row);
+
+    const streams = [_]Stream{
+        .{
+            .name = "reader",
+            .source = .{ .resource = "public.users", .operations = &.{ "read", "insert" } },
+            .flow = .{ .format = "json" },
+            .sink = .{ .destination = "t_read", .routing_key = "id" },
+        },
+        .{
+            .name = "stream_only",
+            .source = .{ .resource = "public.users", .operations = &.{ "insert", "update" } },
+            .flow = .{ .format = "json" },
+            .sink = .{ .destination = "t_stream", .routing_key = "id" },
+        },
+        .{
+            .name = "other_table",
+            .source = .{ .resource = "public.orders", .operations = &.{"read"} },
+            .flow = .{ .format = "json" },
+            .sink = .{ .destination = "t_other", .routing_key = "id" },
+        },
+    };
+
+    var matched = try matchStreams(allocator, &streams, event);
+    defer matched.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 1), matched.items.len);
+    try testing.expectEqualStrings("reader", matched.items[0].name);
 }

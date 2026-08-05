@@ -163,7 +163,10 @@ const Oid = enum(u32) {
 //
 // Only the `.string` branch allocates (it dupes into caller-owned memory); the
 // numeric and boolean branches return by value.
-fn mapValue(allocator: std.mem.Allocator, oid: u32, text: []const u8) !FieldValue {
+//
+// Public so the snapshot reader can type its (oid, text) columns the same way, so a
+// READ row and a streamed change of the same column serialize identically.
+pub fn mapValue(allocator: std.mem.Allocator, oid: u32, text: []const u8) !FieldValue {
     switch (@as(Oid, @enumFromInt(oid))) {
         .int2, .int4, .int8 => {
             const n = std.fmt.parseInt(i64, text, 10) catch return FieldValueHelpers.text(allocator, text);

@@ -6,5 +6,6 @@ comptime {
     _ = @import("source/postgres/replication_protocol_test.zig");
     _ = @import("source/postgres/validator_test.zig");
     _ = @import("source/postgres/integration_test.zig");
+    _ = @import("source/postgres/snapshot_test.zig");
     _ = @import("processor/routing_integration_test.zig");
 }
