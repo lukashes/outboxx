@@ -17,21 +17,18 @@ pub const SnapshotError = error{
     OutOfMemory,
 };
 
-// One cursor is open at a time, so a fixed name is enough.
+// One cursor is open at a time (close before opening the next table), so a fixed
+// name is enough.
 const cursor_name = "outboxx_snapshot_cursor";
 
-/// Reads a table's existing rows as of an exported snapshot and emits them as READ
-/// events, so a consumer can bootstrap current state before the stream begins (#49).
-///
-/// Runs on a regular (non-replication) connection. The caller opens a cursor per
-/// resource and pulls batches with `fetch` until it returns null; the events live in
-/// the batch allocator, so a large table is bounded by fetching in chunks and freeing
-/// each batch.
+/// A snapshot session: a regular (non-replication) connection inside a REPEATABLE READ
+/// transaction bound to the slot's exported snapshot. It reads the database exactly as
+/// of the slot's start, so existing rows can be emitted as READ events before streaming
+/// begins (#49). Open one `TableSnapshot` per resource to pull its rows.
 pub const SnapshotReader = struct {
     allocator: std.mem.Allocator,
-    // Snapshot exported by CREATE_REPLICATION_SLOT. Reading under it sees the database
-    // exactly at the slot's start; the session that exported it must stay open until
-    // `connect` binds this transaction to it.
+    // Snapshot exported by CREATE_REPLICATION_SLOT. The session that exported it must
+    // stay open until `connect` binds this transaction to it.
     snapshot_name: []const u8,
     // The slot's consistent point (pg_lsn text form), stamped as meta.lsn on every READ
     // row so a snapshot row and the first stream change share the same dedup boundary.
@@ -39,9 +36,6 @@ pub const SnapshotReader = struct {
     // Wall-clock start of the snapshot, stamped as meta.timestamp on every READ row.
     timestamp: i64,
     connection: ?*c.PGconn = null,
-    // Resource of the open cursor; borrowed for the openCursor..closeCursor span and
-    // duped into each event's metadata.
-    resource: ?[]const u8 = null,
 
     const Self = @This();
 
@@ -56,12 +50,11 @@ pub const SnapshotReader = struct {
 
     pub fn deinit(self: *Self) void {
         if (self.connection) |conn| {
-            // Read-only snapshot transaction: nothing to persist, so end it best-effort.
-            _ = c.PQexec(conn, "COMMIT");
+            // The read-only snapshot transaction has nothing to persist; closing the
+            // connection rolls it back server-side, so there is no command to run here.
             c.PQfinish(conn);
             self.connection = null;
         }
-        self.resource = null;
     }
 
     /// Connect and enter the snapshot transaction. Must run while the session that
@@ -93,8 +86,9 @@ pub const SnapshotReader = struct {
         try self.execCommand(set_snapshot.ptr);
     }
 
-    /// Open a cursor over one resource. `resource` is borrowed until closeCursor.
-    pub fn openCursor(self: *Self, resource: []const u8) SnapshotError!void {
+    /// Open a cursor over one resource. The returned TableSnapshot borrows this reader
+    /// and `resource`; close it before opening the next.
+    pub fn open(self: *Self, resource: []const u8) SnapshotError!TableSnapshot {
         // resource is the operator-controlled, config-validated schema.table (the same
         // trust as validator.zig's to_regclass interpolation). DECLARE needs a real
         // identifier, not a string literal, so it goes straight into the FROM clause.
@@ -102,23 +96,40 @@ pub const SnapshotReader = struct {
         defer self.allocator.free(sql);
 
         try self.execCommand(sql.ptr);
-        self.resource = resource;
+        return .{ .reader = self, .resource = resource };
     }
 
-    pub fn closeCursor(self: *Self) SnapshotError!void {
-        try self.execCommand("CLOSE " ++ cursor_name);
-        self.resource = null;
-    }
-
-    /// Fetch up to `limit` more rows from the open cursor as READ events allocated in
-    /// `batch_allocator`; returns null once the cursor is exhausted. The caller owns the
-    /// batch and frees `batch_allocator` before the next fetch.
-    pub fn fetch(self: *Self, batch_allocator: std.mem.Allocator, limit: usize) SnapshotError!?[]ChangeEvent {
+    // Run a command (or a query whose rows we ignore), failing on a non-OK status.
+    fn execCommand(self: *Self, sql: [*:0]const u8) SnapshotError!void {
         const conn = self.connection orelse return error.ConnectionFailed;
-        const resource = self.resource orelse return error.QueryFailed;
 
-        const sql = std.fmt.allocPrintSentinel(self.allocator, "FETCH FORWARD {d} FROM " ++ cursor_name, .{limit}, 0) catch return error.OutOfMemory;
-        defer self.allocator.free(sql);
+        const result = c.PQexec(conn, sql) orelse return error.OutOfMemory;
+        defer c.PQclear(result);
+
+        const status = c.PQresultStatus(result);
+        if (status != c.PGRES_COMMAND_OK and status != c.PGRES_TUPLES_OK) {
+            std.log.warn("Snapshot command failed: {s}", .{c.PQresultErrorMessage(result)});
+            return error.QueryFailed;
+        }
+    }
+};
+
+/// An open cursor over one resource. Pull rows with `next` until it returns null, then
+/// `close`. Both borrow the SnapshotReader that produced it.
+pub const TableSnapshot = struct {
+    reader: *SnapshotReader,
+    resource: []const u8,
+
+    const Self = @This();
+
+    /// Fetch up to `limit` more rows as READ events allocated in `batch_allocator`;
+    /// returns null once the cursor is exhausted. The caller owns the batch and frees
+    /// `batch_allocator` before the next call.
+    pub fn next(self: *Self, batch_allocator: std.mem.Allocator, limit: usize) SnapshotError!?[]ChangeEvent {
+        const conn = self.reader.connection orelse return error.ConnectionFailed;
+
+        const sql = std.fmt.allocPrintSentinel(self.reader.allocator, "FETCH FORWARD {d} FROM " ++ cursor_name, .{limit}, 0) catch return error.OutOfMemory;
+        defer self.reader.allocator.free(sql);
 
         const result = c.PQexec(conn, sql.ptr) orelse return error.OutOfMemory;
         defer c.PQclear(result);
@@ -134,15 +145,19 @@ pub const SnapshotReader = struct {
 
         const events = batch_allocator.alloc(ChangeEvent, n_rows) catch return error.OutOfMemory;
         for (0..n_rows) |row| {
-            events[row] = try self.buildEvent(batch_allocator, result, resource, row, n_cols);
+            events[row] = try self.buildEvent(batch_allocator, result, row, n_cols);
         }
         return events;
+    }
+
+    pub fn close(self: *Self) SnapshotError!void {
+        try self.reader.execCommand("CLOSE " ++ cursor_name);
     }
 
     // Build one READ event from a result row. Columns come back in text format, the
     // same shape mapValue promotes for streamed changes, so a READ row and an INSERT
     // of the same row serialize identically.
-    fn buildEvent(self: *Self, batch_allocator: std.mem.Allocator, result: *c.PGresult, resource: []const u8, row: usize, n_cols: usize) SnapshotError!ChangeEvent {
+    fn buildEvent(self: *Self, batch_allocator: std.mem.Allocator, result: *c.PGresult, row: usize, n_cols: usize) SnapshotError!ChangeEvent {
         const row_c: c_int = @intCast(row);
 
         // Arena-backed batch: the caller frees the whole batch at once, so no
@@ -166,25 +181,11 @@ pub const SnapshotReader = struct {
 
         var event = ChangeEvent.init(ChangeOperation.READ, .{
             .source = try batch_allocator.dupe(u8, "postgres"),
-            .resource = try batch_allocator.dupe(u8, resource),
-            .timestamp = self.timestamp,
-            .lsn = try batch_allocator.dupe(u8, self.lsn),
+            .resource = try batch_allocator.dupe(u8, self.resource),
+            .timestamp = self.reader.timestamp,
+            .lsn = try batch_allocator.dupe(u8, self.reader.lsn),
         });
         event.setInsertData(row_data);
         return event;
-    }
-
-    // Run a command (or a query whose rows we ignore), failing on a non-OK status.
-    fn execCommand(self: *Self, sql: [*:0]const u8) SnapshotError!void {
-        const conn = self.connection orelse return error.ConnectionFailed;
-
-        const result = c.PQexec(conn, sql) orelse return error.OutOfMemory;
-        defer c.PQclear(result);
-
-        const status = c.PQresultStatus(result);
-        if (status != c.PGRES_COMMAND_OK and status != c.PGRES_TUPLES_OK) {
-            std.log.warn("Snapshot command failed: {s}", .{c.PQresultErrorMessage(result)});
-            return error.QueryFailed;
-        }
     }
 };

@@ -96,7 +96,7 @@ test "SnapshotReader: reads existing rows as READ events, consistent with the ex
     var reader = SnapshotReader.init(allocator, snapshot_name, lsn, timestamp);
     defer reader.deinit();
     try reader.connect(conn_str);
-    try reader.openCursor(resource);
+    var table = try reader.open(resource);
 
     // One arena for the whole read; a small fetch limit forces several FETCH round
     // trips over the five rows.
@@ -105,7 +105,7 @@ test "SnapshotReader: reads existing rows as READ events, consistent with the ex
 
     var seen = [_]bool{false} ** 7; // ids 1..5 expected; 6 must stay unseen
     var total: usize = 0;
-    while (try reader.fetch(arena.allocator(), 2)) |events| {
+    while (try table.next(arena.allocator(), 2)) |events| {
         for (events) |event| {
             try testing.expectEqualStrings("READ", event.op);
             try testing.expectEqualStrings(resource, event.meta.resource);
@@ -131,7 +131,7 @@ test "SnapshotReader: reads existing rows as READ events, consistent with the ex
             total += 1;
         }
     }
-    try reader.closeCursor();
+    try table.close();
 
     try testing.expectEqual(@as(usize, 5), total);
     for (1..6) |i| try testing.expect(seen[i]);
@@ -174,11 +174,11 @@ test "SnapshotReader: empty table yields no events" {
     var reader = SnapshotReader.init(allocator, snapshot_name, "0/0", test_helpers.nowSeconds(io));
     defer reader.deinit();
     try reader.connect(conn_str);
-    try reader.openCursor(resource);
+    var table = try reader.open(resource);
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
-    try testing.expect((try reader.fetch(arena.allocator(), 10)) == null);
-    try reader.closeCursor();
+    try testing.expect((try table.next(arena.allocator(), 10)) == null);
+    try table.close();
 }
