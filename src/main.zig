@@ -121,7 +121,13 @@ fn run(init: std.process.Init) !void {
     // NOTE: source will be deinit'd by processor.deinit()
 
     printStatus("Connecting to PostgreSQL streaming replication...\n", .{});
-    try source.connect(conninfo, "0/0");
+    try source.connectAndEnsureSlot(conninfo);
+
+    // A freshly created slot exports a consistent point; stream from it so we
+    // begin exactly at the slot's start. An existing slot has none, so resume
+    // from its confirmed position, which "0/0" selects.
+    const start_lsn = source.consistentPoint() orelse "0/0";
+    try source.beginReplication(start_lsn);
 
     const producer = try initKafkaProducer(allocator, config.sink.kafka.?, kafka_sasl_pw);
     // NOTE: producer will be deinit'd by processor.deinit()

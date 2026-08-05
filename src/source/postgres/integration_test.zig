@@ -768,3 +768,45 @@ test "Streaming source: Timeout behavior with no data" {
 
     std.log.info("Timeout test passed: empty batch returned gracefully after timeout", .{});
 }
+
+test "Streaming source: created slot captures the consistent point and streams from it" {
+    const allocator = testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(@intCast(test_helpers.nowMicros(std.testing.io)));
+    const random_suffix = prng.random().int(u32);
+    const timestamp = test_helpers.nowSeconds(std.testing.io);
+
+    const table_name = try std.fmt.allocPrint(allocator, "cp_test_{d}_{d}", .{ timestamp, random_suffix });
+    defer allocator.free(table_name);
+    const slot_name = try std.fmt.allocPrint(allocator, "slot_cp_{d}_{d}", .{ timestamp, random_suffix });
+    defer allocator.free(slot_name);
+    const pub_name = try std.fmt.allocPrint(allocator, "pub_cp_{d}_{d}", .{ timestamp, random_suffix });
+    defer allocator.free(pub_name);
+
+    const setup_conn = try createSetupConnection(allocator);
+    defer c.PQfinish(setup_conn);
+    // Declared first, runs last (after source.deinit closes the connection).
+    defer cleanupTestEnvironment(allocator, setup_conn, table_name, slot_name, pub_name);
+
+    const create_table_sql = try test_helpers.formatSqlZ(allocator, "CREATE TABLE {s} (id SERIAL PRIMARY KEY, name TEXT)", .{table_name});
+    defer allocator.free(create_table_sql);
+    try execSQL(setup_conn, create_table_sql);
+
+    const conn_str = try getTestConnectionString(allocator);
+    defer allocator.free(conn_str);
+
+    var source = PostgresSource.init(allocator, slot_name, pub_name);
+    defer source.deinit();
+
+    // Create the publication and slot through the protocol (not pre-created via
+    // SQL), so CREATE_REPLICATION_SLOT runs and its consistent point is captured.
+    try source.connectAndEnsureSlot(conn_str);
+
+    try testing.expect(source.consistentPoint() != null);
+    const consistent_point = source.consistentPoint().?;
+    // pg_lsn text form is "X/X".
+    try testing.expect(std.mem.indexOfScalar(u8, consistent_point, '/') != null);
+
+    // The captured point is a valid start LSN: streaming begins there.
+    try source.beginReplication(consistent_point);
+}

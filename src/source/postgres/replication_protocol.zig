@@ -66,6 +66,12 @@ pub const ReplicationProtocol = struct {
     // PGconn from two threads. Held only for short non-blocking calls; the
     // poll() wait runs unlocked.
     mutex: std.Io.Mutex = .init,
+    // consistent_point from CREATE_REPLICATION_SLOT: the LSN where this slot
+    // begins. Set only when we create the slot in this run; an existing slot
+    // returns nothing, so it stays null. Streaming from it starts exactly at the
+    // slot's start point (and, later, aligns with the slot's exported snapshot)
+    // instead of relying on "0/0" resolving to the same place.
+    consistent_point: ?[]const u8 = null,
 
     const Self = @This();
 
@@ -79,10 +85,18 @@ pub const ReplicationProtocol = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        if (self.consistent_point) |cp| self.allocator.free(cp);
         if (self.connection) |conn| {
             c.PQfinish(conn);
             self.connection = null;
         }
+    }
+
+    /// The slot's consistent point (start LSN, pg_lsn text form), captured when
+    /// the slot was created in this run; null if the slot already existed. Owned
+    /// by the protocol, valid until deinit.
+    pub fn consistentPoint(self: *const Self) ?[]const u8 {
+        return self.consistent_point;
     }
 
     pub fn connect(self: *Self, connection_string: []const u8) ReplicationError!void {
@@ -245,6 +259,20 @@ pub const ReplicationProtocol = struct {
         }
 
         std.log.info("Replication slot '{s}' created successfully", .{slot_name});
+
+        // CREATE_REPLICATION_SLOT returns one row: slot_name, consistent_point,
+        // snapshot_name, output_plugin. Capture consistent_point (the slot's
+        // start LSN) so streaming can begin exactly there. Best-effort: if it is
+        // ever absent we leave it null and fall back to "0/0", which resolves to
+        // the same freshly created position.
+        const cp_col = c.PQfnumber(create_result, "consistent_point");
+        if (cp_col >= 0 and c.PQntuples(create_result) > 0 and c.PQgetisnull(create_result, 0, cp_col) == 0) {
+            const cp = std.mem.span(c.PQgetvalue(create_result, 0, cp_col));
+            self.consistent_point = self.allocator.dupe(u8, cp) catch return ReplicationError.OutOfMemory;
+            std.log.debug("Slot consistent point: {s}", .{self.consistent_point.?});
+        } else {
+            std.log.warn("CREATE_REPLICATION_SLOT returned no consistent_point; starting from 0/0", .{});
+        }
     }
 
     pub fn startReplication(self: *Self, start_lsn: []const u8) ReplicationError!void {
