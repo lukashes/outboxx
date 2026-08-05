@@ -72,6 +72,11 @@ pub const ReplicationProtocol = struct {
     // slot's start point (and, later, aligns with the slot's exported snapshot)
     // instead of relying on "0/0" resolving to the same place.
     consistent_point: ?[]const u8 = null,
+    // snapshot_name from CREATE_REPLICATION_SLOT: the exported snapshot valid as
+    // of consistent_point, importable with SET TRANSACTION SNAPSHOT while this
+    // connection stays open. Set only on a freshly created slot, so its presence
+    // is also the "was the slot created this run" signal for the initial snapshot.
+    snapshot_name: ?[]const u8 = null,
 
     const Self = @This();
 
@@ -86,6 +91,7 @@ pub const ReplicationProtocol = struct {
 
     pub fn deinit(self: *Self) void {
         if (self.consistent_point) |cp| self.allocator.free(cp);
+        if (self.snapshot_name) |sn| self.allocator.free(sn);
         if (self.connection) |conn| {
             c.PQfinish(conn);
             self.connection = null;
@@ -96,6 +102,13 @@ pub const ReplicationProtocol = struct {
     /// null if the slot already existed.
     pub fn startLsn(self: *const Self) ?[]const u8 {
         return self.consistent_point;
+    }
+
+    /// The slot's exported snapshot name, captured when the slot was created in
+    /// this run; null if the slot already existed (no snapshot to import). Valid
+    /// only while this connection stays open and idle.
+    pub fn snapshotName(self: *const Self) ?[]const u8 {
+        return self.snapshot_name;
     }
 
     pub fn connect(self: *Self, connection_string: []const u8) ReplicationError!void {
@@ -271,6 +284,16 @@ pub const ReplicationProtocol = struct {
             std.log.debug("Slot consistent point: {s}", .{self.consistent_point.?});
         } else {
             std.log.warn("CREATE_REPLICATION_SLOT returned no consistent_point; starting from 0/0", .{});
+        }
+
+        // snapshot_name from the same row: the exported snapshot the initial
+        // snapshot reads under. Best-effort like consistent_point; without it the
+        // caller simply runs no snapshot.
+        const sn_col = c.PQfnumber(create_result, "snapshot_name");
+        if (sn_col >= 0 and c.PQntuples(create_result) > 0 and c.PQgetisnull(create_result, 0, sn_col) == 0) {
+            const sn = std.mem.span(c.PQgetvalue(create_result, 0, sn_col));
+            self.snapshot_name = self.allocator.dupe(u8, sn) catch return ReplicationError.OutOfMemory;
+            std.log.debug("Slot exported snapshot: {s}", .{self.snapshot_name.?});
         }
     }
 

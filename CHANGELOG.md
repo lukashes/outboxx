@@ -6,6 +6,13 @@ All notable changes to Outboxx are documented here.
 
 ### Added
 
+- Initial snapshot of existing rows. A stream that lists `read` in `operations`
+  emits its current rows as `op="READ"` before streaming, read under the slot's
+  exported snapshot so the snapshot and the stream share one boundary (the READ
+  rows carry the slot's start LSN). Runs only on a freshly created slot; gated by
+  `[snapshot].mode` (`initial` default, `no-snapshot` to disable). Consumers must
+  treat `READ` as an upsert. An interrupted snapshot is not resumed; re-bootstrap
+  by recreating the slot.
 - Streams can target tables in any schema. Set `resource = "schema.table"` in a
   stream's source; a bare name still defaults to the `public` schema.
 

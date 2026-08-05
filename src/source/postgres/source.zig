@@ -145,6 +145,13 @@ pub const PostgresSource = struct {
         return self.protocol.startLsn();
     }
 
+    /// The slot's exported snapshot name when it was created in this run, or null
+    /// if the slot already existed. Present only alongside a fresh startLsn, so it
+    /// gates the initial snapshot. Valid until streaming starts on this connection.
+    pub fn snapshotName(self: *const Self) ?[]const u8 {
+        return self.protocol.snapshotName();
+    }
+
     /// Receive batch of changes from PostgreSQL (default wait time from constants)
     /// Wrapper for compatibility with polling source API
     pub fn receiveBatch(self: *Self, io: std.Io, batch_allocator: std.mem.Allocator, limit: usize) PostgresSourceError!Batch {

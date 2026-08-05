@@ -1,8 +1,10 @@
 const std = @import("std");
 const config_mod = @import("config/config.zig");
 const Config = config_mod.Config;
+const Stream = config_mod.Stream;
 const Processor = @import("processor/processor.zig").Processor;
 const PostgresSource = @import("source/postgres/source.zig").PostgresSource;
+const SnapshotReader = @import("source/postgres/snapshot.zig").SnapshotReader;
 const kafka_producer = @import("sink/kafka/producer.zig");
 const KafkaProducer = kafka_producer.KafkaProducer;
 const PostgresValidator = @import("source/postgres/validator.zig").PostgresValidator;
@@ -121,19 +123,29 @@ fn run(init: std.process.Init) !void {
     // NOTE: source will be deinit'd by processor.deinit()
 
     printStatus("Connecting to PostgreSQL streaming replication...\n", .{});
+    // Connect and ensure the slot exists, without streaming yet, so the initial
+    // snapshot (if any) runs under the slot's exported snapshot first.
     try source.connect(conninfo);
 
-    // A freshly created slot exposes its start LSN; stream from it so we begin
-    // exactly at the slot's start. An existing slot has none, so resume from its
-    // confirmed position, which "0/0" selects.
+    // Capture before the source is moved into the processor. A freshly created
+    // slot exposes its start LSN and exported snapshot; stream from that LSN so we
+    // begin exactly at the slot's start. An existing slot exposes neither, so
+    // resume from its confirmed position ("0/0") and run no snapshot.
     const start_lsn = source.startLsn() orelse "0/0";
-    try source.startReplication(start_lsn);
+    const snapshot_name = source.snapshotName();
 
     const producer = try initKafkaProducer(allocator, config.sink.kafka.?, kafka_sasl_pw);
     // NOTE: producer will be deinit'd by processor.deinit()
 
     var processor = Processor.init(allocator, source, producer, config.streams, &obs);
     defer processor.deinit();
+
+    // Initial snapshot before streaming: only on a freshly created slot, only in
+    // `initial` mode, and only for streams opting into `read`. START_REPLICATION
+    // (below) invalidates the exported snapshot, so it must follow this.
+    try maybeRunInitialSnapshot(allocator, init.io, config, &processor, conninfo, snapshot_name, start_lsn, &shutdown_requested);
+
+    try processor.beginReplication(start_lsn);
 
     printStatus("\nProcessor initialized successfully with slot: {s}\n", .{postgres.slot_name});
     printStatus("\nCDC processor started successfully!\n", .{});
@@ -183,6 +195,71 @@ fn initKafkaProducer(allocator: std.mem.Allocator, kafka: config_mod.KafkaSink, 
 
     try producer.testConnection();
     return producer;
+}
+
+// Run the initial snapshot when it applies, else return without touching Postgres.
+// It applies only when the slot was created this run (snapshot_name is set), the
+// mode is `initial`, and at least one stream lists `read`. The reader opens a
+// second, regular connection and binds it to the slot's exported snapshot, so the
+// replication connection must stay idle (no START_REPLICATION) until this returns.
+fn maybeRunInitialSnapshot(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    config: Config,
+    processor: *Processor,
+    conninfo: []const u8,
+    snapshot_name: ?[]const u8,
+    start_lsn: []const u8,
+    stop_signal: *std.atomic.Value(bool),
+) !void {
+    // No exported snapshot means the slot already existed, so there is nothing to
+    // bootstrap (a snapshot is only consistent with a freshly created slot).
+    const snap = snapshot_name orelse return;
+
+    // Absent [snapshot] defaults to `initial`; `no-snapshot` disables it globally.
+    const snapshot_cfg: config_mod.SnapshotConfig = config.snapshot orelse .{};
+    if (!snapshot_cfg.isInitial()) return;
+
+    const resources = try collectReadResources(allocator, config.streams);
+    defer allocator.free(resources);
+    if (resources.len == 0) return;
+
+    printStatus("\nRunning initial snapshot for {} resource(s)...\n", .{resources.len});
+
+    // meta.timestamp for READ rows: the snapshot's wall-clock start. meta.lsn is
+    // the slot's start LSN, so a snapshot row shares the dedup boundary with the
+    // first streamed change.
+    const timestamp = std.Io.Timestamp.now(io, .real).toSeconds();
+    var reader = SnapshotReader.init(allocator, snap, start_lsn, timestamp);
+    defer reader.deinit();
+    try reader.connect(conninfo);
+
+    try processor.runInitialSnapshot(&reader, resources, stop_signal);
+
+    printStatus("Initial snapshot complete.\n", .{});
+}
+
+// The distinct resources of streams that opt into `read`, so a table read by
+// several streams is snapshotted once. Caller owns the returned slice; the
+// resource strings are borrowed from the config.
+fn collectReadResources(allocator: std.mem.Allocator, streams: []const Stream) ![]const []const u8 {
+    var resources = std.ArrayList([]const u8).empty;
+    errdefer resources.deinit(allocator);
+
+    for (streams) |stream| {
+        if (!stream.hasReadOperation()) continue;
+
+        var seen = false;
+        for (resources.items) |r| {
+            if (std.mem.eql(u8, r, stream.source.resource)) {
+                seen = true;
+                break;
+            }
+        }
+        if (!seen) try resources.append(allocator, stream.source.resource);
+    }
+
+    return resources.toOwnedSlice(allocator);
 }
 
 // Print user-facing messages to stdout. Use for status/config output; logs and

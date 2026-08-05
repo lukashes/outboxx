@@ -89,6 +89,12 @@ for at-least-once redeliveries. pgoutput sends every value as text; the
 converter promotes int/float/bool OIDs to JSON types and keeps the rest
 (including `numeric`) as strings.
 
+`op` is `INSERT`/`UPDATE`/`DELETE` for WAL changes plus `READ` for an initial
+snapshot row (existing data read before streaming, shaped like an INSERT). A
+`READ` row carries the slot's start LSN as its `lsn`, the same boundary the
+stream then resumes from, so snapshot + stream cover every row with no gap or
+overlap. Consumers must treat `READ` as an upsert (redeliverable, like any op).
+
 ## Configuration
 
 TOML, secrets kept out of the file (see `docs/examples/config.toml`).
@@ -101,6 +107,13 @@ TOML, secrets kept out of the file (see `docs/examples/config.toml`).
   (`mechanism`, `username`, `password_env`).
 - `[observability]` (optional; absent = off): `address`/`port` for a Prometheus
   `/metrics` plus `/healthz` and `/readyz` HTTP server.
+- `[snapshot].mode` (optional; absent = `initial`): `initial` runs the initial
+  snapshot, `no-snapshot` disables it. A stream opts in by listing `read` in its
+  `operations`. The snapshot runs only when the slot is created this run, the mode
+  is `initial`, and some stream lists `read`; it reads under the slot's exported
+  snapshot, before `START_REPLICATION`, so it can't gap or overlap the stream. An
+  interrupted snapshot is not resumed (the slot then already exists, so the next
+  start skips it); re-bootstrapping means a new slot.
 - Postgres needs `wal_level = logical`, plus `REPLICA IDENTITY FULL` on tables
   whose stream tracks DELETE (validated at startup; UPDATE emits only the new
   row, so it doesn't need it). Outboxx auto-creates the slot and publication.

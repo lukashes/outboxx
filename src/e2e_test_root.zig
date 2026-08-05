@@ -2,4 +2,5 @@
 // the other suite roots; see src/unit_test_root.zig.
 comptime {
     _ = @import("e2e/cdc_test.zig");
+    _ = @import("e2e/snapshot_test.zig");
 }
