@@ -75,7 +75,8 @@ test "E2E: INSERT operation - full pipeline verification" {
     }
 
     // Connect to PostgreSQL
-    try source.connect(conn_str, "0/0");
+    try source.connect(conn_str);
+    try source.startReplication("0/0");
 
     // Create processor
     const streams = try allocator.alloc(Stream, 1);
@@ -214,7 +215,8 @@ test "E2E: UPDATE operation - full pipeline verification" {
         _ = c.PQexec(conn, drop_slot_sql.ptr);
     }
 
-    try source.connect(conn_str, "0/0");
+    try source.connect(conn_str);
+    try source.startReplication("0/0");
 
     // Create processor
     const streams = try allocator.alloc(Stream, 1);
@@ -347,7 +349,8 @@ test "E2E: DELETE operation - full pipeline verification" {
         _ = c.PQexec(conn, drop_slot_sql.ptr);
     }
 
-    try source.connect(conn_str, "0/0");
+    try source.connect(conn_str);
+    try source.startReplication("0/0");
 
     // Create processor
     const streams = try allocator.alloc(Stream, 1);

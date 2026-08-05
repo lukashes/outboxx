@@ -107,11 +107,10 @@ pub const PostgresSource = struct {
     }
 
     /// Connect to PostgreSQL and ensure the publication and replication slot
-    /// exist, without starting the stream. Split from beginReplication so a
+    /// exist, without starting the stream. Split from startReplication so a
     /// caller can run an initial snapshot between slot creation and streaming;
-    /// on a freshly created slot the consistent point is captured here (see
-    /// consistentPoint).
-    pub fn connectAndEnsureSlot(self: *Self, connection_string: []const u8) PostgresSourceError!void {
+    /// on a freshly created slot the start LSN is captured here (see startLsn).
+    pub fn connect(self: *Self, connection_string: []const u8) PostgresSourceError!void {
         self.protocol.connect(connection_string) catch |err| {
             std.log.warn("Failed to connect with replication protocol: {}", .{err});
             return PostgresSourceError.ConnectionFailed;
@@ -130,8 +129,8 @@ pub const PostgresSource = struct {
         };
     }
 
-    /// Start logical replication from start_lsn. Call after connectAndEnsureSlot.
-    pub fn beginReplication(self: *Self, start_lsn: []const u8) PostgresSourceError!void {
+    /// Start logical replication from start_lsn. Call after connect.
+    pub fn startReplication(self: *Self, start_lsn: []const u8) PostgresSourceError!void {
         self.protocol.startReplication(start_lsn) catch |err| {
             std.log.warn("Failed to start replication: {}", .{err});
             return PostgresSourceError.ReplicationFailed;
@@ -140,19 +139,10 @@ pub const PostgresSource = struct {
         std.log.info("Streaming replication started from LSN: {s}", .{start_lsn});
     }
 
-    /// The slot's consistent point (start LSN) when it was created in this run,
-    /// or null if the slot already existed. Use it as the start LSN so streaming
-    /// begins exactly at the slot's start; a pre-existing slot resumes from its
-    /// confirmed position, which "0/0" selects.
-    pub fn consistentPoint(self: *const Self) ?[]const u8 {
-        return self.protocol.consistentPoint();
-    }
-
-    /// Connect and start streaming from an explicit start LSN in one step, for
-    /// callers that do not run an initial snapshot.
-    pub fn connect(self: *Self, connection_string: []const u8, start_lsn: []const u8) PostgresSourceError!void {
-        try self.connectAndEnsureSlot(connection_string);
-        try self.beginReplication(start_lsn);
+    /// The slot's start LSN when it was created in this run, or null if the slot
+    /// already existed (pass "0/0" to resume from its confirmed position).
+    pub fn startLsn(self: *const Self) ?[]const u8 {
+        return self.protocol.startLsn();
     }
 
     /// Receive batch of changes from PostgreSQL (default wait time from constants)

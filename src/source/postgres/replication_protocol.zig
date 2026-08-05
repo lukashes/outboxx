@@ -92,10 +92,9 @@ pub const ReplicationProtocol = struct {
         }
     }
 
-    /// The slot's consistent point (start LSN, pg_lsn text form), captured when
-    /// the slot was created in this run; null if the slot already existed. Owned
-    /// by the protocol, valid until deinit.
-    pub fn consistentPoint(self: *const Self) ?[]const u8 {
+    /// The slot's start LSN, captured when the slot was created in this run;
+    /// null if the slot already existed.
+    pub fn startLsn(self: *const Self) ?[]const u8 {
         return self.consistent_point;
     }
 
