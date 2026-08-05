@@ -1,10 +1,13 @@
 const std = @import("std");
 
-/// Kind of change operation.
+/// Kind of change operation. READ is a row observed by the initial snapshot, not a
+/// WAL change; it carries the current row state so a consumer can bootstrap before
+/// the stream begins.
 pub const ChangeOperation = enum {
     INSERT,
     UPDATE,
     DELETE,
+    READ,
     UNKNOWN,
 };
 

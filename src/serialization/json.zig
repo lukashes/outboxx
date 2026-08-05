@@ -221,6 +221,45 @@ test "JsonSerializer serialize UPDATE event" {
     try testing.expect(std.mem.find(u8, json_output, "pending") == null);
 }
 
+test "JsonSerializer serialize READ event" {
+    const testing = std.testing;
+
+    var gpa = std.heap.DebugAllocator(.{}){};
+    defer {
+        const deinit_status = gpa.deinit();
+        if (deinit_status == .leak) {
+            std.debug.panic("Memory leak in test!", .{});
+        }
+    }
+    const allocator = gpa.allocator();
+
+    const metadata = Metadata{
+        .source = try allocator.dupe(u8, "postgres"),
+        .resource = try allocator.dupe(u8, "public.users"),
+        .timestamp = 1234567890,
+        .lsn = try allocator.dupe(u8, "0/15D6E10"),
+    };
+
+    // A snapshot row reuses the insert payload, so only the op differs from a
+    // streamed INSERT.
+    var event = ChangeEvent.init(ChangeOperation.READ, metadata);
+    defer event.deinit(allocator);
+
+    var builder = RowDataHelpers.createBuilder(allocator);
+    try RowDataHelpers.put(&builder, allocator, "id", FieldValueHelpers.integer(1));
+    const row = try RowDataHelpers.finalize(&builder, allocator);
+    event.setInsertData(row);
+
+    const serializer = JsonSerializer.init();
+    const json_output = try serializer.serialize(event, allocator);
+    defer allocator.free(json_output);
+
+    try testing.expect(std.mem.find(u8, json_output, "\"op\":\"READ\"") != null);
+    try testing.expect(std.mem.find(u8, json_output, "\"resource\":\"public.users\"") != null);
+    try testing.expect(std.mem.find(u8, json_output, "\"lsn\":\"0/15D6E10\"") != null);
+    try testing.expect(std.mem.find(u8, json_output, "\"id\":1") != null);
+}
+
 test "JsonSerializer rejects non-finite float" {
     const testing = std.testing;
 

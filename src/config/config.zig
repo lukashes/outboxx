@@ -20,7 +20,9 @@ pub const ValidationLimits = struct {
 pub const SupportedValues = struct {
     pub const SOURCE_TYPES = [_][]const u8{"postgres"};
     pub const SINK_TYPES = [_][]const u8{"kafka"};
-    pub const OPERATIONS = [_][]const u8{ "insert", "update", "delete" };
+    // "read" opts a stream into the initial snapshot: existing rows are emitted as
+    // READ events before streaming. A stream without it is stream-only.
+    pub const OPERATIONS = [_][]const u8{ "insert", "update", "delete", "read" };
     pub const FORMATS = [_][]const u8{"json"};
     // Only username/password mechanisms; GSSAPI/OAUTHBEARER need auth plumbing we don't expose yet.
     pub const KAFKA_SASL_MECHANISMS = [_][]const u8{ "PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512" };
@@ -959,6 +961,18 @@ test "Config validation - unsupported format should fail" {
     }};
 
     try testing.expectError(error.InvalidEnumValue, cfg.validate(testing.allocator));
+}
+
+test "Config validation - read operation is accepted" {
+    var cfg = createTestDefault();
+    cfg.streams = &.{.{
+        .name = "test_stream",
+        .source = .{ .resource = "users", .operations = &.{ "read", "insert" } },
+        .flow = .{ .format = "json" },
+        .sink = .{ .destination = "test_topic", .routing_key = "id" },
+    }};
+
+    try cfg.validate(testing.allocator);
 }
 
 test "Config validation - invalid source type shows proper error format" {
