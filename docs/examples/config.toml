@@ -47,14 +47,6 @@ tls = true                                   # on by default; set false for loca
 address = "0.0.0.0"  # 127.0.0.1 to keep it local; 0.0.0.0 for container scraping
 port = 9464          # conventional OpenTelemetry Prometheus exporter port
 
-# Optional initial snapshot. Omit this section to keep the default "initial".
-# "initial" reads existing rows once, only on a freshly created slot and only for
-# streams that list "read" (below), and emits them as op="READ" before streaming;
-# "no-snapshot" disables it regardless of the per-stream opt-in. An interrupted
-# snapshot is detected and redone from scratch automatically on the next start.
-[snapshot]
-mode = "initial"  # initial | no-snapshot
-
 # One [[streams]] block per table -> topic mapping.
 [[streams]]
 name = "users-stream"

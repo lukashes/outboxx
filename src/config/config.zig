@@ -26,9 +26,6 @@ pub const SupportedValues = struct {
     pub const FORMATS = [_][]const u8{"json"};
     // Only username/password mechanisms; GSSAPI/OAUTHBEARER need auth plumbing we don't expose yet.
     pub const KAFKA_SASL_MECHANISMS = [_][]const u8{ "PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512" };
-    // "initial" runs the snapshot on a freshly created slot for streams listing
-    // "read"; "no-snapshot" disables it regardless of the per-stream opt-in.
-    pub const SNAPSHOT_MODES = [_][]const u8{ "initial", "no-snapshot" };
 };
 
 // Configuration structures matching TOML format
@@ -150,18 +147,6 @@ pub const ObservabilityConfig = struct {
     port: u16 = 9464, // conventional OpenTelemetry Prometheus exporter port
 };
 
-/// Initial-snapshot policy. Absent section -> defaults to "initial", which still
-/// snapshots nothing unless a stream lists "read", so the default is inert.
-pub const SnapshotConfig = struct {
-    mode: []const u8 = "initial", // initial | no-snapshot
-
-    /// Whether the mode permits an initial snapshot at all (the per-stream "read"
-    /// opt-in and a freshly created slot decide the rest).
-    pub fn isInitial(self: SnapshotConfig) bool {
-        return std.mem.eql(u8, self.mode, "initial");
-    }
-};
-
 /// Configuration data, and the TOML parse target. Strings point into the arena of the
 /// returned toml.Parsed(Config), so the caller keeps that value alive while using it.
 pub const Config = struct {
@@ -171,7 +156,6 @@ pub const Config = struct {
     streams: []const Stream = &.{},
     tables: ?TableFilter = null,
     observability: ?ObservabilityConfig = null,
-    snapshot: ?SnapshotConfig = null,
 
     /// Parse a config file; caller owns and must deinit the returned result.
     pub fn loadFromTomlFile(io: std.Io, allocator: std.mem.Allocator, file_path: []const u8) !toml.Parsed(Config) {
@@ -213,12 +197,10 @@ pub const Config = struct {
         return readEnvVar(allocator, environ_map, postgres.connection_env);
     }
 
-    /// Whether an initial snapshot may run this session: the mode is `initial`
-    /// (default) and at least one stream opts into `read`. Gates the snapshot itself
-    /// and the interrupted-snapshot recovery on startup.
+    /// Whether an initial snapshot may run this session: at least one stream opts
+    /// into `read`. Gates the snapshot itself and the interrupted-snapshot recovery
+    /// on startup.
     pub fn wantsInitialSnapshot(self: Config) bool {
-        const snapshot = self.snapshot orelse SnapshotConfig{};
-        if (!snapshot.isInitial()) return false;
         for (self.streams) |stream| {
             if (stream.hasReadOperation()) return true;
         }
@@ -472,11 +454,6 @@ pub const Config = struct {
         if (self.observability) |obs| {
             try validatePort(obs.port, "observability.port");
             try validateStringLength(obs.address, ValidationLimits.MAX_HOSTNAME_LEN, "observability.address");
-        }
-
-        // 5b. SNAPSHOT VALIDATION
-        if (self.snapshot) |snapshot| {
-            try validateEnum(allocator, snapshot.mode, &SupportedValues.SNAPSHOT_MODES, "snapshot.mode");
         }
 
         // 6. STREAMS VALIDATION
@@ -1054,29 +1031,6 @@ test "Config validation - invalid SASL mechanism fails" {
     try testing.expectError(error.InvalidEnumValue, cfg.validate(testing.allocator));
 }
 
-test "Config validation - snapshot mode initial passes" {
-    var cfg = createTestDefault();
-    cfg.snapshot = .{ .mode = "initial" };
-    try cfg.validate(testing.allocator);
-}
-
-test "Config validation - snapshot mode no-snapshot passes" {
-    var cfg = createTestDefault();
-    cfg.snapshot = .{ .mode = "no-snapshot" };
-    try cfg.validate(testing.allocator);
-}
-
-test "Config validation - invalid snapshot mode fails" {
-    var cfg = createTestDefault();
-    cfg.snapshot = .{ .mode = "always" };
-    try testing.expectError(error.InvalidEnumValue, cfg.validate(testing.allocator));
-}
-
-test "SnapshotConfig.isInitial reflects the mode" {
-    try testing.expect((SnapshotConfig{ .mode = "initial" }).isInitial());
-    try testing.expect(!(SnapshotConfig{ .mode = "no-snapshot" }).isInitial());
-}
-
 test "Stream.hasReadOperation reflects the configured operations" {
     const base: Stream = .{
         .name = "s",
@@ -1092,6 +1046,26 @@ test "Stream.hasReadOperation reflects the configured operations" {
     var stream_only = base;
     stream_only.source.operations = &.{ "insert", "update" };
     try testing.expect(!stream_only.hasReadOperation());
+}
+
+test "wantsInitialSnapshot is driven by the read opt-in" {
+    var cfg = createTestDefault();
+
+    cfg.streams = &.{.{
+        .name = "s",
+        .source = .{ .resource = "users", .operations = &.{ "insert", "update" } },
+        .flow = .{ .format = "json" },
+        .sink = .{ .destination = "t", .routing_key = "id" },
+    }};
+    try testing.expect(!cfg.wantsInitialSnapshot());
+
+    cfg.streams = &.{.{
+        .name = "s",
+        .source = .{ .resource = "users", .operations = &.{ "read", "insert" } },
+        .flow = .{ .format = "json" },
+        .sink = .{ .destination = "t", .routing_key = "id" },
+    }};
+    try testing.expect(cfg.wantsInitialSnapshot());
 }
 
 test "Config validation - full SASL over TLS passes" {
