@@ -146,154 +146,191 @@ pub const ReplicationProtocol = struct {
         std.log.debug("Replication connection established", .{});
     }
 
-    /// Create publication if it doesn't exist (for all tables)
+    /// Create the streaming publication (FOR ALL TABLES) if absent. Must run before
+    /// the slot is created: pgoutput resolves the publication by name in the
+    /// historical catalog for each change, so a change whose LSN predates the
+    /// publication cannot be decoded (a change before the slot's start would fail
+    /// with "publication does not exist"). Creating the publication first keeps the
+    /// slot's consistent point after it, so every streamed change decodes.
     pub fn createPublicationIfNotExists(self: *Self) ReplicationError!void {
         if (self.connection == null) return ReplicationError.ConnectionFailed;
 
-        // Postgres folds unquoted identifiers to lowercase. We fold slot and
-        // publication names the same way so the existence check, CREATE, and
-        // START_REPLICATION all reference one name; a mixed-case name would be
-        // created folded but never re-found, and CREATE would fail "already
-        // exists" on every restart -- a crash loop.
-        const pub_name = try std.ascii.allocLowerString(self.allocator, self.publication_name);
+        const pub_name = try self.lowerName(self.publication_name);
         defer self.allocator.free(pub_name);
 
-        // Check if publication exists
-        const check_sql_tmp = std.fmt.allocPrint(
-            self.allocator,
-            "SELECT pubname FROM pg_publication WHERE pubname = '{s}'",
-            .{pub_name},
-        ) catch return ReplicationError.OutOfMemory;
-        defer self.allocator.free(check_sql_tmp);
-
-        const check_sql = self.allocator.dupeZ(u8, check_sql_tmp) catch return ReplicationError.OutOfMemory;
-        defer self.allocator.free(check_sql);
-
-        const check_result = c.PQexec(self.connection, check_sql.ptr);
-        defer c.PQclear(check_result);
-
-        const check_status = c.PQresultStatus(check_result);
-        if (check_status != c.PGRES_TUPLES_OK) {
-            const error_msg = c.PQresultErrorMessage(check_result);
-            std.log.warn("Failed to check publication: {s}", .{error_msg});
-            return ReplicationError.ConnectionFailed;
-        }
-
-        const num_rows = c.PQntuples(check_result);
-        if (num_rows > 0) {
+        if (try self.objectExists("pg_publication", "pubname", pub_name)) {
             std.log.info("Publication '{s}' already exists", .{pub_name});
             return;
         }
 
-        // Publication doesn't exist, create it for all tables
-        const create_sql_tmp = std.fmt.allocPrint(
-            self.allocator,
-            "CREATE PUBLICATION {s} FOR ALL TABLES",
-            .{pub_name},
-        ) catch return ReplicationError.OutOfMemory;
-        defer self.allocator.free(create_sql_tmp);
-
-        const create_sql = self.allocator.dupeZ(u8, create_sql_tmp) catch return ReplicationError.OutOfMemory;
-        defer self.allocator.free(create_sql);
+        const sql = std.fmt.allocPrintSentinel(self.allocator, "CREATE PUBLICATION {s} FOR ALL TABLES", .{pub_name}, 0) catch return ReplicationError.OutOfMemory;
+        defer self.allocator.free(sql);
 
         std.log.info("Creating publication: {s}", .{pub_name});
-
-        const create_result = c.PQexec(self.connection, create_sql.ptr);
-        defer c.PQclear(create_result);
-
-        const create_status = c.PQresultStatus(create_result);
-        if (create_status != c.PGRES_COMMAND_OK) {
-            const error_msg = c.PQresultErrorMessage(create_result);
-            std.log.warn("Failed to create publication: {s}", .{error_msg});
-            return ReplicationError.ConnectionFailed;
-        }
-
+        try self.execSimple(sql.ptr, "CREATE PUBLICATION");
         std.log.info("Publication '{s}' created successfully", .{pub_name});
     }
 
-    /// Create replication slot if it doesn't exist
-    pub fn createSlotIfNotExists(self: *Self) ReplicationError!void {
+    /// Whether the snapshot marker publication exists, i.e. a prior initial snapshot
+    /// was interrupted before it finished. See createSnapshotMarker.
+    pub fn snapshotMarkerExists(self: *Self) ReplicationError!bool {
+        if (self.connection == null) return ReplicationError.ConnectionFailed;
+        const name = try self.markerName();
+        defer self.allocator.free(name);
+        return self.objectExists("pg_publication", "pubname", name);
+    }
+
+    /// Create the snapshot marker publication if absent (idempotent). It is an empty
+    /// publication used only as a durable "snapshot in progress" flag: created before
+    /// the slot at bootstrap and dropped once the snapshot is flushed, so its presence
+    /// on startup means the snapshot did not finish. It is never passed to
+    /// START_REPLICATION, so it takes no part in decoding.
+    pub fn createSnapshotMarker(self: *Self) ReplicationError!void {
+        if (self.connection == null) return ReplicationError.ConnectionFailed;
+        const name = try self.markerName();
+        defer self.allocator.free(name);
+
+        if (try self.objectExists("pg_publication", "pubname", name)) return;
+
+        const sql = std.fmt.allocPrintSentinel(self.allocator, "CREATE PUBLICATION {s}", .{name}, 0) catch return ReplicationError.OutOfMemory;
+        defer self.allocator.free(sql);
+
+        std.log.info("Creating snapshot marker: {s}", .{name});
+        try self.execSimple(sql.ptr, "CREATE PUBLICATION (snapshot marker)");
+    }
+
+    /// Drop the snapshot marker publication if present (idempotent). Called once the
+    /// snapshot is flushed, returning steady state to a single publication.
+    pub fn dropSnapshotMarker(self: *Self) ReplicationError!void {
+        if (self.connection == null) return ReplicationError.ConnectionFailed;
+        const name = try self.markerName();
+        defer self.allocator.free(name);
+
+        const sql = std.fmt.allocPrintSentinel(self.allocator, "DROP PUBLICATION IF EXISTS {s}", .{name}, 0) catch return ReplicationError.OutOfMemory;
+        defer self.allocator.free(sql);
+
+        std.log.info("Dropping snapshot marker: {s}", .{name});
+        try self.execSimple(sql.ptr, "DROP PUBLICATION (snapshot marker)");
+    }
+
+    /// Whether the replication slot already exists.
+    pub fn slotExists(self: *Self) ReplicationError!bool {
+        if (self.connection == null) return ReplicationError.ConnectionFailed;
+        const slot_name = try self.lowerName(self.slot_name);
+        defer self.allocator.free(slot_name);
+        return self.objectExists("pg_replication_slots", "slot_name", slot_name);
+    }
+
+    /// Create the replication slot and capture its consistent point and exported
+    /// snapshot. Assumes the slot does not exist (check slotExists first).
+    pub fn createSlot(self: *Self) ReplicationError!void {
         if (self.connection == null) return ReplicationError.ConnectionFailed;
 
-        // Fold to lowercase like Postgres does for unquoted identifiers (see
-        // createPublicationIfNotExists).
-        const slot_name = try std.ascii.allocLowerString(self.allocator, self.slot_name);
+        const slot_name = try self.lowerName(self.slot_name);
         defer self.allocator.free(slot_name);
 
-        // Check if slot exists
-        const check_sql_tmp = std.fmt.allocPrint(
-            self.allocator,
-            "SELECT slot_name FROM pg_replication_slots WHERE slot_name = '{s}'",
-            .{slot_name},
-        ) catch return ReplicationError.OutOfMemory;
-        defer self.allocator.free(check_sql_tmp);
-
-        const check_sql = self.allocator.dupeZ(u8, check_sql_tmp) catch return ReplicationError.OutOfMemory;
-        defer self.allocator.free(check_sql);
-
-        const check_result = c.PQexec(self.connection, check_sql.ptr);
-        defer c.PQclear(check_result);
-
-        const check_status = c.PQresultStatus(check_result);
-        if (check_status != c.PGRES_TUPLES_OK) {
-            const error_msg = c.PQresultErrorMessage(check_result);
-            std.log.warn("Failed to check replication slot: {s}", .{error_msg});
-            return ReplicationError.ConnectionFailed;
+        // A re-create after dropSlot (interrupted snapshot) must not leak the values
+        // captured for the discarded slot.
+        if (self.consistent_point) |cp| {
+            self.allocator.free(cp);
+            self.consistent_point = null;
+        }
+        if (self.snapshot_name) |sn| {
+            self.allocator.free(sn);
+            self.snapshot_name = null;
         }
 
-        const num_rows = c.PQntuples(check_result);
-        if (num_rows > 0) {
-            std.log.info("Replication slot '{s}' already exists", .{slot_name});
-            return;
-        }
-
-        // Slot doesn't exist, create it
-        const create_sql_tmp = std.fmt.allocPrint(
-            self.allocator,
-            "CREATE_REPLICATION_SLOT {s} LOGICAL pgoutput",
-            .{slot_name},
-        ) catch return ReplicationError.OutOfMemory;
-        defer self.allocator.free(create_sql_tmp);
-
-        const create_sql = self.allocator.dupeZ(u8, create_sql_tmp) catch return ReplicationError.OutOfMemory;
-        defer self.allocator.free(create_sql);
+        const sql = std.fmt.allocPrintSentinel(self.allocator, "CREATE_REPLICATION_SLOT {s} LOGICAL pgoutput", .{slot_name}, 0) catch return ReplicationError.OutOfMemory;
+        defer self.allocator.free(sql);
 
         std.log.info("Creating replication slot: {s}", .{slot_name});
 
-        const create_result = c.PQexec(self.connection, create_sql.ptr);
-        defer c.PQclear(create_result);
-
-        const create_status = c.PQresultStatus(create_result);
-        if (create_status != c.PGRES_TUPLES_OK) {
-            const error_msg = c.PQresultErrorMessage(create_result);
-            std.log.warn("Failed to create replication slot: {s}", .{error_msg});
+        const result = c.PQexec(self.connection, sql.ptr);
+        defer c.PQclear(result);
+        if (c.PQresultStatus(result) != c.PGRES_TUPLES_OK) {
+            std.log.warn("Failed to create replication slot: {s}", .{c.PQresultErrorMessage(result)});
             return ReplicationError.ConnectionFailed;
         }
-
         std.log.info("Replication slot '{s}' created successfully", .{slot_name});
 
         // CREATE_REPLICATION_SLOT returns one row: slot_name, consistent_point,
-        // snapshot_name, output_plugin. Capture consistent_point (the slot's
-        // start LSN) so streaming can begin exactly there. Best-effort: if it is
-        // ever absent we leave it null and fall back to "0/0", which resolves to
-        // the same freshly created position.
-        const cp_col = c.PQfnumber(create_result, "consistent_point");
-        if (cp_col >= 0 and c.PQntuples(create_result) > 0 and c.PQgetisnull(create_result, 0, cp_col) == 0) {
-            const cp = std.mem.span(c.PQgetvalue(create_result, 0, cp_col));
+        // snapshot_name, output_plugin. Capture consistent_point (the slot's start
+        // LSN) so streaming can begin exactly there. Best-effort: if it is ever
+        // absent we leave it null and fall back to "0/0", which resolves to the same
+        // freshly created position.
+        const cp_col = c.PQfnumber(result, "consistent_point");
+        if (cp_col >= 0 and c.PQntuples(result) > 0 and c.PQgetisnull(result, 0, cp_col) == 0) {
+            const cp = std.mem.span(c.PQgetvalue(result, 0, cp_col));
             self.consistent_point = self.allocator.dupe(u8, cp) catch return ReplicationError.OutOfMemory;
             std.log.debug("Slot consistent point: {s}", .{self.consistent_point.?});
         } else {
             std.log.warn("CREATE_REPLICATION_SLOT returned no consistent_point; starting from 0/0", .{});
         }
 
-        // snapshot_name from the same row: the exported snapshot the initial
-        // snapshot reads under. Best-effort like consistent_point; without it the
-        // caller simply runs no snapshot.
-        const sn_col = c.PQfnumber(create_result, "snapshot_name");
-        if (sn_col >= 0 and c.PQntuples(create_result) > 0 and c.PQgetisnull(create_result, 0, sn_col) == 0) {
-            const sn = std.mem.span(c.PQgetvalue(create_result, 0, sn_col));
+        // snapshot_name from the same row: the exported snapshot the initial snapshot
+        // reads under. Best-effort like consistent_point; without it the caller runs
+        // no snapshot.
+        const sn_col = c.PQfnumber(result, "snapshot_name");
+        if (sn_col >= 0 and c.PQntuples(result) > 0 and c.PQgetisnull(result, 0, sn_col) == 0) {
+            const sn = std.mem.span(c.PQgetvalue(result, 0, sn_col));
             self.snapshot_name = self.allocator.dupe(u8, sn) catch return ReplicationError.OutOfMemory;
             std.log.debug("Slot exported snapshot: {s}", .{self.snapshot_name.?});
+        }
+    }
+
+    /// Drop the replication slot. Used to discard an orphaned slot left by an
+    /// interrupted snapshot. Fails fast if the slot is still active (e.g. another
+    /// reader), rather than waiting.
+    pub fn dropSlot(self: *Self) ReplicationError!void {
+        if (self.connection == null) return ReplicationError.ConnectionFailed;
+        const slot_name = try self.lowerName(self.slot_name);
+        defer self.allocator.free(slot_name);
+
+        const sql = std.fmt.allocPrintSentinel(self.allocator, "DROP_REPLICATION_SLOT {s}", .{slot_name}, 0) catch return ReplicationError.OutOfMemory;
+        defer self.allocator.free(sql);
+
+        std.log.info("Dropping replication slot: {s}", .{slot_name});
+        try self.execSimple(sql.ptr, "DROP_REPLICATION_SLOT");
+    }
+
+    // Postgres folds unquoted identifiers to lowercase. We fold slot and publication
+    // names the same way so the existence check, CREATE, and START_REPLICATION all
+    // reference one name; a mixed-case name would be created folded but never
+    // re-found, so CREATE would fail "already exists" on every restart (a crash loop).
+    fn lowerName(self: *Self, name: []const u8) ReplicationError![]u8 {
+        return std.ascii.allocLowerString(self.allocator, name) catch return ReplicationError.OutOfMemory;
+    }
+
+    // The snapshot marker publication name, derived from the streaming publication.
+    fn markerName(self: *Self) ReplicationError![]u8 {
+        const pub_name = try self.lowerName(self.publication_name);
+        defer self.allocator.free(pub_name);
+        return std.fmt.allocPrint(self.allocator, "{s}_snapshotting", .{pub_name}) catch return ReplicationError.OutOfMemory;
+    }
+
+    // Existence probe: true if any row matches `column = 'name'` in `relation`.
+    fn objectExists(self: *Self, relation: []const u8, column: []const u8, name: []const u8) ReplicationError!bool {
+        const sql = std.fmt.allocPrintSentinel(self.allocator, "SELECT 1 FROM {s} WHERE {s} = '{s}'", .{ relation, column, name }, 0) catch return ReplicationError.OutOfMemory;
+        defer self.allocator.free(sql);
+
+        const result = c.PQexec(self.connection, sql.ptr);
+        defer c.PQclear(result);
+        if (c.PQresultStatus(result) != c.PGRES_TUPLES_OK) {
+            std.log.warn("Existence check failed: {s}", .{c.PQresultErrorMessage(result)});
+            return ReplicationError.ConnectionFailed;
+        }
+        return c.PQntuples(result) > 0;
+    }
+
+    // Run a command that returns no rows (CREATE/DROP), failing on a non-OK status.
+    // Accepts TUPLES_OK too, since some replication commands report a result set.
+    fn execSimple(self: *Self, sql: [*:0]const u8, ctx: []const u8) ReplicationError!void {
+        const result = c.PQexec(self.connection, sql);
+        defer c.PQclear(result);
+        const status = c.PQresultStatus(result);
+        if (status != c.PGRES_COMMAND_OK and status != c.PGRES_TUPLES_OK) {
+            std.log.warn("{s} failed: {s}", .{ ctx, c.PQresultErrorMessage(result) });
+            return ReplicationError.ConnectionFailed;
         }
     }
 

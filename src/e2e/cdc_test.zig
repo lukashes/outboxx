@@ -76,7 +76,7 @@ test "E2E: INSERT operation - full pipeline verification" {
     }
 
     // Connect to PostgreSQL
-    try source.connect(conn_str);
+    try source.connect(conn_str, false);
     try source.startReplication("0/0");
 
     // Create processor
@@ -216,7 +216,7 @@ test "E2E: UPDATE operation - full pipeline verification" {
         _ = c.PQexec(conn, drop_slot_sql.ptr);
     }
 
-    try source.connect(conn_str);
+    try source.connect(conn_str, false);
     try source.startReplication("0/0");
 
     // Create processor
@@ -351,7 +351,7 @@ test "E2E: DELETE operation - full pipeline verification" {
         _ = c.PQexec(conn, drop_slot_sql.ptr);
     }
 
-    try source.connect(conn_str);
+    try source.connect(conn_str, false);
     try source.startReplication("0/0");
 
     // Create processor

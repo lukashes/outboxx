@@ -213,6 +213,18 @@ pub const Config = struct {
         return readEnvVar(allocator, environ_map, postgres.connection_env);
     }
 
+    /// Whether an initial snapshot may run this session: the mode is `initial`
+    /// (default) and at least one stream opts into `read`. Gates the snapshot itself
+    /// and the interrupted-snapshot recovery on startup.
+    pub fn wantsInitialSnapshot(self: Config) bool {
+        const snapshot = self.snapshot orelse SnapshotConfig{};
+        if (!snapshot.isInitial()) return false;
+        for (self.streams) |stream| {
+            if (stream.hasReadOperation()) return true;
+        }
+        return false;
+    }
+
     // Helper validation functions
 
     fn validateEnum(allocator: std.mem.Allocator, value: []const u8, allowed_values: []const []const u8, field_name: []const u8) !void {

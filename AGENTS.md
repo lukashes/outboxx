@@ -112,8 +112,14 @@ TOML, secrets kept out of the file (see `docs/examples/config.toml`).
   `operations`. The snapshot runs only when the slot is created this run, the mode
   is `initial`, and some stream lists `read`; it reads under the slot's exported
   snapshot, before `START_REPLICATION`, so it can't gap or overlap the stream. An
-  interrupted snapshot is not resumed (the slot then already exists, so the next
-  start skips it); re-bootstrapping means a new slot.
+  interrupted snapshot is redone from scratch on the next start: a marker
+  publication `<publication>_snapshotting` (created before the slot, dropped once
+  the snapshot is flushed) flags an in-progress snapshot, so on restart a slot with
+  the marker still present is dropped and re-bootstrapped from a fresh consistent
+  point. The marker exists only during the snapshot, so steady state keeps a single
+  publication. pgoutput resolves the publication by name in the historical catalog
+  per change, so the streaming publication must exist before the slot; that is why
+  the marker is a separate publication and never passed to `START_REPLICATION`.
 - Postgres needs `wal_level = logical`, plus `REPLICA IDENTITY FULL` on tables
   whose stream tracks DELETE (validated at startup; UPDATE emits only the new
   row, so it doesn't need it). Outboxx auto-creates the slot and publication.

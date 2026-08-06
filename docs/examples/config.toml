@@ -50,8 +50,8 @@ port = 9464          # conventional OpenTelemetry Prometheus exporter port
 # Optional initial snapshot. Omit this section to keep the default "initial".
 # "initial" reads existing rows once, only on a freshly created slot and only for
 # streams that list "read" (below), and emits them as op="READ" before streaming;
-# "no-snapshot" disables it regardless of the per-stream opt-in. Re-bootstrapping a
-# table means a new slot, since an existing slot has no consistent snapshot to read.
+# "no-snapshot" disables it regardless of the per-stream opt-in. An interrupted
+# snapshot is detected and redone from scratch automatically on the next start.
 [snapshot]
 mode = "initial"  # initial | no-snapshot
 

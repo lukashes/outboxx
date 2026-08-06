@@ -8,8 +8,17 @@ const domain = @import("../../domain/change_event.zig");
 const RowDataHelpers = domain.RowDataHelpers;
 
 const SnapshotReader = @import("snapshot.zig").SnapshotReader;
+const PostgresSource = @import("source.zig").PostgresSource;
 
 const c = @import("c"); // C bindings (build-system translate-c)
+
+fn publicationExists(conn: *c.PGconn, allocator: std.mem.Allocator, name: []const u8) !bool {
+    const sql = try std.fmt.allocPrintSentinel(allocator, "SELECT 1 FROM pg_publication WHERE pubname = '{s}'", .{name}, 0);
+    defer allocator.free(sql);
+    const result = c.PQexec(conn, sql.ptr);
+    defer c.PQclear(result);
+    return c.PQntuples(result) > 0;
+}
 
 fn createSetupConnection(allocator: std.mem.Allocator) !*c.PGconn {
     const conn_str = try getTestConnectionString(allocator);
@@ -181,4 +190,103 @@ test "SnapshotReader: empty table yields no events" {
 
     try testing.expect((try table.next(arena.allocator(), 10)) == null);
     try table.close();
+}
+
+test "reconciliation: an interrupted snapshot drops the orphaned slot and recreates it" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+
+    const suffix = test_helpers.nowMicros(io);
+    const slot_name = try std.fmt.allocPrint(allocator, "recon_slot_{d}", .{suffix});
+    defer allocator.free(slot_name);
+    const pub_name = try std.fmt.allocPrint(allocator, "recon_pub_{d}", .{suffix});
+    defer allocator.free(pub_name);
+    const marker_name = try std.fmt.allocPrint(allocator, "{s}_snapshotting", .{pub_name});
+    defer allocator.free(marker_name);
+
+    const conn_str = try getTestConnectionString(allocator);
+    defer allocator.free(conn_str);
+
+    const setup_conn = try createSetupConnection(allocator);
+    defer c.PQfinish(setup_conn);
+    defer {
+        const drop = std.fmt.allocPrintSentinel(allocator, "SELECT pg_drop_replication_slot('{s}') FROM pg_replication_slots WHERE slot_name='{s}'; DROP PUBLICATION IF EXISTS {s}; DROP PUBLICATION IF EXISTS {s};", .{ slot_name, slot_name, pub_name, marker_name }, 0) catch unreachable;
+        defer allocator.free(drop);
+        _ = c.PQexec(setup_conn, drop.ptr);
+    }
+
+    // First bootstrap: creates the streaming publication, the snapshot marker, and
+    // the slot, then "crashes" (deinit without finishSnapshot or streaming).
+    const first_lsn = blk: {
+        var source = PostgresSource.init(allocator, slot_name, pub_name);
+        defer source.deinit();
+        try source.connect(conn_str, true);
+        try testing.expect(source.startLsn() != null); // fresh slot
+        break :blk try allocator.dupe(u8, source.startLsn().?);
+    };
+    defer allocator.free(first_lsn);
+
+    // Marker and slot survive the crash: the bootstrap is not marked complete.
+    try testing.expect(try publicationExists(setup_conn, allocator, marker_name));
+
+    // Move the WAL so a recreated slot lands on a later consistent point.
+    try execSQL(setup_conn, "SELECT pg_logical_emit_message(true, 'outboxx', 'recon')");
+
+    // Second start with the same names: the marker signals an interrupted snapshot,
+    // so the orphaned slot is dropped and a fresh one is created.
+    {
+        var source = PostgresSource.init(allocator, slot_name, pub_name);
+        defer source.deinit();
+        try source.connect(conn_str, true);
+        try testing.expect(source.startLsn() != null); // redo -> a fresh slot
+        try testing.expect(!std.mem.eql(u8, first_lsn, source.startLsn().?));
+    }
+
+    // Still mid-bootstrap: the marker stays until a snapshot completes.
+    try testing.expect(try publicationExists(setup_conn, allocator, marker_name));
+}
+
+test "reconciliation: a completed snapshot resumes without recreating the slot" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+
+    const suffix = test_helpers.nowMicros(io);
+    const slot_name = try std.fmt.allocPrint(allocator, "recon_done_slot_{d}", .{suffix});
+    defer allocator.free(slot_name);
+    const pub_name = try std.fmt.allocPrint(allocator, "recon_done_pub_{d}", .{suffix});
+    defer allocator.free(pub_name);
+    const marker_name = try std.fmt.allocPrint(allocator, "{s}_snapshotting", .{pub_name});
+    defer allocator.free(marker_name);
+
+    const conn_str = try getTestConnectionString(allocator);
+    defer allocator.free(conn_str);
+
+    const setup_conn = try createSetupConnection(allocator);
+    defer c.PQfinish(setup_conn);
+    defer {
+        const drop = std.fmt.allocPrintSentinel(allocator, "SELECT pg_drop_replication_slot('{s}') FROM pg_replication_slots WHERE slot_name='{s}'; DROP PUBLICATION IF EXISTS {s}; DROP PUBLICATION IF EXISTS {s};", .{ slot_name, slot_name, pub_name, marker_name }, 0) catch unreachable;
+        defer allocator.free(drop);
+        _ = c.PQexec(setup_conn, drop.ptr);
+    }
+
+    // First bootstrap that completes: finishSnapshot drops the marker.
+    {
+        var source = PostgresSource.init(allocator, slot_name, pub_name);
+        defer source.deinit();
+        try source.connect(conn_str, true);
+        try testing.expect(source.startLsn() != null);
+        try source.finishSnapshot();
+    }
+
+    // Marker gone, streaming publication remains: steady state is one publication.
+    try testing.expect(!try publicationExists(setup_conn, allocator, marker_name));
+    try testing.expect(try publicationExists(setup_conn, allocator, pub_name));
+
+    // Second start: slot exists and no marker -> resume, no re-snapshot.
+    {
+        var source = PostgresSource.init(allocator, slot_name, pub_name);
+        defer source.deinit();
+        try source.connect(conn_str, true);
+        try testing.expect(source.startLsn() == null); // resumed, not recreated
+    }
 }

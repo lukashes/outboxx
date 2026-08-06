@@ -106,27 +106,66 @@ pub const PostgresSource = struct {
         self.converter.deinit();
     }
 
-    /// Connect to PostgreSQL and ensure the publication and replication slot
-    /// exist, without starting the stream. Split from startReplication so a
-    /// caller can run an initial snapshot between slot creation and streaming;
-    /// on a freshly created slot the start LSN is captured here (see startLsn).
-    pub fn connect(self: *Self, connection_string: []const u8) PostgresSourceError!void {
+    /// Connect to PostgreSQL and ensure the publication and replication slot exist,
+    /// without starting the stream, so a caller can run an initial snapshot between
+    /// slot creation and streaming. On a freshly created slot the start LSN and
+    /// exported snapshot are captured here (see startLsn/snapshotName).
+    ///
+    /// `want_snapshot` says whether this run may run an initial snapshot, which
+    /// drives interrupted-snapshot recovery (see ensureSlot).
+    pub fn connect(self: *Self, connection_string: []const u8, want_snapshot: bool) PostgresSourceError!void {
         self.protocol.connect(connection_string) catch |err| {
             std.log.warn("Failed to connect with replication protocol: {}", .{err});
             return PostgresSourceError.ConnectionFailed;
         };
 
-        // Create publication if it doesn't exist
+        // The streaming publication must exist before the slot, so the slot's start
+        // LSN falls after it and every streamed change decodes (see the protocol).
         self.protocol.createPublicationIfNotExists() catch |err| {
             std.log.warn("Failed to create publication: {}", .{err});
             return PostgresSourceError.ConnectionFailed;
         };
 
-        // Create replication slot if it doesn't exist
-        self.protocol.createSlotIfNotExists() catch |err| {
-            std.log.warn("Failed to create replication slot: {}", .{err});
-            return PostgresSourceError.ConnectionFailed;
-        };
+        try self.ensureSlot(want_snapshot);
+    }
+
+    // Reconcile the replication slot for this run using the snapshot marker as a
+    // durable "snapshot in progress" flag (see the protocol's createSnapshotMarker):
+    // - snapshot run, slot present, no marker: a prior bootstrap completed, resume.
+    // - snapshot run, slot present, marker present: the snapshot was interrupted,
+    //   drop the orphaned slot and redo from a fresh consistent point.
+    // - snapshot run, no slot: fresh bootstrap.
+    // - no snapshot: resume an existing slot, create one if absent, and clear any
+    //   stale marker so steady state keeps a single publication.
+    // The marker is created before the slot, so a crash between the two leaves
+    // "no slot, marker present", which reads as a fresh bootstrap, never a false
+    // "completed".
+    fn ensureSlot(self: *Self, want_snapshot: bool) PostgresSourceError!void {
+        const slot_exists = self.protocol.slotExists() catch return PostgresSourceError.ConnectionFailed;
+
+        if (!want_snapshot) {
+            self.protocol.dropSnapshotMarker() catch return PostgresSourceError.ConnectionFailed;
+            if (!slot_exists) self.protocol.createSlot() catch return PostgresSourceError.ConnectionFailed;
+            return;
+        }
+
+        if (slot_exists) {
+            const marker = self.protocol.snapshotMarkerExists() catch return PostgresSourceError.ConnectionFailed;
+            if (!marker) return; // completed bootstrap: resume, no snapshot
+
+            std.log.warn("Snapshot marker present: a prior initial snapshot was interrupted; restarting the bootstrap", .{});
+            self.protocol.dropSlot() catch return PostgresSourceError.ConnectionFailed;
+        }
+
+        self.protocol.createSnapshotMarker() catch return PostgresSourceError.ConnectionFailed;
+        self.protocol.createSlot() catch return PostgresSourceError.ConnectionFailed;
+    }
+
+    /// Drop the snapshot marker once the initial snapshot is flushed, returning
+    /// steady state to a single publication. Idempotent, so it is safe to call even
+    /// when this run ran no snapshot.
+    pub fn finishSnapshot(self: *Self) PostgresSourceError!void {
+        self.protocol.dropSnapshotMarker() catch return PostgresSourceError.ConnectionFailed;
     }
 
     /// Start logical replication from start_lsn. Call after connect.

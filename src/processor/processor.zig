@@ -252,48 +252,57 @@ pub const Processor = struct {
             error.PartitionKeyUnavailable;
     }
 
-    /// Start replication on the owned source. Call after the initial snapshot (if
-    /// any) so the slot's exported snapshot outlives the reads; START_REPLICATION
-    /// invalidates it. Separate from the constructor because the source is held by
-    /// value here, so streaming must begin on this copy, not the caller's.
+    /// Finish the bootstrap and start streaming on the owned source: drop the
+    /// snapshot marker (steady state returns to one publication) then
+    /// START_REPLICATION. Call only after a completed snapshot (if any), so the
+    /// slot's exported snapshot outlived the reads; START_REPLICATION invalidates
+    /// it. Separate from the constructor because the source is held by value here,
+    /// so streaming must begin on this copy, not the caller's.
     pub fn beginReplication(self: *Self, start_lsn: []const u8) !void {
+        try self.source.finishSnapshot();
         try self.source.startReplication(start_lsn);
     }
 
-    /// Read the existing rows of each resource under the slot's exported snapshot
-    /// and produce them as READ events, before streaming. `reader` is connected and
-    /// bound to the snapshot by the caller. Every READ event is flushed to Kafka
-    /// before returning, but the LSN is not advanced (pending_lsn stays 0): the slot
-    /// moves only once the stream is confirmed, so an interrupted snapshot re-runs
-    /// from the slot's start. Consumers must treat READ as an upsert.
+    /// Read the existing rows of each resource under the slot's exported snapshot and
+    /// produce them as READ events, before streaming. `reader` is connected and bound
+    /// to the snapshot by the caller. Returns true once every resource is fully read
+    /// and flushed to Kafka; returns false if a shutdown signal interrupted it (the
+    /// caller then leaves the snapshot marker in place so the next start redoes it).
+    /// The LSN is not advanced (pending_lsn stays 0): the slot moves only once the
+    /// stream is confirmed. Consumers must treat READ as an upsert.
     pub fn runInitialSnapshot(
         self: *Self,
         reader: *SnapshotReader,
         resources: []const []const u8,
         stop_signal: *std.atomic.Value(bool),
-    ) !void {
-        outer: for (resources) |resource| {
+    ) !bool {
+        for (resources) |resource| {
             var table = try reader.open(resource);
 
             // One arena per FETCH batch, freed each turn; the events only need to
             // live long enough to be serialized and copied into librdkafka.
-            while (!stop_signal.load(.monotonic)) {
+            drain: while (true) {
+                if (stop_signal.load(.monotonic)) {
+                    try table.close();
+                    return false;
+                }
+
                 var batch_arena = std.heap.ArenaAllocator.init(self.allocator);
                 defer batch_arena.deinit();
                 const batch_alloc = batch_arena.allocator();
 
-                const events = (try table.next(batch_alloc, constants.CDC.BATCH_SIZE)) orelse break;
+                const events = (try table.next(batch_alloc, constants.CDC.BATCH_SIZE)) orelse break :drain;
 
                 var event_counts = std.ArrayList(EventCount).empty;
                 defer event_counts.deinit(batch_alloc);
 
                 for (events) |event| {
-                    // Backpressure saw stop_signal mid-produce: stop cleanly and
-                    // flush what we already queued, like the streaming loop does.
+                    // Backpressure saw stop_signal mid-produce: treat it as an
+                    // interrupted snapshot, like the between-batch check above.
                     self.produceEvent(batch_alloc, stop_signal, event, &event_counts) catch |err| switch (err) {
                         error.Shutdown => {
                             try table.close();
-                            break :outer;
+                            return false;
                         },
                         else => return err,
                     };
@@ -313,6 +322,7 @@ pub const Processor = struct {
         }
 
         std.log.info("Initial snapshot complete: {} READ events produced", .{self.events_processed});
+        return true;
     }
 
     /// Run the batch loop until stop_signal is set, with a background flush/commit worker.

@@ -72,10 +72,15 @@ test "E2E: initial snapshot emits pre-existing rows as READ, then streams live c
         const drop_slot_z = allocator.dupeZ(u8, drop_slot) catch unreachable;
         defer allocator.free(drop_slot_z);
         _ = c.PQexec(conn, drop_slot_z.ptr);
+        // Streaming publication and the snapshot marker outboxx creates.
+        const drop_pubs = std.fmt.allocPrintSentinel(allocator, "DROP PUBLICATION IF EXISTS {s}; DROP PUBLICATION IF EXISTS {s}_snapshotting;", .{ pub_name, pub_name }, 0) catch unreachable;
+        defer allocator.free(drop_pubs);
+        _ = c.PQexec(conn, drop_pubs.ptr);
     }
 
-    // Create the slot without streaming; this exports the snapshot the reader binds to.
-    try source.connect(conn_str);
+    // Create the slot without streaming; this exports the snapshot the reader binds
+    // to. want_snapshot=true also creates the snapshot marker publication.
+    try source.connect(conn_str, true);
     const start_lsn = source.startLsn() orelse return error.NoConsistentPoint;
     const snapshot_name = source.snapshotName() orelse return error.NoExportedSnapshot;
 
@@ -100,7 +105,8 @@ test "E2E: initial snapshot emits pre-existing rows as READ, then streams live c
         try reader.connect(conn_str);
 
         const resources = [_][]const u8{stream_config.source.resource};
-        try processor.runInitialSnapshot(&reader, &resources, &stop_signal);
+        const completed = try processor.runInitialSnapshot(&reader, &resources, &stop_signal);
+        try testing.expect(completed);
     }
 
     try processor.beginReplication(start_lsn);

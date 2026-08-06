@@ -124,8 +124,10 @@ fn run(init: std.process.Init) !void {
 
     printStatus("Connecting to PostgreSQL streaming replication...\n", .{});
     // Connect and ensure the slot exists, without streaming yet, so the initial
-    // snapshot (if any) runs under the slot's exported snapshot first.
-    try source.connect(conninfo);
+    // snapshot (if any) runs under the slot's exported snapshot first. want_snapshot
+    // also drives interrupted-snapshot recovery on the slot (see source.ensureSlot).
+    const want_snapshot = config.wantsInitialSnapshot();
+    try source.connect(conninfo, want_snapshot);
 
     // Capture before the source is moved into the processor. A freshly created
     // slot exposes its start LSN and exported snapshot; stream from that LSN so we
@@ -142,9 +144,17 @@ fn run(init: std.process.Init) !void {
 
     // Initial snapshot before streaming: only on a freshly created slot, only in
     // `initial` mode, and only for streams opting into `read`. START_REPLICATION
-    // (below) invalidates the exported snapshot, so it must follow this.
-    try maybeRunInitialSnapshot(allocator, init.io, config, &processor, conninfo, snapshot_name, start_lsn, &shutdown_requested);
+    // (below) invalidates the exported snapshot, so it must follow this. A false
+    // return means a shutdown signal interrupted the snapshot; the marker is left in
+    // place, so stop here and let the next start redo the bootstrap rather than
+    // stream past unread rows.
+    const snapshot_done = try maybeRunInitialSnapshot(allocator, init.io, config, &processor, conninfo, snapshot_name, start_lsn, &shutdown_requested);
+    if (!snapshot_done) {
+        printStatus("\nInitial snapshot interrupted; the bootstrap will restart on the next launch.\n", .{});
+        return;
+    }
 
+    // Drops the snapshot marker (back to one publication) and starts streaming.
     try processor.beginReplication(start_lsn);
 
     printStatus("\nProcessor initialized successfully with slot: {s}\n", .{postgres.slot_name});
@@ -197,11 +207,13 @@ fn initKafkaProducer(allocator: std.mem.Allocator, kafka: config_mod.KafkaSink, 
     return producer;
 }
 
-// Run the initial snapshot when it applies, else return without touching Postgres.
-// It applies only when the slot was created this run (snapshot_name is set), the
-// mode is `initial`, and at least one stream lists `read`. The reader opens a
-// second, regular connection and binds it to the slot's exported snapshot, so the
-// replication connection must stay idle (no START_REPLICATION) until this returns.
+// Run the initial snapshot when it applies. Returns true when the snapshot is not
+// needed or ran to completion, false when a shutdown signal interrupted it (the
+// caller then stops instead of streaming). It applies only when the slot was created
+// this run (snapshot_name is set), the mode is `initial`, and at least one stream
+// lists `read`. The reader opens a second, regular connection and binds it to the
+// slot's exported snapshot, so the replication connection must stay idle (no
+// START_REPLICATION) until this returns.
 fn maybeRunInitialSnapshot(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -211,18 +223,16 @@ fn maybeRunInitialSnapshot(
     snapshot_name: ?[]const u8,
     start_lsn: []const u8,
     stop_signal: *std.atomic.Value(bool),
-) !void {
+) !bool {
     // No exported snapshot means the slot already existed, so there is nothing to
     // bootstrap (a snapshot is only consistent with a freshly created slot).
-    const snap = snapshot_name orelse return;
+    const snap = snapshot_name orelse return true;
 
-    // Absent [snapshot] defaults to `initial`; `no-snapshot` disables it globally.
-    const snapshot_cfg: config_mod.SnapshotConfig = config.snapshot orelse .{};
-    if (!snapshot_cfg.isInitial()) return;
+    if (!config.wantsInitialSnapshot()) return true;
 
     const resources = try collectReadResources(allocator, config.streams);
     defer allocator.free(resources);
-    if (resources.len == 0) return;
+    if (resources.len == 0) return true;
 
     printStatus("\nRunning initial snapshot for {} resource(s)...\n", .{resources.len});
 
@@ -234,9 +244,9 @@ fn maybeRunInitialSnapshot(
     defer reader.deinit();
     try reader.connect(conninfo);
 
-    try processor.runInitialSnapshot(&reader, resources, stop_signal);
-
-    printStatus("Initial snapshot complete.\n", .{});
+    const completed = try processor.runInitialSnapshot(&reader, resources, stop_signal);
+    if (completed) printStatus("Initial snapshot complete.\n", .{});
+    return completed;
 }
 
 // The distinct resources of streams that opt into `read`, so a table read by
