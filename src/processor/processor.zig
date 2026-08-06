@@ -147,6 +147,14 @@ pub const Processor = struct {
         std.log.debug("processor.deinit: done", .{});
     }
 
+    /// Connect the owned source and ensure its publication and slot exist, without
+    /// streaming. Whether an initial snapshot may run (which also drives
+    /// interrupted-snapshot recovery on the slot) is derived from the streams' `read`
+    /// opt-in, so the pipeline decides it, not the caller.
+    pub fn connect(self: *Self, conninfo: []const u8) !void {
+        try self.source.connect(conninfo, self.wantsSnapshot());
+    }
+
     /// Receive one batch, route each change to its streams, and stage the batch LSN for commit.
     pub fn processChangesToKafka(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool), batch_allocator: std.mem.Allocator, limit: u32) !void {
         var batch = try self.source.receiveBatch(io, batch_allocator, limit);
@@ -252,25 +260,86 @@ pub const Processor = struct {
             error.PartitionKeyUnavailable;
     }
 
-    /// Finish the bootstrap and start streaming on the owned source: drop the
+    /// Finish the bootstrap and start replication on the owned source: drop the
     /// snapshot marker (steady state returns to one publication) then
-    /// START_REPLICATION. Call only after a completed snapshot (if any), so the
-    /// slot's exported snapshot outlived the reads; START_REPLICATION invalidates
-    /// it. Separate from the constructor because the source is held by value here,
-    /// so streaming must begin on this copy, not the caller's.
-    pub fn beginReplication(self: *Self, start_lsn: []const u8) !void {
+    /// START_REPLICATION from the slot's start LSN (or "0/0" to resume an existing
+    /// slot). Call only after a completed snapshot (if any), so the slot's exported
+    /// snapshot outlived the reads; START_REPLICATION invalidates it. Separate from
+    /// the constructor because the source is held by value here, so streaming must
+    /// begin on this copy, not the caller's.
+    pub fn beginReplication(self: *Self) !void {
         try self.source.finishSnapshot();
-        try self.source.startReplication(start_lsn);
+        try self.source.startReplication(self.source.startLsn() orelse "0/0");
     }
 
-    /// Read the existing rows of each resource under the slot's exported snapshot and
-    /// produce them as READ events, before streaming. `reader` is connected and bound
-    /// to the snapshot by the caller. Returns true once every resource is fully read
-    /// and flushed to Kafka; returns false if a shutdown signal interrupted it (the
-    /// caller then leaves the snapshot marker in place so the next start redoes it).
-    /// The LSN is not advanced (pending_lsn stays 0): the slot moves only once the
-    /// stream is confirmed. Consumers must treat READ as an upsert.
-    pub fn runInitialSnapshot(
+    /// Run the initial-snapshot phase of the pipeline: read the read-opted resources
+    /// under the slot's exported snapshot and produce their rows as READ events,
+    /// before streaming. A no-op returning true when the slot already existed
+    /// (nothing to bootstrap) or no stream opts into `read`. Returns false when a
+    /// shutdown signal interrupted it, so the caller stops before streaming and the
+    /// next start redoes the bootstrap (the snapshot marker stays in place). Opens
+    /// its own regular connection from `conninfo`, since the replication connection
+    /// must stay idle until START_REPLICATION.
+    pub fn runInitialSnapshot(self: *Self, io: std.Io, conninfo: []const u8, stop_signal: *std.atomic.Value(bool)) !bool {
+        // No exported snapshot means the slot already existed: nothing to bootstrap.
+        const snapshot_name = self.source.snapshotName() orelse return true;
+        if (!self.wantsSnapshot()) return true;
+
+        const resources = try self.readResources();
+        defer self.allocator.free(resources);
+        if (resources.len == 0) return true;
+
+        std.log.info("Running initial snapshot for {} resource(s)", .{resources.len});
+
+        // meta.timestamp for READ rows: the snapshot's wall-clock start. meta.lsn is
+        // the slot's start LSN, so a snapshot row shares the dedup boundary with the
+        // first streamed change.
+        const timestamp = std.Io.Timestamp.now(io, .real).toSeconds();
+        var reader = SnapshotReader.init(self.allocator, snapshot_name, self.source.startLsn() orelse "0/0", timestamp);
+        defer reader.deinit();
+        try reader.connect(conninfo);
+
+        return self.snapshotToKafka(&reader, resources, stop_signal);
+    }
+
+    // Whether any stream opts into the initial snapshot by listing `read`.
+    fn wantsSnapshot(self: *Self) bool {
+        for (self.streams) |stream| {
+            if (stream.hasReadOperation()) return true;
+        }
+        return false;
+    }
+
+    // The distinct resources of the read-opted streams, so a table read by several
+    // streams is snapshotted once. Caller owns the returned slice; the strings are
+    // borrowed from the streams.
+    fn readResources(self: *Self) ![]const []const u8 {
+        var resources = std.ArrayList([]const u8).empty;
+        errdefer resources.deinit(self.allocator);
+
+        for (self.streams) |stream| {
+            if (!stream.hasReadOperation()) continue;
+
+            var seen = false;
+            for (resources.items) |r| {
+                if (std.mem.eql(u8, r, stream.source.resource)) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen) try resources.append(self.allocator, stream.source.resource);
+        }
+
+        return resources.toOwnedSlice(self.allocator);
+    }
+
+    // Read each resource's rows via the snapshot reader and produce them as READ
+    // events through the same path as streamed changes (produceEvent), mirroring
+    // processChangesToKafka. Returns true once every resource is fully read and
+    // flushed to Kafka; false if a shutdown signal interrupted it. The LSN is not
+    // advanced (pending_lsn stays 0): the slot moves only once the stream is
+    // confirmed. Consumers must treat READ as an upsert.
+    fn snapshotToKafka(
         self: *Self,
         reader: *SnapshotReader,
         resources: []const []const u8,
@@ -325,8 +394,13 @@ pub const Processor = struct {
         return true;
     }
 
-    /// Run the batch loop until stop_signal is set, with a background flush/commit worker.
+    /// Begin replication (after the initial snapshot, if any) and run the batch loop
+    /// until stop_signal is set, with a background flush/commit worker.
     pub fn startStreaming(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !void {
+        // Drop the snapshot marker and START_REPLICATION; the exported snapshot has
+        // already been read by runInitialSnapshot, so it is safe to invalidate now.
+        try self.beginReplication();
+
         // The source is connected and validated before we get here, so readiness's
         // connection signal goes up now; markStreaming follows on the first batch.
         self.obs.markConnected(true);

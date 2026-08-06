@@ -5,7 +5,6 @@ const test_helpers = @import("../testing/test_helpers.zig");
 const Processor = @import("../processor/processor.zig").Processor;
 const Observability = @import("../processor/processor.zig").Observability;
 const PostgresSource = @import("../source/postgres/source.zig").PostgresSource;
-const SnapshotReader = @import("../source/postgres/snapshot.zig").SnapshotReader;
 const KafkaProducer = @import("../sink/kafka/producer.zig").KafkaProducer;
 const Stream = @import("../config/config.zig").Stream;
 const c = test_helpers.c;
@@ -82,7 +81,7 @@ test "E2E: initial snapshot emits pre-existing rows as READ, then streams live c
     // to. want_snapshot=true also creates the snapshot marker publication.
     try source.connect(conn_str, true);
     const start_lsn = source.startLsn() orelse return error.NoConsistentPoint;
-    const snapshot_name = source.snapshotName() orelse return error.NoExportedSnapshot;
+    try testing.expect(source.snapshotName() != null); // fresh slot exported a snapshot
 
     const streams = try allocator.alloc(Stream, 1);
     defer allocator.free(streams);
@@ -97,19 +96,12 @@ test "E2E: initial snapshot emits pre-existing rows as READ, then streams live c
 
     var stop_signal = std.atomic.Value(bool).init(false);
 
-    // Run the snapshot, then start streaming from the slot's start LSN.
-    {
-        const snap_ts = test_helpers.nowSeconds(std.testing.io);
-        var reader = SnapshotReader.init(allocator, snapshot_name, start_lsn, snap_ts);
-        defer reader.deinit();
-        try reader.connect(conn_str);
+    // Snapshot phase, then begin streaming. The processor orchestrates the reader
+    // from the connection string and derives the read resources from its streams.
+    const completed = try processor.runInitialSnapshot(std.testing.io, conn_str, &stop_signal);
+    try testing.expect(completed);
 
-        const resources = [_][]const u8{stream_config.source.resource};
-        const completed = try processor.runInitialSnapshot(&reader, &resources, &stop_signal);
-        try testing.expect(completed);
-    }
-
-    try processor.beginReplication(start_lsn);
+    try processor.beginReplication();
 
     // A live insert AFTER streaming started: it enters the WAL past the slot start,
     // so it must arrive as a streamed INSERT, not via the snapshot.

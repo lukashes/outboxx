@@ -197,16 +197,6 @@ pub const Config = struct {
         return readEnvVar(allocator, environ_map, postgres.connection_env);
     }
 
-    /// Whether an initial snapshot may run this session: at least one stream opts
-    /// into `read`. Gates the snapshot itself and the interrupted-snapshot recovery
-    /// on startup.
-    pub fn wantsInitialSnapshot(self: Config) bool {
-        for (self.streams) |stream| {
-            if (stream.hasReadOperation()) return true;
-        }
-        return false;
-    }
-
     // Helper validation functions
 
     fn validateEnum(allocator: std.mem.Allocator, value: []const u8, allowed_values: []const []const u8, field_name: []const u8) !void {
@@ -1046,26 +1036,6 @@ test "Stream.hasReadOperation reflects the configured operations" {
     var stream_only = base;
     stream_only.source.operations = &.{ "insert", "update" };
     try testing.expect(!stream_only.hasReadOperation());
-}
-
-test "wantsInitialSnapshot is driven by the read opt-in" {
-    var cfg = createTestDefault();
-
-    cfg.streams = &.{.{
-        .name = "s",
-        .source = .{ .resource = "users", .operations = &.{ "insert", "update" } },
-        .flow = .{ .format = "json" },
-        .sink = .{ .destination = "t", .routing_key = "id" },
-    }};
-    try testing.expect(!cfg.wantsInitialSnapshot());
-
-    cfg.streams = &.{.{
-        .name = "s",
-        .source = .{ .resource = "users", .operations = &.{ "read", "insert" } },
-        .flow = .{ .format = "json" },
-        .sink = .{ .destination = "t", .routing_key = "id" },
-    }};
-    try testing.expect(cfg.wantsInitialSnapshot());
 }
 
 test "Config validation - full SASL over TLS passes" {
