@@ -150,6 +150,17 @@ pub const Config = struct {
 
     /// Parse a config file; caller owns and must deinit the returned result.
     pub fn loadFromTomlFile(io: std.Io, allocator: std.mem.Allocator, file_path: []const u8) !toml.Parsed(Config) {
+        {
+            var key_parser = toml.Parser(toml.Table).init(allocator);
+            defer key_parser.deinit();
+            var raw = key_parser.parseFile(io, file_path) catch |err| {
+                std.log.warn("Failed to parse config file '{s}': {}", .{ file_path, err });
+                return err;
+            };
+            defer raw.deinit();
+            try rejectUnknownKeys(allocator, &raw.value);
+        }
+
         var parser = toml.Parser(Config).init(allocator);
         defer parser.deinit();
         var parsed = parser.parseFile(io, file_path) catch |err| {
@@ -163,6 +174,14 @@ pub const Config = struct {
 
     /// Parse a config string; caller owns and must deinit the returned result.
     pub fn loadFromTomlString(allocator: std.mem.Allocator, content: []const u8) !toml.Parsed(Config) {
+        {
+            var key_parser = toml.Parser(toml.Table).init(allocator);
+            defer key_parser.deinit();
+            var raw = try key_parser.parseString(content);
+            defer raw.deinit();
+            try rejectUnknownKeys(allocator, &raw.value);
+        }
+
         var parser = toml.Parser(Config).init(allocator);
         defer parser.deinit();
         var parsed = try parser.parseString(content);
@@ -459,6 +478,83 @@ pub const Config = struct {
         }
     }
 };
+
+// zig-toml maps only keys that match a struct field and drops the rest with no
+// signal, so a typo (`observabilty`, `routing_kye`) silently changes behavior.
+// Walk the raw parsed table against the Config field set and fail fast on any
+// key that maps to nothing.
+fn rejectUnknownKeys(allocator: std.mem.Allocator, table: *toml.Table) !void {
+    var path: std.ArrayListUnmanaged(u8) = .empty;
+    defer path.deinit(allocator);
+    try checkKnownKeys(Config, allocator, table, &path);
+}
+
+fn checkKnownKeys(
+    comptime T: type,
+    allocator: std.mem.Allocator,
+    table: *toml.Table,
+    path: *std.ArrayListUnmanaged(u8),
+) !void {
+    var it = table.iterator();
+    keys: while (it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        inline for (std.meta.fields(T)) |field| {
+            if (std.mem.eql(u8, field.name, key)) {
+                try descendKey(field.type, allocator, entry.value_ptr, key, path);
+                continue :keys;
+            }
+        }
+        std.log.warn("Unknown config key: '{s}{s}'", .{ path.items, key });
+        return error.UnknownConfigKey;
+    }
+}
+
+// Recurse into a matched field only when it carries nested keys: a struct (TOML
+// table) or a slice of structs (array of tables). Scalars and string slices are
+// leaves. Shape mismatches are left for the typed parse to report.
+fn descendKey(
+    comptime FieldT: type,
+    allocator: std.mem.Allocator,
+    value: *toml.Value,
+    key: []const u8,
+    path: *std.ArrayListUnmanaged(u8),
+) !void {
+    const U = Unwrap(FieldT);
+    switch (@typeInfo(U)) {
+        .@"struct" => {
+            if (value.* != .table) return;
+            const saved = path.items.len;
+            try path.appendSlice(allocator, key);
+            try path.append(allocator, '.');
+            try checkKnownKeys(U, allocator, value.table, path);
+            path.shrinkRetainingCapacity(saved);
+        },
+        .pointer => |ptr| {
+            const Elem = Unwrap(ptr.child);
+            if (ptr.size != .slice or @typeInfo(Elem) != .@"struct") return;
+            if (value.* != .array) return;
+            const saved = path.items.len;
+            try path.appendSlice(allocator, key);
+            try path.append(allocator, '.');
+            for (value.array.items) |*item| {
+                if (item.* != .table) continue;
+                try checkKnownKeys(Elem, allocator, item.table, path);
+            }
+            path.shrinkRetainingCapacity(saved);
+        },
+        else => {},
+    }
+}
+
+// Strip optional and single-item pointer layers to the underlying type; leave
+// slices intact so a struct slice stays visible as an array of tables.
+fn Unwrap(comptime T: type) type {
+    return switch (@typeInfo(T)) {
+        .optional => |o| Unwrap(o.child),
+        .pointer => |p| if (p.size == .one) Unwrap(p.child) else T,
+        else => T,
+    };
+}
 
 const testing = std.testing;
 
@@ -898,6 +994,96 @@ test "parse invalid boolean type fails" {
     ;
 
     try testing.expectError(error.InvalidValueType, Config.loadFromTomlString(testing.allocator, toml_content));
+}
+
+test "reject unknown top-level section" {
+    const toml_content = valid_config_toml ++
+        \\
+        \\[observabilty]
+        \\address = "0.0.0.0"
+    ;
+
+    try testing.expectError(error.UnknownConfigKey, Config.loadFromTomlString(testing.allocator, toml_content));
+}
+
+test "reject unknown key in a nested section" {
+    const toml_content =
+        \\[metadata]
+        \\version = "v0"
+        \\
+        \\[source]
+        \\type = "postgres"
+        \\
+        \\[source.postgres]
+        \\connection_env = "PG_URL"
+        \\slot_name = "slot"
+        \\slot_naem = "typo"
+        \\publication_name = "pub"
+        \\
+        \\[sink]
+        \\type = "kafka"
+        \\
+        \\[sink.kafka]
+        \\brokers = ["kafka1:9092"]
+    ;
+
+    try testing.expectError(error.UnknownConfigKey, Config.loadFromTomlString(testing.allocator, toml_content));
+}
+
+test "reject unknown key in a stream section" {
+    const toml_content =
+        \\[metadata]
+        \\version = "v0"
+        \\
+        \\[source]
+        \\type = "postgres"
+        \\
+        \\[source.postgres]
+        \\connection_env = "PG_URL"
+        \\slot_name = "slot"
+        \\publication_name = "pub"
+        \\
+        \\[sink]
+        \\type = "kafka"
+        \\
+        \\[sink.kafka]
+        \\brokers = ["kafka1:9092"]
+        \\
+        \\[[streams]]
+        \\name = "users-stream"
+        \\
+        \\[streams.source]
+        \\resource = "users"
+        \\operations = ["insert"]
+        \\
+        \\[streams.flow]
+        \\format = "json"
+        \\
+        \\[streams.sink]
+        \\destination = "outboxx.users"
+        \\routing_kye = "id"
+    ;
+
+    try testing.expectError(error.UnknownConfigKey, Config.loadFromTomlString(testing.allocator, toml_content));
+}
+
+test "known optional sections pass the key check" {
+    const toml_content = valid_config_toml ++
+        \\
+        \\[observability]
+        \\port = 9464
+        \\
+        \\[tables]
+        \\include = ["public.users"]
+        \\exclude = ["public.audit"]
+    ;
+
+    var parsed = try Config.loadFromTomlString(testing.allocator, toml_content);
+    defer parsed.deinit();
+
+    try testing.expect(parsed.value.observability != null);
+    try testing.expect(parsed.value.tables != null);
+    try testing.expectEqual(@as(u16, 9464), parsed.value.observability.?.port);
 }
 
 // Validation tests
