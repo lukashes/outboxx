@@ -135,6 +135,17 @@ pub const Stream = struct {
     }
 };
 
+/// Whether any stream opts into the initial snapshot by listing `read`. The single
+/// source of truth for the snapshot gate: the caller connecting the source (to
+/// drive interrupted-snapshot recovery on the slot) and the processor running the
+/// snapshot both derive it from the same streams.
+pub fn wantsInitialSnapshot(streams: []const Stream) bool {
+    for (streams) |stream| {
+        if (stream.hasReadOperation()) return true;
+    }
+    return false;
+}
+
 pub const TableFilter = struct {
     include: []const []const u8,
     exclude: []const []const u8,
@@ -1036,6 +1047,20 @@ test "Stream.hasReadOperation reflects the configured operations" {
     var stream_only = base;
     stream_only.source.operations = &.{ "insert", "update" };
     try testing.expect(!stream_only.hasReadOperation());
+}
+
+test "wantsInitialSnapshot is driven by the read opt-in" {
+    const no_read: Stream = .{
+        .name = "s",
+        .source = .{ .resource = "users", .operations = &.{ "insert", "update" } },
+        .flow = .{ .format = "json" },
+        .sink = .{ .destination = "t", .routing_key = "id" },
+    };
+    try testing.expect(!wantsInitialSnapshot(&.{no_read}));
+
+    var with_read = no_read;
+    with_read.source.operations = &.{ "read", "insert" };
+    try testing.expect(wantsInitialSnapshot(&.{ no_read, with_read }));
 }
 
 test "Config validation - full SASL over TLS passes" {

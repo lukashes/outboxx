@@ -117,7 +117,15 @@ fn run(init: std.process.Init) !void {
     printStatus("Starting processor for {} stream(s)...\n", .{config.streams.len});
     printStatus("Using PostgreSQL streaming replication (pgoutput protocol)\n", .{});
 
-    const source = PostgresSource.init(allocator, postgres.slot_name, postgres.publication_name);
+    var source = PostgresSource.init(allocator, postgres.slot_name, postgres.publication_name);
+
+    printStatus("Connecting to PostgreSQL streaming replication...\n", .{});
+    // Connect and ensure the slot exists, without streaming yet, so the initial
+    // snapshot (if any) runs under the slot's exported snapshot first. Whether it
+    // may run (which also drives interrupted-snapshot recovery on the slot) is
+    // derived from the streams' `read` opt-in.
+    const want_snapshot = config_mod.wantsInitialSnapshot(config.streams);
+    try source.connect(conninfo, want_snapshot);
     // NOTE: source will be deinit'd by processor.deinit()
 
     const producer = try initKafkaProducer(allocator, config.sink.kafka.?, kafka_sasl_pw);
@@ -125,11 +133,6 @@ fn run(init: std.process.Init) !void {
 
     var processor = Processor.init(allocator, source, producer, config.streams, &obs);
     defer processor.deinit();
-
-    printStatus("Connecting to PostgreSQL streaming replication...\n", .{});
-    // Connect and ensure the slot exists, without streaming yet, so the initial
-    // snapshot (if any) runs under the slot's exported snapshot first.
-    try processor.connect(conninfo);
 
     // Initial snapshot: the first phase of the pipeline. A false return means a
     // shutdown signal interrupted it; the snapshot marker stays in place, so stop

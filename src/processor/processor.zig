@@ -5,7 +5,8 @@ const Batch = @import("../source/postgres/source.zig").Batch;
 const SnapshotReader = @import("../source/postgres/snapshot.zig").SnapshotReader;
 
 const KafkaProducer = @import("../sink/kafka/producer.zig").KafkaProducer;
-const Stream = @import("../config/config.zig").Stream;
+const config_mod = @import("../config/config.zig");
+const Stream = config_mod.Stream;
 
 const domain = @import("../domain/change_event.zig");
 const ChangeEvent = domain.ChangeEvent;
@@ -147,14 +148,6 @@ pub const Processor = struct {
         std.log.debug("processor.deinit: done", .{});
     }
 
-    /// Connect the owned source and ensure its publication and slot exist, without
-    /// streaming. Whether an initial snapshot may run (which also drives
-    /// interrupted-snapshot recovery on the slot) is derived from the streams' `read`
-    /// opt-in, so the pipeline decides it, not the caller.
-    pub fn connect(self: *Self, conninfo: []const u8) !void {
-        try self.source.connect(conninfo, self.wantsSnapshot());
-    }
-
     /// Receive one batch, route each change to its streams, and stage the batch LSN for commit.
     pub fn processChangesToKafka(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool), batch_allocator: std.mem.Allocator, limit: u32) !void {
         var batch = try self.source.receiveBatch(io, batch_allocator, limit);
@@ -283,7 +276,7 @@ pub const Processor = struct {
     pub fn runInitialSnapshot(self: *Self, io: std.Io, conninfo: []const u8, stop_signal: *std.atomic.Value(bool)) !bool {
         // No exported snapshot means the slot already existed: nothing to bootstrap.
         const snapshot_name = self.source.snapshotName() orelse return true;
-        if (!self.wantsSnapshot()) return true;
+        if (!config_mod.wantsInitialSnapshot(self.streams)) return true;
 
         const resources = try self.readResources();
         defer self.allocator.free(resources);
@@ -300,14 +293,6 @@ pub const Processor = struct {
         try reader.connect(conninfo);
 
         return self.snapshotToKafka(&reader, resources, stop_signal);
-    }
-
-    // Whether any stream opts into the initial snapshot by listing `read`.
-    fn wantsSnapshot(self: *Self) bool {
-        for (self.streams) |stream| {
-            if (stream.hasReadOperation()) return true;
-        }
-        return false;
     }
 
     // The distinct resources of the read-opted streams, so a table read by several
