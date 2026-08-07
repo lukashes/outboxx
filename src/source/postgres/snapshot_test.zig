@@ -277,7 +277,7 @@ test "reconciliation: an interrupted snapshot drops the orphaned slot and recrea
     defer allocator.free(slot_name);
     const pub_name = try std.fmt.allocPrint(allocator, "recon_pub_{d}", .{suffix});
     defer allocator.free(pub_name);
-    const marker_name = try std.fmt.allocPrint(allocator, "{s}_snapshotting", .{pub_name});
+    const marker_name = try std.fmt.allocPrint(allocator, "{s}_snapshotting", .{slot_name});
     defer allocator.free(marker_name);
 
     const conn_str = try getTestConnectionString(allocator);
@@ -331,7 +331,7 @@ test "reconciliation: a completed snapshot resumes without recreating the slot" 
     defer allocator.free(slot_name);
     const pub_name = try std.fmt.allocPrint(allocator, "recon_done_pub_{d}", .{suffix});
     defer allocator.free(pub_name);
-    const marker_name = try std.fmt.allocPrint(allocator, "{s}_snapshotting", .{pub_name});
+    const marker_name = try std.fmt.allocPrint(allocator, "{s}_snapshotting", .{slot_name});
     defer allocator.free(marker_name);
 
     const conn_str = try getTestConnectionString(allocator);

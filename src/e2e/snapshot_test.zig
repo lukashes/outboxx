@@ -72,7 +72,7 @@ test "E2E: initial snapshot emits pre-existing rows as READ, then streams live c
         defer allocator.free(drop_slot_z);
         _ = c.PQexec(conn, drop_slot_z.ptr);
         // Streaming publication and the snapshot marker outboxx creates.
-        const drop_pubs = std.fmt.allocPrintSentinel(allocator, "DROP PUBLICATION IF EXISTS {s}; DROP PUBLICATION IF EXISTS {s}_snapshotting;", .{ pub_name, pub_name }, 0) catch unreachable;
+        const drop_pubs = std.fmt.allocPrintSentinel(allocator, "DROP PUBLICATION IF EXISTS {s}; DROP PUBLICATION IF EXISTS {s}_snapshotting;", .{ pub_name, slot_name }, 0) catch unreachable;
         defer allocator.free(drop_pubs);
         _ = c.PQexec(conn, drop_pubs.ptr);
     }

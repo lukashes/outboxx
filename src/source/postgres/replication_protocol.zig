@@ -302,10 +302,14 @@ pub const ReplicationProtocol = struct {
     }
 
     // The snapshot marker publication name, derived from the streaming publication.
+    // Named after the slot, not the publication: the marker guards the slot's
+    // bootstrap, and several pipelines can share one FOR ALL TABLES publication while
+    // each owns its slot. Keying it on the publication would let one pipeline drop a
+    // marker guarding another's unfinished snapshot.
     fn markerName(self: *Self) ReplicationError![]u8 {
-        const pub_name = try self.lowerName(self.publication_name);
-        defer self.allocator.free(pub_name);
-        return std.fmt.allocPrint(self.allocator, "{s}_snapshotting", .{pub_name}) catch return ReplicationError.OutOfMemory;
+        const slot_name = try self.lowerName(self.slot_name);
+        defer self.allocator.free(slot_name);
+        return std.fmt.allocPrint(self.allocator, "{s}_snapshotting", .{slot_name}) catch return ReplicationError.OutOfMemory;
     }
 
     // Existence probe: true if any row matches `column = 'name'` in `relation`.

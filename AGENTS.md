@@ -120,10 +120,12 @@ TOML, secrets kept out of the file (see `docs/examples/config.toml`).
   lists `read`. It reads under the slot's exported snapshot, before
   `START_REPLICATION`, so it can't gap or overlap the stream. An interrupted
   snapshot is redone from scratch on the next start: a marker publication
-  `<publication>_snapshotting` (created before the slot, dropped once the snapshot
-  is flushed) flags an in-progress snapshot, so on restart a slot with the marker
-  still present is dropped and re-bootstrapped from a fresh consistent point. The
-  marker exists only during the snapshot, so steady state keeps a single
+  `<slot>_snapshotting` (created before the slot, dropped once the snapshot is
+  flushed) flags an in-progress snapshot, so on restart a slot with the marker
+  still present is dropped and re-bootstrapped from a fresh consistent point. It is
+  named after the slot, not the publication, because it guards that slot's
+  bootstrap and several pipelines can share one publication. The marker exists only
+  during the snapshot, so steady state keeps a single
   publication. pgoutput resolves the publication by name in the historical catalog
   per change, so the streaming publication must exist before the slot; that is why
   the marker is a separate publication and never passed to `START_REPLICATION`.
