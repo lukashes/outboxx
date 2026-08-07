@@ -134,10 +134,10 @@ fn run(init: std.process.Init) !void {
     var processor = Processor.init(allocator, source, producer, config.streams, &obs);
     defer processor.deinit();
 
-    // Initial snapshot: the first phase of the pipeline. A shutdown signal stops the
-    // run before streaming, so the next start redoes the bootstrap rather than
-    // streaming past unread rows. It is a graceful stop, like one during streaming,
-    // so it exits cleanly instead of through the fatal handler.
+    // First phase: the initial snapshot (if any), then the stream is opened, so `run`
+    // below only has to loop. A shutdown here is a graceful stop, like one during
+    // streaming, so it exits cleanly instead of through the fatal handler; the next
+    // start redoes the bootstrap rather than streaming past unread rows.
     processor.bootstrap(init.io, &shutdown_requested) catch |err| switch (err) {
         error.Shutdown => {
             printStatus("\nInitial snapshot interrupted; the bootstrap will restart on the next launch.\n", .{});
@@ -167,9 +167,9 @@ fn run(init: std.process.Init) !void {
             metrics_future.cancel(init.io);
             std.log.debug("main: metrics server cancelled", .{});
         }
-        try processor.startStreaming(init.io, &shutdown_requested);
+        try processor.run(init.io, &shutdown_requested);
     } else {
-        try processor.startStreaming(init.io, &shutdown_requested);
+        try processor.run(init.io, &shutdown_requested);
     }
 }
 

@@ -96,12 +96,9 @@ test "E2E: initial snapshot emits pre-existing rows as READ, then streams live c
 
     var stop_signal = std.atomic.Value(bool).init(false);
 
-    // Snapshot phase, then begin streaming. The processor derives the read resources
-    // from its streams and drives the snapshot through the source, like any batch.
+    // Snapshot phase, which also opens the stream. The processor derives the read
+    // resources from its streams and drives the snapshot through the source.
     try processor.bootstrap(std.testing.io, &stop_signal);
-
-    // The processor owns the source by value, so streaming must begin on its copy.
-    try processor.source.startStreaming();
 
     // A live insert AFTER streaming started: it enters the WAL past the slot start,
     // so it must arrive as a streamed INSERT, not via the snapshot.

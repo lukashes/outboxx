@@ -251,24 +251,27 @@ pub const Processor = struct {
             error.PartitionKeyUnavailable;
     }
 
-    /// Run the bootstrap phase of the pipeline: pull the read-opted resources from the
-    /// source and produce their rows as READ events, before streaming. Returning
-    /// without an error means the bootstrap is done, whether it read anything or was
-    /// a no-op (no stream opts into `read`, or the source has nothing to bootstrap).
-    /// A shutdown signal mid-bootstrap fails with error.Shutdown, so the caller stops
-    /// before streaming and the next start redoes it.
+    /// Bring the pipeline up and leave the source streaming: produce the read-opted
+    /// resources as READ events, then open the replication stream. The snapshot part
+    /// is skipped when no stream opts into `read` or the source has nothing to
+    /// bootstrap; the stream is opened either way, so `run` can assume it. Opening
+    /// the stream ends the snapshot phase for good, so both steps live here and the
+    /// order cannot be got wrong from outside. A shutdown signal mid-snapshot fails
+    /// with error.Shutdown, leaving the stream unopened so the next start redoes it.
     pub fn bootstrap(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !void {
-        if (!config_mod.needsInitialSnapshot(self.streams)) return;
-        if (!self.source.needsBootstrap()) return;
+        if (config_mod.needsInitialSnapshot(self.streams) and self.source.needsBootstrap()) {
+            const resources = try self.readResources();
+            defer self.allocator.free(resources);
 
-        const resources = try self.readResources();
-        defer self.allocator.free(resources);
+            try self.source.openSnapshot(io, resources);
 
-        try self.source.openSnapshot(io, resources);
+            std.log.info("Running initial snapshot for {} resource(s)", .{resources.len});
 
-        std.log.info("Running initial snapshot for {} resource(s)", .{resources.len});
+            try self.snapshotToKafka(stop_signal);
+        }
 
-        try self.snapshotToKafka(stop_signal);
+        // On the source, not the caller's copy: it is held by value here.
+        try self.source.startStreaming();
     }
 
     // The distinct resources of the read-opted streams, so a table read by several
@@ -309,6 +312,8 @@ pub const Processor = struct {
             defer batch_arena.deinit();
             const batch_alloc = batch_arena.allocator();
 
+            // Deliberately the stream's batch size: a bulk read may well want another
+            // value, but nothing measured says so yet.
             var batch = try self.source.receiveSnapshotBatch(batch_alloc, constants.CDC.BATCH_SIZE);
             defer batch.deinit();
 
@@ -337,14 +342,9 @@ pub const Processor = struct {
         std.log.info("Initial snapshot complete: {} READ events produced", .{self.events_processed});
     }
 
-    /// Begin replication (after the initial snapshot, if any) and run the batch loop
-    /// until stop_signal is set, with a background flush/commit worker.
-    pub fn startStreaming(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !void {
-        // Safe only once bootstrap is done: starting the stream ends the source's
-        // snapshot phase for good. On the source, not the caller's copy: it is held
-        // by value here.
-        try self.source.startStreaming();
-
+    /// Run the batch loop until stop_signal is set, with a background flush/commit
+    /// worker. Call after bootstrap, which leaves the source streaming.
+    pub fn run(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !void {
         // The source is connected and validated before we get here, so readiness's
         // connection signal goes up now; markStreaming follows on the first batch.
         self.obs.markConnected(true);
