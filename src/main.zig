@@ -137,7 +137,7 @@ fn run(init: std.process.Init) !void {
     // Initial snapshot: the first phase of the pipeline. A false return means a
     // shutdown signal interrupted it, so stop here and let the next start redo the
     // bootstrap rather than stream past unread rows.
-    if (!try processor.runInitialSnapshot(init.io, &shutdown_requested)) {
+    if (!try processor.bootstrap(init.io, &shutdown_requested)) {
         printStatus("\nInitial snapshot interrupted; the bootstrap will restart on the next launch.\n", .{});
         return;
     }

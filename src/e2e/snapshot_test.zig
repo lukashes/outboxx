@@ -98,7 +98,7 @@ test "E2E: initial snapshot emits pre-existing rows as READ, then streams live c
 
     // Snapshot phase, then begin streaming. The processor derives the read resources
     // from its streams and drives the snapshot through the source, like any batch.
-    const completed = try processor.runInitialSnapshot(std.testing.io, &stop_signal);
+    const completed = try processor.bootstrap(std.testing.io, &stop_signal);
     try testing.expect(completed);
 
     try processor.beginReplication();

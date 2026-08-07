@@ -259,12 +259,12 @@ pub const Processor = struct {
         try self.source.startStreaming();
     }
 
-    /// Run the initial-snapshot phase of the pipeline: pull the read-opted resources
-    /// from the source and produce their rows as READ events, before streaming. A
-    /// no-op returning true when no stream opts into `read` or the source has nothing
-    /// to bootstrap. Returns false when a shutdown signal interrupted it, so the
-    /// caller stops before streaming and the next start redoes the bootstrap.
-    pub fn runInitialSnapshot(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !bool {
+    /// Run the bootstrap phase of the pipeline: pull the read-opted resources from the
+    /// source and produce their rows as READ events, before streaming. A no-op
+    /// returning true when no stream opts into `read` or the source has nothing to
+    /// bootstrap. Returns false when a shutdown signal interrupted it, so the caller
+    /// stops before streaming and the next start redoes the bootstrap.
+    pub fn bootstrap(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !bool {
         if (!config_mod.needsInitialSnapshot(self.streams)) return true;
         if (!self.source.needsBootstrap()) return true;
 
@@ -352,8 +352,8 @@ pub const Processor = struct {
     /// Begin replication (after the initial snapshot, if any) and run the batch loop
     /// until stop_signal is set, with a background flush/commit worker.
     pub fn startStreaming(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !void {
-        // Safe only once runInitialSnapshot is done: starting the stream ends the
-        // source's snapshot phase for good.
+        // Safe only once bootstrap is done: starting the stream ends the source's
+        // snapshot phase for good.
         try self.beginReplication();
 
         // The source is connected and validated before we get here, so readiness's
