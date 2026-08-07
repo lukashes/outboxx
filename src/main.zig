@@ -134,13 +134,10 @@ fn run(init: std.process.Init) !void {
     var processor = Processor.init(allocator, source, producer, config.streams, &obs);
     defer processor.deinit();
 
-    // Initial snapshot: the first phase of the pipeline. A false return means a
-    // shutdown signal interrupted it, so stop here and let the next start redo the
-    // bootstrap rather than stream past unread rows.
-    if (!try processor.bootstrap(init.io, &shutdown_requested)) {
-        printStatus("\nInitial snapshot interrupted; the bootstrap will restart on the next launch.\n", .{});
-        return;
-    }
+    // Initial snapshot: the first phase of the pipeline. Any error (a shutdown signal
+    // included) stops the run before streaming, so the next start redoes the bootstrap
+    // rather than streaming past unread rows.
+    try processor.bootstrap(init.io, &shutdown_requested);
 
     printStatus("\nProcessor initialized successfully with slot: {s}\n", .{postgres.slot_name});
     printStatus("\nCDC processor started successfully!\n", .{});

@@ -260,13 +260,14 @@ pub const Processor = struct {
     }
 
     /// Run the bootstrap phase of the pipeline: pull the read-opted resources from the
-    /// source and produce their rows as READ events, before streaming. A no-op
-    /// returning true when no stream opts into `read` or the source has nothing to
-    /// bootstrap. Returns false when a shutdown signal interrupted it, so the caller
-    /// stops before streaming and the next start redoes the bootstrap.
-    pub fn bootstrap(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !bool {
-        if (!config_mod.needsInitialSnapshot(self.streams)) return true;
-        if (!self.source.needsBootstrap()) return true;
+    /// source and produce their rows as READ events, before streaming. Returning
+    /// without an error means the bootstrap is done, whether it read anything or was
+    /// a no-op (no stream opts into `read`, or the source has nothing to bootstrap).
+    /// A shutdown signal mid-bootstrap fails with error.Shutdown, so the caller stops
+    /// before streaming and the next start redoes it.
+    pub fn bootstrap(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !void {
+        if (!config_mod.needsInitialSnapshot(self.streams)) return;
+        if (!self.source.needsBootstrap()) return;
 
         const resources = try self.readResources();
         defer self.allocator.free(resources);
@@ -275,7 +276,7 @@ pub const Processor = struct {
 
         std.log.info("Running initial snapshot for {} resource(s)", .{resources.len});
 
-        return self.snapshotToKafka(stop_signal);
+        try self.snapshotToKafka(stop_signal);
     }
 
     // The distinct resources of the read-opted streams, so a table read by several
@@ -303,13 +304,12 @@ pub const Processor = struct {
 
     // Drain the source's snapshot batches and produce them as READ events through the
     // same path as streamed changes (produceEvent), mirroring processChangesToKafka.
-    // Returns true once an empty batch marks the snapshot read out and everything is
-    // flushed to Kafka; false if a shutdown signal interrupted it. The LSN is not
-    // advanced (pending_lsn stays 0): the slot moves only once the stream is
-    // confirmed. Consumers must treat READ as an upsert.
-    fn snapshotToKafka(self: *Self, stop_signal: *std.atomic.Value(bool)) !bool {
+    // Returns once an empty batch marks the snapshot read out and everything is
+    // flushed to Kafka. The LSN is not advanced (pending_lsn stays 0): the slot moves
+    // only once the stream is confirmed. Consumers must treat READ as an upsert.
+    fn snapshotToKafka(self: *Self, stop_signal: *std.atomic.Value(bool)) !void {
         while (true) {
-            if (stop_signal.load(.monotonic)) return false;
+            if (stop_signal.load(.monotonic)) return error.Shutdown;
 
             // One arena per batch, freed each turn; the events only need to live long
             // enough to be serialized and copied into librdkafka.
@@ -326,12 +326,9 @@ pub const Processor = struct {
             defer event_counts.deinit(batch_alloc);
 
             for (batch.changes) |change_event| {
-                // Backpressure saw stop_signal mid-produce: treat it as an interrupted
-                // snapshot, like the between-batch check above.
-                self.produceEvent(batch_alloc, stop_signal, change_event, &event_counts) catch |err| switch (err) {
-                    error.Shutdown => return false,
-                    else => return err,
-                };
+                // produceEvent surfaces a shutdown during backpressure as error.Shutdown,
+                // the same signal the between-batch check raises, so let it propagate.
+                try self.produceEvent(batch_alloc, stop_signal, change_event, &event_counts);
             }
             for (event_counts.items) |e| self.obs.addEvents(e.count, e.stream, e.operation);
         }
@@ -346,7 +343,6 @@ pub const Processor = struct {
         }
 
         std.log.info("Initial snapshot complete: {} READ events produced", .{self.events_processed});
-        return true;
     }
 
     /// Begin replication (after the initial snapshot, if any) and run the batch loop
