@@ -2,7 +2,6 @@ const std = @import("std");
 
 const PostgresSource = @import("../source/postgres/source.zig").PostgresSource;
 const Batch = @import("../source/postgres/source.zig").Batch;
-const SnapshotReader = @import("../source/postgres/snapshot.zig").SnapshotReader;
 
 const KafkaProducer = @import("../sink/kafka/producer.zig").KafkaProducer;
 const config_mod = @import("../config/config.zig");
@@ -149,8 +148,8 @@ pub const Processor = struct {
     }
 
     /// Receive one batch, route each change to its streams, and stage the batch LSN for commit.
-    pub fn processChangesToKafka(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool), batch_allocator: std.mem.Allocator, limit: u32) !void {
-        var batch = try self.source.receiveBatch(io, batch_allocator, limit);
+    pub fn processChangesToKafka(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool), allocator: std.mem.Allocator, limit: u32) !void {
+        var batch = try self.source.receiveBatch(io, allocator, limit);
         defer batch.deinit();
 
         // A successful receive (even an empty batch) means we are connected and
@@ -174,10 +173,10 @@ pub const Processor = struct {
         // combo per batch instead of one per routed change.
         self.obs.setLag(batch.replication_lag_seconds);
         var event_counts = std.ArrayList(EventCount).empty;
-        defer event_counts.deinit(batch_allocator);
+        defer event_counts.deinit(allocator);
 
         for (batch.changes) |change_event| {
-            try self.produceEvent(batch_allocator, stop_signal, change_event, &event_counts);
+            try self.produceEvent(allocator, stop_signal, change_event, &event_counts);
         }
 
         for (event_counts.items) |e| self.obs.addEvents(e.count, e.stream, e.operation);
@@ -191,23 +190,23 @@ pub const Processor = struct {
     // same serialize/match/partition/produce path.
     fn produceEvent(
         self: *Self,
-        batch_allocator: std.mem.Allocator,
+        allocator: std.mem.Allocator,
         stop_signal: *std.atomic.Value(bool),
         change_event: ChangeEvent,
         event_counts: *std.ArrayList(EventCount),
     ) !void {
-        var matched = try matchStreams(batch_allocator, self.streams, change_event);
-        defer matched.deinit(batch_allocator);
+        var matched = try matchStreams(allocator, self.streams, change_event);
+        defer matched.deinit(allocator);
 
         if (matched.items.len == 0) {
             return;
         }
 
-        const json_bytes = try self.serializer.serialize(change_event, batch_allocator);
+        const json_bytes = try self.serializer.serialize(change_event, allocator);
 
         for (matched.items) |stream| {
             const topic_name = stream.sink.destination;
-            const partition_key = try self.getPartitionKey(batch_allocator, change_event, stream);
+            const partition_key = try self.getPartitionKey(allocator, change_event, stream);
 
             // A full queue is backpressure, not failure: send blocks (stalling
             // the WAL read, so Postgres slows too) and retries. Shutdown and a
@@ -221,7 +220,7 @@ pub const Processor = struct {
                 },
             };
 
-            try tallyEvent(event_counts, batch_allocator, stream.name, change_event.op);
+            try tallyEvent(event_counts, allocator, stream.name, change_event.op);
 
             self.events_processed += 1;
             if (self.events_processed % 10000 == 0) {
@@ -253,46 +252,29 @@ pub const Processor = struct {
             error.PartitionKeyUnavailable;
     }
 
-    /// Finish the bootstrap and start replication on the owned source: drop the
-    /// snapshot marker (steady state returns to one publication) then
-    /// START_REPLICATION from the slot's start LSN (or "0/0" to resume an existing
-    /// slot). Call only after a completed snapshot (if any), so the slot's exported
-    /// snapshot outlived the reads; START_REPLICATION invalidates it. Separate from
+    /// Finish the bootstrap and start streaming on the owned source. Separate from
     /// the constructor because the source is held by value here, so streaming must
     /// begin on this copy, not the caller's.
     pub fn beginReplication(self: *Self) !void {
-        try self.source.finishSnapshot();
-        try self.source.startReplication(self.source.startLsn() orelse "0/0");
+        try self.source.startStreaming();
     }
 
-    /// Run the initial-snapshot phase of the pipeline: read the read-opted resources
-    /// under the slot's exported snapshot and produce their rows as READ events,
-    /// before streaming. A no-op returning true when the slot already existed
-    /// (nothing to bootstrap) or no stream opts into `read`. Returns false when a
-    /// shutdown signal interrupted it, so the caller stops before streaming and the
-    /// next start redoes the bootstrap (the snapshot marker stays in place). Opens
-    /// its own regular connection from `conninfo`, since the replication connection
-    /// must stay idle until START_REPLICATION.
-    pub fn runInitialSnapshot(self: *Self, io: std.Io, conninfo: []const u8, stop_signal: *std.atomic.Value(bool)) !bool {
-        // No exported snapshot means the slot already existed: nothing to bootstrap.
-        const snapshot_name = self.source.snapshotName() orelse return true;
-        if (!config_mod.wantsInitialSnapshot(self.streams)) return true;
+    /// Run the initial-snapshot phase of the pipeline: pull the read-opted resources
+    /// from the source and produce their rows as READ events, before streaming. A
+    /// no-op returning true when no stream opts into `read` or the source has nothing
+    /// to bootstrap. Returns false when a shutdown signal interrupted it, so the
+    /// caller stops before streaming and the next start redoes the bootstrap.
+    pub fn runInitialSnapshot(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !bool {
+        if (!config_mod.needsInitialSnapshot(self.streams)) return true;
 
         const resources = try self.readResources();
         defer self.allocator.free(resources);
-        if (resources.len == 0) return true;
+
+        if (!try self.source.openSnapshot(io, resources)) return true;
 
         std.log.info("Running initial snapshot for {} resource(s)", .{resources.len});
 
-        // meta.timestamp for READ rows: the snapshot's wall-clock start. meta.lsn is
-        // the slot's start LSN, so a snapshot row shares the dedup boundary with the
-        // first streamed change.
-        const timestamp = std.Io.Timestamp.now(io, .real).toSeconds();
-        var reader = SnapshotReader.init(self.allocator, snapshot_name, self.source.startLsn() orelse "0/0", timestamp);
-        defer reader.deinit();
-        try reader.connect(conninfo);
-
-        return self.snapshotToKafka(&reader, resources, stop_signal);
+        return self.snapshotToKafka(stop_signal);
     }
 
     // The distinct resources of the read-opted streams, so a table read by several
@@ -318,52 +300,39 @@ pub const Processor = struct {
         return resources.toOwnedSlice(self.allocator);
     }
 
-    // Read each resource's rows via the snapshot reader and produce them as READ
-    // events through the same path as streamed changes (produceEvent), mirroring
-    // processChangesToKafka. Returns true once every resource is fully read and
+    // Drain the source's snapshot batches and produce them as READ events through the
+    // same path as streamed changes (produceEvent), mirroring processChangesToKafka.
+    // Returns true once an empty batch marks the snapshot read out and everything is
     // flushed to Kafka; false if a shutdown signal interrupted it. The LSN is not
     // advanced (pending_lsn stays 0): the slot moves only once the stream is
     // confirmed. Consumers must treat READ as an upsert.
-    fn snapshotToKafka(
-        self: *Self,
-        reader: *SnapshotReader,
-        resources: []const []const u8,
-        stop_signal: *std.atomic.Value(bool),
-    ) !bool {
-        for (resources) |resource| {
-            var table = try reader.open(resource);
+    fn snapshotToKafka(self: *Self, stop_signal: *std.atomic.Value(bool)) !bool {
+        while (true) {
+            if (stop_signal.load(.monotonic)) return false;
 
-            // One arena per FETCH batch, freed each turn; the events only need to
-            // live long enough to be serialized and copied into librdkafka.
-            drain: while (true) {
-                if (stop_signal.load(.monotonic)) {
-                    try table.close();
-                    return false;
-                }
+            // One arena per batch, freed each turn; the events only need to live long
+            // enough to be serialized and copied into librdkafka.
+            var batch_arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer batch_arena.deinit();
+            const batch_alloc = batch_arena.allocator();
 
-                var batch_arena = std.heap.ArenaAllocator.init(self.allocator);
-                defer batch_arena.deinit();
-                const batch_alloc = batch_arena.allocator();
+            var batch = try self.source.receiveSnapshotBatch(batch_alloc, constants.CDC.BATCH_SIZE);
+            defer batch.deinit();
 
-                const events = (try table.next(batch_alloc, constants.CDC.BATCH_SIZE)) orelse break :drain;
+            if (batch.changes.len == 0) break;
 
-                var event_counts = std.ArrayList(EventCount).empty;
-                defer event_counts.deinit(batch_alloc);
+            var event_counts = std.ArrayList(EventCount).empty;
+            defer event_counts.deinit(batch_alloc);
 
-                for (events) |event| {
-                    // Backpressure saw stop_signal mid-produce: treat it as an
-                    // interrupted snapshot, like the between-batch check above.
-                    self.produceEvent(batch_alloc, stop_signal, event, &event_counts) catch |err| switch (err) {
-                        error.Shutdown => {
-                            try table.close();
-                            return false;
-                        },
-                        else => return err,
-                    };
-                }
-                for (event_counts.items) |e| self.obs.addEvents(e.count, e.stream, e.operation);
+            for (batch.changes) |change_event| {
+                // Backpressure saw stop_signal mid-produce: treat it as an interrupted
+                // snapshot, like the between-batch check above.
+                self.produceEvent(batch_alloc, stop_signal, change_event, &event_counts) catch |err| switch (err) {
+                    error.Shutdown => return false,
+                    else => return err,
+                };
             }
-            try table.close();
+            for (event_counts.items) |e| self.obs.addEvents(e.count, e.stream, e.operation);
         }
 
         // Durability barrier: the flush/commit worker is not running yet, so drain
@@ -382,8 +351,8 @@ pub const Processor = struct {
     /// Begin replication (after the initial snapshot, if any) and run the batch loop
     /// until stop_signal is set, with a background flush/commit worker.
     pub fn startStreaming(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !void {
-        // Drop the snapshot marker and START_REPLICATION; the exported snapshot has
-        // already been read by runInitialSnapshot, so it is safe to invalidate now.
+        // Safe only once runInitialSnapshot is done: starting the stream ends the
+        // source's snapshot phase for good.
         try self.beginReplication();
 
         // The source is connected and validated before we get here, so readiness's

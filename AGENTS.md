@@ -41,6 +41,12 @@ The domain model has no source/sink dependencies. The processor drives the
 pipeline batch by batch on an arena allocator (freed per batch); a background
 worker flushes Kafka and confirms the LSN off the hot path.
 
+The initial snapshot is part of the source, not the processor: `openSnapshot` /
+`receiveSnapshotBatch` / `startStreaming` hand out the same `Batch` the stream
+does, and an empty batch ends the snapshot phase. Slots, cursors, exported
+snapshots, and the marker publication stay inside `source/postgres/`, so the
+processor only picks the phase and routes domain events.
+
 ## Layout
 
 ```
@@ -55,6 +61,7 @@ src/
     replication_protocol.zig libpq streaming: connect, slot, publication, feedback
     pg_output_decoder.zig    binary pgoutput parser
     converter.zig            decoded message -> ChangeEvent (owns RelationRegistry)
+    snapshot.zig             initial-snapshot session: cursors over the exported snapshot
     relation_registry.zig    relation_id -> table metadata
     validator.zig            startup checks: version, wal_level, tables
   processor/processor.zig    pipeline, stream matching, flush/commit worker

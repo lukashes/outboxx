@@ -7,7 +7,7 @@ const getTestConnectionString = test_helpers.getTestConnectionString;
 const domain = @import("../../domain/change_event.zig");
 const RowDataHelpers = domain.RowDataHelpers;
 
-const SnapshotReader = @import("snapshot.zig").SnapshotReader;
+const SnapshotSession = @import("snapshot.zig").SnapshotSession;
 const PostgresSource = @import("source.zig").PostgresSource;
 
 const c = @import("c"); // C bindings (build-system translate-c)
@@ -44,7 +44,7 @@ fn execSQL(conn: *c.PGconn, sql: [:0]const u8) !void {
     }
 }
 
-test "SnapshotReader: reads existing rows as READ events, consistent with the exported snapshot" {
+test "SnapshotSession: reads existing rows as READ events, consistent with the exported snapshot" {
     const allocator = testing.allocator;
     const io = testing.io;
 
@@ -102,10 +102,10 @@ test "SnapshotReader: reads existing rows as READ events, consistent with the ex
     const lsn = "0/15D6E10";
     const timestamp = test_helpers.nowSeconds(io);
 
-    var reader = SnapshotReader.init(allocator, snapshot_name, lsn, timestamp);
-    defer reader.deinit();
-    try reader.connect(conn_str);
-    var table = try reader.open(resource);
+    const resources = [_][]const u8{resource};
+    var session = SnapshotSession.init(allocator, snapshot_name, lsn, timestamp, &resources);
+    defer session.deinit();
+    try session.connect(conn_str);
 
     // One arena for the whole read; a small fetch limit forces several FETCH round
     // trips over the five rows.
@@ -114,7 +114,10 @@ test "SnapshotReader: reads existing rows as READ events, consistent with the ex
 
     var seen = [_]bool{false} ** 7; // ids 1..5 expected; 6 must stay unseen
     var total: usize = 0;
-    while (try table.next(arena.allocator(), 2)) |events| {
+    while (true) {
+        const events = try session.next(arena.allocator(), 2);
+        if (events.len == 0) break;
+
         for (events) |event| {
             try testing.expectEqualStrings("READ", event.op);
             try testing.expectEqualStrings(resource, event.meta.resource);
@@ -140,14 +143,13 @@ test "SnapshotReader: reads existing rows as READ events, consistent with the ex
             total += 1;
         }
     }
-    try table.close();
 
     try testing.expectEqual(@as(usize, 5), total);
     for (1..6) |i| try testing.expect(seen[i]);
     try testing.expect(!seen[6]);
 }
 
-test "SnapshotReader: empty table yields no events" {
+test "SnapshotSession: empty table yields no events" {
     const allocator = testing.allocator;
     const io = testing.io;
 
@@ -180,16 +182,90 @@ test "SnapshotReader: empty table yields no events" {
     const conn_str = try getTestConnectionString(allocator);
     defer allocator.free(conn_str);
 
-    var reader = SnapshotReader.init(allocator, snapshot_name, "0/0", test_helpers.nowSeconds(io));
-    defer reader.deinit();
-    try reader.connect(conn_str);
-    var table = try reader.open(resource);
+    const resources = [_][]const u8{resource};
+    var session = SnapshotSession.init(allocator, snapshot_name, "0/0", test_helpers.nowSeconds(io), &resources);
+    defer session.deinit();
+    try session.connect(conn_str);
 
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
-    try testing.expect((try table.next(arena.allocator(), 10)) == null);
-    try table.close();
+    try testing.expectEqual(@as(usize, 0), (try session.next(arena.allocator(), 10)).len);
+}
+
+test "SnapshotSession: reads several resources in one session" {
+    const allocator = testing.allocator;
+    const io = testing.io;
+
+    const suffix = test_helpers.nowMicros(io);
+    const first_table = try std.fmt.allocPrint(allocator, "snap_multi_a_{d}", .{suffix});
+    defer allocator.free(first_table);
+    const second_table = try std.fmt.allocPrint(allocator, "snap_multi_b_{d}", .{suffix});
+    defer allocator.free(second_table);
+
+    const first_resource = try std.fmt.allocPrint(allocator, "public.{s}", .{first_table});
+    defer allocator.free(first_resource);
+    const second_resource = try std.fmt.allocPrint(allocator, "public.{s}", .{second_table});
+    defer allocator.free(second_resource);
+
+    const setup_conn = try createSetupConnection(allocator);
+    defer c.PQfinish(setup_conn);
+    defer {
+        const drop = std.fmt.allocPrintSentinel(allocator, "DROP TABLE IF EXISTS {s}; DROP TABLE IF EXISTS {s};", .{ first_table, second_table }, 0) catch unreachable;
+        defer allocator.free(drop);
+        execSQL(setup_conn, drop) catch {};
+    }
+
+    // Two rows each, so a fetch limit of 1 forces the session to cross from one
+    // cursor to the next mid-read.
+    for ([_][]const u8{ first_table, second_table }) |table| {
+        const create = try test_helpers.formatSqlZ(allocator, "CREATE TABLE {s} (id SERIAL PRIMARY KEY, name TEXT)", .{table});
+        defer allocator.free(create);
+        try execSQL(setup_conn, create);
+
+        const seed = try test_helpers.formatSqlZ(allocator, "INSERT INTO {s} (name) VALUES ('one'), ('two')", .{table});
+        defer allocator.free(seed);
+        try execSQL(setup_conn, seed);
+    }
+
+    const export_conn = try createSetupConnection(allocator);
+    defer c.PQfinish(export_conn);
+    try execSQL(export_conn, "BEGIN ISOLATION LEVEL REPEATABLE READ");
+    const export_result = c.PQexec(export_conn, "SELECT pg_export_snapshot()");
+    defer c.PQclear(export_result);
+    const snapshot_name = try allocator.dupe(u8, std.mem.span(c.PQgetvalue(export_result, 0, 0)));
+    defer allocator.free(snapshot_name);
+
+    const conn_str = try getTestConnectionString(allocator);
+    defer allocator.free(conn_str);
+
+    const resources = [_][]const u8{ first_resource, second_resource };
+    var session = SnapshotSession.init(allocator, snapshot_name, "0/0", test_helpers.nowSeconds(io), &resources);
+    defer session.deinit();
+    try session.connect(conn_str);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var per_resource = [_]usize{ 0, 0 };
+    while (true) {
+        const events = try session.next(arena.allocator(), 1);
+        if (events.len == 0) break;
+
+        for (events) |event| {
+            try testing.expectEqualStrings("READ", event.op);
+            if (std.mem.eql(u8, event.meta.resource, first_resource)) {
+                per_resource[0] += 1;
+            } else if (std.mem.eql(u8, event.meta.resource, second_resource)) {
+                per_resource[1] += 1;
+            } else {
+                return error.UnexpectedResource;
+            }
+        }
+    }
+
+    try testing.expectEqual(@as(usize, 2), per_resource[0]);
+    try testing.expectEqual(@as(usize, 2), per_resource[1]);
 }
 
 test "reconciliation: an interrupted snapshot drops the orphaned slot and recreates it" {

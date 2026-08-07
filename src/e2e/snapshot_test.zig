@@ -96,9 +96,9 @@ test "E2E: initial snapshot emits pre-existing rows as READ, then streams live c
 
     var stop_signal = std.atomic.Value(bool).init(false);
 
-    // Snapshot phase, then begin streaming. The processor orchestrates the reader
-    // from the connection string and derives the read resources from its streams.
-    const completed = try processor.runInitialSnapshot(std.testing.io, conn_str, &stop_signal);
+    // Snapshot phase, then begin streaming. The processor derives the read resources
+    // from its streams and drives the snapshot through the source, like any batch.
+    const completed = try processor.runInitialSnapshot(std.testing.io, &stop_signal);
     try testing.expect(completed);
 
     try processor.beginReplication();

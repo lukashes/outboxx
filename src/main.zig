@@ -124,7 +124,7 @@ fn run(init: std.process.Init) !void {
     // snapshot (if any) runs under the slot's exported snapshot first. Whether it
     // may run (which also drives interrupted-snapshot recovery on the slot) is
     // derived from the streams' `read` opt-in.
-    const want_snapshot = config_mod.wantsInitialSnapshot(config.streams);
+    const want_snapshot = config_mod.needsInitialSnapshot(config.streams);
     try source.connect(conninfo, want_snapshot);
     // NOTE: source will be deinit'd by processor.deinit()
 
@@ -135,10 +135,9 @@ fn run(init: std.process.Init) !void {
     defer processor.deinit();
 
     // Initial snapshot: the first phase of the pipeline. A false return means a
-    // shutdown signal interrupted it; the snapshot marker stays in place, so stop
-    // here and let the next start redo the bootstrap rather than stream past unread
-    // rows. startStreaming below begins replication once the snapshot is done.
-    if (!try processor.runInitialSnapshot(init.io, conninfo, &shutdown_requested)) {
+    // shutdown signal interrupted it, so stop here and let the next start redo the
+    // bootstrap rather than stream past unread rows.
+    if (!try processor.runInitialSnapshot(init.io, &shutdown_requested)) {
         printStatus("\nInitial snapshot interrupted; the bootstrap will restart on the next launch.\n", .{});
         return;
     }
