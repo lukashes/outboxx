@@ -266,11 +266,12 @@ pub const Processor = struct {
     /// caller stops before streaming and the next start redoes the bootstrap.
     pub fn runInitialSnapshot(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !bool {
         if (!config_mod.needsInitialSnapshot(self.streams)) return true;
+        if (!self.source.needsBootstrap()) return true;
 
         const resources = try self.readResources();
         defer self.allocator.free(resources);
 
-        if (!try self.source.openSnapshot(io, resources)) return true;
+        try self.source.openSnapshot(io, resources);
 
         std.log.info("Running initial snapshot for {} resource(s)", .{resources.len});
 

@@ -64,6 +64,9 @@ pub const PostgresSourceError = error{
     ReplicationFailed,
     DecodeFailed,
     ConversionFailed,
+    // openSnapshot without a bootstrap to run (see needsBootstrap), or a snapshot
+    // batch requested outside an open session.
+    SnapshotUnavailable,
     OutOfMemory,
 };
 
@@ -180,15 +183,18 @@ pub const PostgresSource = struct {
         self.protocol.createSlot() catch return PostgresSourceError.ConnectionFailed;
     }
 
-    /// Open an initial-snapshot session over `resources` and report whether one is
-    /// running. False means this run has nothing to bootstrap, so the caller goes
-    /// straight to streaming: either the slot already existed (no exported snapshot)
-    /// or no resource was asked for. The `resources` slice is copied; the names in it
-    /// are borrowed and must outlive the snapshot.
-    pub fn openSnapshot(self: *Self, io: std.Io, resources: []const []const u8) PostgresSourceError!bool {
-        const snapshot_name = self.protocol.snapshotName() orelse return false;
-        if (resources.len == 0) return false;
+    /// Whether this run still has to bootstrap: the slot was created now, so its
+    /// exported snapshot can still be read. False when the slot already existed, which
+    /// means it carries a confirmed position and streaming just resumes from it.
+    pub fn needsBootstrap(self: *const Self) bool {
+        return self.protocol.snapshotName() != null;
+    }
 
+    /// Open an initial-snapshot session over `resources`, to be drained with
+    /// receiveSnapshotBatch. Call only while needsBootstrap holds. The `resources`
+    /// slice is copied; the names in it are borrowed and must outlive the snapshot.
+    pub fn openSnapshot(self: *Self, io: std.Io, resources: []const []const u8) PostgresSourceError!void {
+        const snapshot_name = self.protocol.snapshotName() orelse return PostgresSourceError.SnapshotUnavailable;
         const conninfo = self.conninfo orelse return PostgresSourceError.ConnectionFailed;
 
         const owned_resources = self.allocator.dupe([]const u8, resources) catch return PostgresSourceError.OutOfMemory;
@@ -211,15 +217,13 @@ pub const PostgresSource = struct {
 
         self.snapshot_resources = owned_resources;
         self.snapshot = session;
-        return true;
     }
 
     /// Receive a batch of snapshot rows as READ changes, shaped like receiveBatch. An
     /// empty batch means every resource has been read out, so the caller can finish the
-    /// snapshot and move on to streaming. Call only while openSnapshot reported a
-    /// running session.
+    /// snapshot and move on to streaming. Call only after openSnapshot.
     pub fn receiveSnapshotBatch(self: *Self, allocator: std.mem.Allocator, limit: usize) PostgresSourceError!Batch {
-        const session = if (self.snapshot) |*s| s else return PostgresSourceError.ConnectionFailed;
+        const session = if (self.snapshot) |*s| s else return PostgresSourceError.SnapshotUnavailable;
 
         const changes = session.next(allocator, limit) catch |err| switch (err) {
             error.OutOfMemory => return PostgresSourceError.OutOfMemory,
