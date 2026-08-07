@@ -100,6 +100,19 @@ pub const PostgresSource = struct {
 
     const Self = @This();
 
+    /// What connect should prepare the slot for. Passing `stream_only` on a run that
+    /// may snapshot clears the marker, which would read an interrupted bootstrap as a
+    /// completed one.
+    pub const Bootstrap = enum {
+        /// This run may read an initial snapshot, so reconcile the slot against the
+        /// marker: one left by an interrupted bootstrap discards the slot and starts
+        /// over from a fresh consistent point.
+        with_snapshot,
+        /// This run only streams. An existing slot is resumed as is, so its confirmed
+        /// position survives.
+        stream_only,
+    };
+
     /// Initialize streaming source
     pub fn init(
         allocator: std.mem.Allocator,
@@ -131,9 +144,9 @@ pub const PostgresSource = struct {
     /// slot creation and streaming. On a freshly created slot the start LSN and
     /// exported snapshot are captured here (see startLsn/needsBootstrap).
     ///
-    /// `want_snapshot` says whether this run may run an initial snapshot, which
-    /// drives interrupted-snapshot recovery (see ensureSlot).
-    pub fn connect(self: *Self, connection_string: []const u8, want_snapshot: bool) PostgresSourceError!void {
+    /// `bootstrap` says whether this run may read an initial snapshot, which drives
+    /// interrupted-snapshot recovery (see ensureSlot).
+    pub fn connect(self: *Self, connection_string: []const u8, bootstrap: Bootstrap) PostgresSourceError!void {
         self.conninfo = self.allocator.dupe(u8, connection_string) catch return PostgresSourceError.OutOfMemory;
 
         self.protocol.connect(connection_string) catch |err| {
@@ -148,7 +161,7 @@ pub const PostgresSource = struct {
             return PostgresSourceError.ConnectionFailed;
         };
 
-        try self.ensureSlot(want_snapshot);
+        try self.ensureSlot(bootstrap);
     }
 
     // Reconcile the replication slot for this run using the snapshot marker as a
@@ -162,10 +175,10 @@ pub const PostgresSource = struct {
     // The marker is created before the slot, so a crash between the two leaves
     // "no slot, marker present", which reads as a fresh bootstrap, never a false
     // "completed".
-    fn ensureSlot(self: *Self, want_snapshot: bool) PostgresSourceError!void {
+    fn ensureSlot(self: *Self, bootstrap: Bootstrap) PostgresSourceError!void {
         const slot_exists = self.protocol.slotExists() catch return PostgresSourceError.ConnectionFailed;
 
-        if (!want_snapshot) {
+        if (bootstrap == .stream_only) {
             self.protocol.dropSnapshotMarker() catch return PostgresSourceError.ConnectionFailed;
             if (!slot_exists) self.protocol.createSlot() catch return PostgresSourceError.ConnectionFailed;
             return;

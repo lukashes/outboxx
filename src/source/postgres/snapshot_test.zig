@@ -296,7 +296,7 @@ test "reconciliation: an interrupted snapshot drops the orphaned slot and recrea
     const first_lsn = blk: {
         var source = PostgresSource.init(allocator, slot_name, pub_name);
         defer source.deinit();
-        try source.connect(conn_str, true);
+        try source.connect(conn_str, .with_snapshot);
         try testing.expect(source.startLsn() != null); // fresh slot
         break :blk try allocator.dupe(u8, source.startLsn().?);
     };
@@ -313,7 +313,7 @@ test "reconciliation: an interrupted snapshot drops the orphaned slot and recrea
     {
         var source = PostgresSource.init(allocator, slot_name, pub_name);
         defer source.deinit();
-        try source.connect(conn_str, true);
+        try source.connect(conn_str, .with_snapshot);
         try testing.expect(source.startLsn() != null); // redo -> a fresh slot
         try testing.expect(!std.mem.eql(u8, first_lsn, source.startLsn().?));
     }
@@ -349,7 +349,7 @@ test "reconciliation: a completed snapshot resumes without recreating the slot" 
     {
         var source = PostgresSource.init(allocator, slot_name, pub_name);
         defer source.deinit();
-        try source.connect(conn_str, true);
+        try source.connect(conn_str, .with_snapshot);
         try testing.expect(source.startLsn() != null);
         try source.finishSnapshot();
     }
@@ -362,7 +362,7 @@ test "reconciliation: a completed snapshot resumes without recreating the slot" 
     {
         var source = PostgresSource.init(allocator, slot_name, pub_name);
         defer source.deinit();
-        try source.connect(conn_str, true);
+        try source.connect(conn_str, .with_snapshot);
         try testing.expect(source.startLsn() == null); // resumed, not recreated
     }
 }

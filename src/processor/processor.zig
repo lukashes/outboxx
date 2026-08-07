@@ -3,8 +3,8 @@ const std = @import("std");
 const PostgresSource = @import("../source/postgres/source.zig").PostgresSource;
 
 const KafkaProducer = @import("../sink/kafka/producer.zig").KafkaProducer;
-const config_mod = @import("../config/config.zig");
-const Stream = config_mod.Stream;
+const Stream = @import("../config/config.zig").Stream;
+const needsInitialSnapshot = @import("../config/config.zig").needsInitialSnapshot;
 
 const domain = @import("../domain/change_event.zig");
 const ChangeEvent = domain.ChangeEvent;
@@ -259,7 +259,7 @@ pub const Processor = struct {
     /// order cannot be got wrong from outside. A shutdown signal mid-snapshot fails
     /// with error.Shutdown, leaving the stream unopened so the next start redoes it.
     pub fn bootstrap(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !void {
-        if (config_mod.needsInitialSnapshot(self.streams) and self.source.needsBootstrap()) {
+        if (needsInitialSnapshot(self.streams) and self.source.needsBootstrap()) {
             const resources = try self.readResources();
             defer self.allocator.free(resources);
 

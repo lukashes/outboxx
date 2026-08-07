@@ -78,8 +78,8 @@ test "E2E: initial snapshot emits pre-existing rows as READ, then streams live c
     }
 
     // Create the slot without streaming; this exports the snapshot the reader binds
-    // to. want_snapshot=true also creates the snapshot marker publication.
-    try source.connect(conn_str, true);
+    // to. .with_snapshot also creates the snapshot marker publication.
+    try source.connect(conn_str, .with_snapshot);
     const start_lsn = source.startLsn() orelse return error.NoConsistentPoint;
     try testing.expect(source.needsBootstrap()); // fresh slot exported a snapshot
 

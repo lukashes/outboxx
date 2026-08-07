@@ -124,8 +124,11 @@ fn run(init: std.process.Init) !void {
     // snapshot (if any) runs under the slot's exported snapshot first. Whether it
     // may run (which also drives interrupted-snapshot recovery on the slot) is
     // derived from the streams' `read` opt-in.
-    const want_snapshot = config_mod.needsInitialSnapshot(config.streams);
-    try source.connect(conninfo, want_snapshot);
+    const bootstrap: PostgresSource.Bootstrap = if (config_mod.needsInitialSnapshot(config.streams))
+        .with_snapshot
+    else
+        .stream_only;
+    try source.connect(conninfo, bootstrap);
     // NOTE: source will be deinit'd by processor.deinit()
 
     const producer = try initKafkaProducer(allocator, config.sink.kafka.?, kafka_sasl_pw);
