@@ -129,7 +129,7 @@ pub const PostgresSource = struct {
     /// Connect to PostgreSQL and ensure the publication and replication slot exist,
     /// without starting the stream, so a caller can run an initial snapshot between
     /// slot creation and streaming. On a freshly created slot the start LSN and
-    /// exported snapshot are captured here (see startLsn/snapshotName).
+    /// exported snapshot are captured here (see startLsn/needsBootstrap).
     ///
     /// `want_snapshot` says whether this run may run an initial snapshot, which
     /// drives interrupted-snapshot recovery (see ensureSlot).
@@ -286,13 +286,6 @@ pub const PostgresSource = struct {
     /// already existed (pass "0/0" to resume from its confirmed position).
     pub fn startLsn(self: *const Self) ?[]const u8 {
         return self.protocol.startLsn();
-    }
-
-    /// The slot's exported snapshot name when it was created in this run, or null
-    /// if the slot already existed. Present only alongside a fresh startLsn, so it
-    /// gates the initial snapshot. Valid until streaming starts on this connection.
-    pub fn snapshotName(self: *const Self) ?[]const u8 {
-        return self.protocol.snapshotName();
     }
 
     /// Receive batch of changes from PostgreSQL (default wait time from constants)

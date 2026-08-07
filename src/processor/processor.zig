@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const PostgresSource = @import("../source/postgres/source.zig").PostgresSource;
-const Batch = @import("../source/postgres/source.zig").Batch;
 
 const KafkaProducer = @import("../sink/kafka/producer.zig").KafkaProducer;
 const config_mod = @import("../config/config.zig");
@@ -252,13 +251,6 @@ pub const Processor = struct {
             error.PartitionKeyUnavailable;
     }
 
-    /// Finish the bootstrap and start streaming on the owned source. Separate from
-    /// the constructor because the source is held by value here, so streaming must
-    /// begin on this copy, not the caller's.
-    pub fn beginReplication(self: *Self) !void {
-        try self.source.startStreaming();
-    }
-
     /// Run the bootstrap phase of the pipeline: pull the read-opted resources from the
     /// source and produce their rows as READ events, before streaming. Returning
     /// without an error means the bootstrap is done, whether it read anything or was
@@ -349,8 +341,9 @@ pub const Processor = struct {
     /// until stop_signal is set, with a background flush/commit worker.
     pub fn startStreaming(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !void {
         // Safe only once bootstrap is done: starting the stream ends the source's
-        // snapshot phase for good.
-        try self.beginReplication();
+        // snapshot phase for good. On the source, not the caller's copy: it is held
+        // by value here.
+        try self.source.startStreaming();
 
         // The source is connected and validated before we get here, so readiness's
         // connection signal goes up now; markStreaming follows on the first batch.

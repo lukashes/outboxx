@@ -81,7 +81,7 @@ test "E2E: initial snapshot emits pre-existing rows as READ, then streams live c
     // to. want_snapshot=true also creates the snapshot marker publication.
     try source.connect(conn_str, true);
     const start_lsn = source.startLsn() orelse return error.NoConsistentPoint;
-    try testing.expect(source.snapshotName() != null); // fresh slot exported a snapshot
+    try testing.expect(source.needsBootstrap()); // fresh slot exported a snapshot
 
     const streams = try allocator.alloc(Stream, 1);
     defer allocator.free(streams);
@@ -100,7 +100,8 @@ test "E2E: initial snapshot emits pre-existing rows as READ, then streams live c
     // from its streams and drives the snapshot through the source, like any batch.
     try processor.bootstrap(std.testing.io, &stop_signal);
 
-    try processor.beginReplication();
+    // The processor owns the source by value, so streaming must begin on its copy.
+    try processor.source.startStreaming();
 
     // A live insert AFTER streaming started: it enters the WAL past the slot start,
     // so it must arrive as a streamed INSERT, not via the snapshot.

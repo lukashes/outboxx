@@ -20,6 +20,7 @@ Outboxx captures PostgreSQL database changes in real-time and streams them to Ka
 **Key Features:**
 - Natively fast
 - PostgreSQL streaming replication (pgoutput)
+- Initial snapshot of existing rows, consistent with the stream's start
 - Multi-table CDC streams
 - Kafka producer integration
 - TOML-based configuration
