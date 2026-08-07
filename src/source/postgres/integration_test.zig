@@ -159,7 +159,7 @@ test "Streaming source: receive and convert INSERT messages to ChangeEvents" {
     var source = PostgresSource.init(allocator, slot_name, pub_name);
     defer source.deinit(); // Source defer - declared SECOND, executes FIRST (before cleanup)
 
-    try source.connect(conn_str);
+    try source.connect(conn_str, .stream_only);
     try source.startReplication(start_lsn);
 
     std.log.info("Streaming source connected, receiving batch...", .{});
@@ -227,7 +227,7 @@ test "ReplicationProtocol: mixed-case slot and publication names are idempotent 
 
         try proto.connect(conn_str);
         try proto.createPublicationIfNotExists();
-        try proto.createSlotIfNotExists();
+        if (!try proto.slotExists()) try proto.createSlot();
     }
 }
 
@@ -303,7 +303,7 @@ test "Streaming source: UPDATE operation E2E with old and new tuples" {
     var source = PostgresSource.init(allocator, slot_name, pub_name);
     defer source.deinit();
 
-    try source.connect(conn_str);
+    try source.connect(conn_str, .stream_only);
     try source.startReplication(start_lsn);
 
     const batch = try source.receiveBatch(std.testing.io, allocator, 10);
@@ -432,7 +432,7 @@ test "Streaming source: unchanged TOAST column becomes the placeholder" {
     var source = PostgresSource.init(allocator, slot_name, pub_name);
     defer source.deinit();
 
-    try source.connect(conn_str);
+    try source.connect(conn_str, .stream_only);
     try source.startReplication(start_lsn);
 
     const batch = try source.receiveBatch(std.testing.io, allocator, 10);
@@ -547,7 +547,7 @@ test "Streaming source: DELETE operation E2E" {
     var source = PostgresSource.init(allocator, slot_name, pub_name);
     defer source.deinit();
 
-    try source.connect(conn_str);
+    try source.connect(conn_str, .stream_only);
     try source.startReplication(start_lsn);
 
     const batch = try source.receiveBatch(std.testing.io, allocator, 10);
@@ -658,7 +658,7 @@ test "Streaming source: Multiple batches with limit parameter" {
     var source = PostgresSource.init(allocator, slot_name, pub_name);
     defer source.deinit();
 
-    try source.connect(conn_str);
+    try source.connect(conn_str, .stream_only);
     try source.startReplication(start_lsn);
 
     var total_changes: usize = 0;
@@ -748,7 +748,7 @@ test "Streaming source: Timeout behavior with no data" {
     var source = PostgresSource.init(allocator, slot_name, pub_name);
     defer source.deinit();
 
-    try source.connect(conn_str);
+    try source.connect(conn_str, .stream_only);
     try source.startReplication(start_lsn);
 
     std.log.info("Waiting for timeout with no data (1 second)...", .{});
@@ -806,7 +806,7 @@ test "Streaming source: created slot captures the consistent point and streams f
 
     // Create the publication and slot through the protocol (not pre-created via
     // SQL), so CREATE_REPLICATION_SLOT runs and its start LSN is captured.
-    try source.connect(conn_str);
+    try source.connect(conn_str, .stream_only);
 
     try testing.expect(source.startLsn() != null);
     const start_lsn = source.startLsn().?;

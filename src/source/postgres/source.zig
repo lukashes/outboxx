@@ -17,6 +17,8 @@ const relation_registry = @import("relation_registry.zig");
 const converter = @import("converter.zig");
 pub const Converter = converter.Converter;
 
+const SnapshotSession = @import("snapshot.zig").SnapshotSession;
+
 // Re-export types for benchmarks (public API)
 pub const PgOutputMessage = pg_output_decoder.PgOutputMessage;
 pub const InsertMessage = pg_output_decoder.InsertMessage;
@@ -62,6 +64,9 @@ pub const PostgresSourceError = error{
     ReplicationFailed,
     DecodeFailed,
     ConversionFailed,
+    // openSnapshot without a bootstrap to run (see needsBootstrap), or a snapshot
+    // batch requested outside an open session.
+    SnapshotUnavailable,
     OutOfMemory,
 };
 
@@ -82,8 +87,31 @@ pub const PostgresSource = struct {
     // The stream does not expose the server WAL head during a backlog, so lag is
     // measured as wall-clock time behind this commit, like Debezium.
     last_commit_time: i64,
+    // Owned copy of the conninfo passed to connect. The initial snapshot needs a
+    // second, regular connection (the replication one must stay idle until
+    // START_REPLICATION), so the source keeps the string instead of asking for it
+    // again. Never log it: it carries the password.
+    conninfo: ?[]u8 = null,
+    // Live only between openSnapshot and finishSnapshot.
+    snapshot: ?SnapshotSession = null,
+    // Backs the session's resource list: the caller's slice may go away as soon as
+    // the snapshot is drained, while the session outlives it until finishSnapshot.
+    snapshot_resources: ?[][]const u8 = null,
 
     const Self = @This();
+
+    /// What connect should prepare the slot for. Passing `stream_only` on a run that
+    /// may snapshot clears the marker, which would read an interrupted bootstrap as a
+    /// completed one.
+    pub const Bootstrap = enum {
+        /// This run may read an initial snapshot, so reconcile the slot against the
+        /// marker: one left by an interrupted bootstrap discards the slot and starts
+        /// over from a fresh consistent point.
+        with_snapshot,
+        /// This run only streams. An existing slot is resumed as is, so its confirmed
+        /// position survives.
+        stream_only,
+    };
 
     /// Initialize streaming source
     pub fn init(
@@ -102,31 +130,159 @@ pub const PostgresSource = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        self.closeSnapshot();
+        if (self.conninfo) |conninfo| {
+            self.allocator.free(conninfo);
+            self.conninfo = null;
+        }
         self.protocol.deinit();
         self.converter.deinit();
     }
 
-    /// Connect to PostgreSQL and ensure the publication and replication slot
-    /// exist, without starting the stream. Split from startReplication so a
-    /// caller can run an initial snapshot between slot creation and streaming;
-    /// on a freshly created slot the start LSN is captured here (see startLsn).
-    pub fn connect(self: *Self, connection_string: []const u8) PostgresSourceError!void {
+    /// Connect to PostgreSQL and ensure the publication and replication slot exist,
+    /// without starting the stream, so a caller can run an initial snapshot between
+    /// slot creation and streaming. On a freshly created slot the start LSN and
+    /// exported snapshot are captured here (see startLsn/needsBootstrap).
+    ///
+    /// `bootstrap` says whether this run may read an initial snapshot, which drives
+    /// interrupted-snapshot recovery (see ensureSlot).
+    pub fn connect(self: *Self, connection_string: []const u8, bootstrap: Bootstrap) PostgresSourceError!void {
+        self.conninfo = self.allocator.dupe(u8, connection_string) catch return PostgresSourceError.OutOfMemory;
+
         self.protocol.connect(connection_string) catch |err| {
             std.log.warn("Failed to connect with replication protocol: {}", .{err});
             return PostgresSourceError.ConnectionFailed;
         };
 
-        // Create publication if it doesn't exist
+        // The streaming publication must exist before the slot, so the slot's start
+        // LSN falls after it and every streamed change decodes (see the protocol).
         self.protocol.createPublicationIfNotExists() catch |err| {
             std.log.warn("Failed to create publication: {}", .{err});
             return PostgresSourceError.ConnectionFailed;
         };
 
-        // Create replication slot if it doesn't exist
-        self.protocol.createSlotIfNotExists() catch |err| {
-            std.log.warn("Failed to create replication slot: {}", .{err});
+        try self.ensureSlot(bootstrap);
+    }
+
+    // Reconcile the replication slot for this run using the snapshot marker as a
+    // durable "snapshot in progress" flag (see the protocol's createSnapshotMarker):
+    // - snapshot run, slot present, no marker: a prior bootstrap completed, resume.
+    // - snapshot run, slot present, marker present: the snapshot was interrupted,
+    //   drop the orphaned slot and redo from a fresh consistent point.
+    // - snapshot run, no slot: fresh bootstrap.
+    // - no snapshot: resume an existing slot, create one if absent, and clear any
+    //   stale marker so steady state keeps a single publication.
+    // The marker is created before the slot, so a crash between the two leaves
+    // "no slot, marker present", which reads as a fresh bootstrap, never a false
+    // "completed".
+    fn ensureSlot(self: *Self, bootstrap: Bootstrap) PostgresSourceError!void {
+        const slot_exists = self.protocol.slotExists() catch return PostgresSourceError.ConnectionFailed;
+
+        if (bootstrap == .stream_only) {
+            self.protocol.dropSnapshotMarker() catch return PostgresSourceError.ConnectionFailed;
+            if (!slot_exists) self.protocol.createSlot() catch return PostgresSourceError.ConnectionFailed;
+            return;
+        }
+
+        if (slot_exists) {
+            const marker = self.protocol.snapshotMarkerExists() catch return PostgresSourceError.ConnectionFailed;
+            if (!marker) return; // completed bootstrap: resume, no snapshot
+
+            std.log.warn("Snapshot marker present: a prior initial snapshot was interrupted; restarting the bootstrap", .{});
+            self.protocol.dropSlot() catch return PostgresSourceError.ConnectionFailed;
+        }
+
+        self.protocol.createSnapshotMarker() catch return PostgresSourceError.ConnectionFailed;
+        self.protocol.createSlot() catch return PostgresSourceError.ConnectionFailed;
+    }
+
+    /// Whether this run still has to bootstrap: the slot was created now, so its
+    /// exported snapshot can still be read. False when the slot already existed, which
+    /// means it carries a confirmed position and streaming just resumes from it.
+    pub fn needsBootstrap(self: *const Self) bool {
+        return self.protocol.snapshotName() != null;
+    }
+
+    /// Open an initial-snapshot session over `resources`, to be drained with
+    /// receiveSnapshotBatch. Call only while needsBootstrap holds. The `resources`
+    /// slice is copied; the names in it are borrowed and must outlive the snapshot.
+    pub fn openSnapshot(self: *Self, io: std.Io, resources: []const []const u8) PostgresSourceError!void {
+        const snapshot_name = self.protocol.snapshotName() orelse return PostgresSourceError.SnapshotUnavailable;
+        const conninfo = self.conninfo orelse return PostgresSourceError.ConnectionFailed;
+
+        const owned_resources = self.allocator.dupe([]const u8, resources) catch return PostgresSourceError.OutOfMemory;
+        errdefer self.allocator.free(owned_resources);
+
+        // Every READ row is stamped with the snapshot's wall-clock start and the slot's
+        // start LSN, so a snapshot row and the first streamed change share the dedup
+        // boundary.
+        var session = SnapshotSession.init(
+            self.allocator,
+            snapshot_name,
+            self.protocol.startLsn() orelse "0/0",
+            std.Io.Timestamp.now(io, .real).toSeconds(),
+            owned_resources,
+        );
+        session.connect(conninfo) catch |err| {
+            std.log.warn("Failed to open the snapshot session: {}", .{err});
             return PostgresSourceError.ConnectionFailed;
         };
+
+        self.snapshot_resources = owned_resources;
+        self.snapshot = session;
+    }
+
+    /// Receive a batch of snapshot rows as READ changes, shaped like receiveBatch. An
+    /// empty batch means every resource has been read out, so the caller can finish the
+    /// snapshot and move on to streaming. Call only after openSnapshot.
+    pub fn receiveSnapshotBatch(self: *Self, allocator: std.mem.Allocator, limit: usize) PostgresSourceError!Batch {
+        const session = if (self.snapshot) |*s| s else return PostgresSourceError.SnapshotUnavailable;
+
+        const changes = session.next(allocator, limit) catch |err| switch (err) {
+            error.OutOfMemory => return PostgresSourceError.OutOfMemory,
+            else => {
+                std.log.warn("Failed to read the initial snapshot: {}", .{err});
+                return PostgresSourceError.ConnectionFailed;
+            },
+        };
+
+        // A snapshot batch carries no WAL position: the slot advances only once the
+        // stream is confirmed, so last_lsn stays 0 and lag/keepalive do not apply.
+        return .{
+            .changes = changes,
+            .last_lsn = 0,
+            .replication_lag_seconds = 0,
+            .received_keepalive = false,
+            .allocator = allocator,
+        };
+    }
+
+    /// Close the snapshot session and drop the marker, returning steady state to a
+    /// single publication. Idempotent, so it is safe to call even when this run ran no
+    /// snapshot.
+    pub fn finishSnapshot(self: *Self) PostgresSourceError!void {
+        self.closeSnapshot();
+        self.protocol.dropSnapshotMarker() catch return PostgresSourceError.ConnectionFailed;
+    }
+
+    fn closeSnapshot(self: *Self) void {
+        if (self.snapshot) |*session| {
+            session.deinit();
+            self.snapshot = null;
+        }
+        if (self.snapshot_resources) |resources| {
+            self.allocator.free(resources);
+            self.snapshot_resources = null;
+        }
+    }
+
+    /// Finish the bootstrap and start streaming changes: close any snapshot session,
+    /// drop the marker, then replicate from the slot's start LSN (or from its confirmed
+    /// position when the slot already existed). Call only once the snapshot is flushed,
+    /// since starting the stream invalidates the exported snapshot.
+    pub fn startStreaming(self: *Self) PostgresSourceError!void {
+        try self.finishSnapshot();
+        try self.startReplication(self.protocol.startLsn() orelse "0/0");
     }
 
     /// Start logical replication from start_lsn. Call after connect.

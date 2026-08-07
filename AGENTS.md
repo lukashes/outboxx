@@ -41,6 +41,12 @@ The domain model has no source/sink dependencies. The processor drives the
 pipeline batch by batch on an arena allocator (freed per batch); a background
 worker flushes Kafka and confirms the LSN off the hot path.
 
+The initial snapshot is part of the source, not the processor: `openSnapshot` /
+`receiveSnapshotBatch` / `startStreaming` hand out the same `Batch` the stream
+does, and an empty batch ends the snapshot phase. Slots, cursors, exported
+snapshots, and the marker publication stay inside `source/postgres/`, so the
+processor only picks the phase and routes domain events.
+
 ## Layout
 
 ```
@@ -55,6 +61,7 @@ src/
     replication_protocol.zig libpq streaming: connect, slot, publication, feedback
     pg_output_decoder.zig    binary pgoutput parser
     converter.zig            decoded message -> ChangeEvent (owns RelationRegistry)
+    snapshot.zig             initial-snapshot session: cursors over the exported snapshot
     relation_registry.zig    relation_id -> table metadata
     validator.zig            startup checks: version, wal_level, tables
   processor/processor.zig    pipeline, stream matching, flush/commit worker
@@ -89,6 +96,12 @@ for at-least-once redeliveries. pgoutput sends every value as text; the
 converter promotes int/float/bool OIDs to JSON types and keeps the rest
 (including `numeric`) as strings.
 
+`op` is `INSERT`/`UPDATE`/`DELETE` for WAL changes plus `READ` for an initial
+snapshot row (existing data read before streaming, shaped like an INSERT). A
+`READ` row carries the slot's start LSN as its `lsn`, the same boundary the
+stream then resumes from, so snapshot + stream cover every row with no gap or
+overlap. Consumers must treat `READ` as an upsert (redeliverable, like any op).
+
 ## Configuration
 
 TOML, secrets kept out of the file (see `docs/examples/config.toml`).
@@ -101,6 +114,21 @@ TOML, secrets kept out of the file (see `docs/examples/config.toml`).
   (`mechanism`, `username`, `password_env`).
 - `[observability]` (optional; absent = off): `address`/`port` for a Prometheus
   `/metrics` plus `/healthz` and `/readyz` HTTP server.
+- Initial snapshot: a stream opts in by listing `read` in its `operations`, and its
+  existing rows are emitted as `op="READ"` before streaming. There is no separate
+  toggle; the snapshot runs only when the slot is created this run and some stream
+  lists `read`. It reads under the slot's exported snapshot, before
+  `START_REPLICATION`, so it can't gap or overlap the stream. An interrupted
+  snapshot is redone from scratch on the next start: a marker publication
+  `<slot>_snapshotting` (created before the slot, dropped once the snapshot is
+  flushed) flags an in-progress snapshot, so on restart a slot with the marker
+  still present is dropped and re-bootstrapped from a fresh consistent point. It is
+  named after the slot, not the publication, because it guards that slot's
+  bootstrap and several pipelines can share one publication. The marker exists only
+  during the snapshot, so steady state keeps a single
+  publication. pgoutput resolves the publication by name in the historical catalog
+  per change, so the streaming publication must exist before the slot; that is why
+  the marker is a separate publication and never passed to `START_REPLICATION`.
 - Postgres needs `wal_level = logical`, plus `REPLICA IDENTITY FULL` on tables
   whose stream tracks DELETE (validated at startup; UPDATE emits only the new
   row, so it doesn't need it). Outboxx auto-creates the slot and publication.

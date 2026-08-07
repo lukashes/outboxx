@@ -1,10 +1,10 @@
 const std = @import("std");
 
 const PostgresSource = @import("../source/postgres/source.zig").PostgresSource;
-const Batch = @import("../source/postgres/source.zig").Batch;
 
 const KafkaProducer = @import("../sink/kafka/producer.zig").KafkaProducer;
 const Stream = @import("../config/config.zig").Stream;
+const needsInitialSnapshot = @import("../config/config.zig").needsInitialSnapshot;
 
 const domain = @import("../domain/change_event.zig");
 const ChangeEvent = domain.ChangeEvent;
@@ -147,8 +147,8 @@ pub const Processor = struct {
     }
 
     /// Receive one batch, route each change to its streams, and stage the batch LSN for commit.
-    pub fn processChangesToKafka(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool), batch_allocator: std.mem.Allocator, limit: u32) !void {
-        var batch = try self.source.receiveBatch(io, batch_allocator, limit);
+    pub fn processChangesToKafka(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool), allocator: std.mem.Allocator, limit: u32) !void {
+        var batch = try self.source.receiveBatch(io, allocator, limit);
         defer batch.deinit();
 
         // A successful receive (even an empty batch) means we are connected and
@@ -172,46 +172,60 @@ pub const Processor = struct {
         // combo per batch instead of one per routed change.
         self.obs.setLag(batch.replication_lag_seconds);
         var event_counts = std.ArrayList(EventCount).empty;
-        defer event_counts.deinit(batch_allocator);
+        defer event_counts.deinit(allocator);
 
         for (batch.changes) |change_event| {
-            var matched = try matchStreams(batch_allocator, self.streams, change_event);
-            defer matched.deinit(batch_allocator);
-
-            if (matched.items.len == 0) {
-                continue;
-            }
-
-            const json_bytes = try self.serializer.serialize(change_event, batch_allocator);
-
-            for (matched.items) |stream| {
-                const topic_name = stream.sink.destination;
-                const partition_key = try self.getPartitionKey(batch_allocator, change_event, stream);
-
-                // A full queue is backpressure, not failure: send blocks (stalling
-                // the WAL read, so Postgres slows too) and retries. Shutdown and a
-                // permanent delivery failure propagate as-is; anything else is a
-                // produce error worth recording before it fails the pipeline.
-                self.producer.send(stop_signal, topic_name, partition_key, json_bytes) catch |err| switch (err) {
-                    error.Shutdown, error.DeliveryFailed => return err,
-                    else => {
-                        self.obs.recordProduceError();
-                        return err;
-                    },
-                };
-
-                try tallyEvent(&event_counts, batch_allocator, stream.name, change_event.op);
-
-                self.events_processed += 1;
-                if (self.events_processed % 10000 == 0) {
-                    std.log.info("Processed {} CDC events", .{self.events_processed});
-                }
-            }
+            try self.produceEvent(allocator, stop_signal, change_event, &event_counts);
         }
 
         for (event_counts.items) |e| self.obs.addEvents(e.count, e.stream, e.operation);
 
         self.pending_lsn.store(batch.last_lsn, .release);
+    }
+
+    // Route one change to its matching streams and produce it to Kafka, tallying
+    // each produced (stream, operation) into event_counts. Shared by the streaming
+    // loop and the initial snapshot, so a READ row and a streamed change take the
+    // same serialize/match/partition/produce path.
+    fn produceEvent(
+        self: *Self,
+        allocator: std.mem.Allocator,
+        stop_signal: *std.atomic.Value(bool),
+        change_event: ChangeEvent,
+        event_counts: *std.ArrayList(EventCount),
+    ) !void {
+        var matched = try matchStreams(allocator, self.streams, change_event);
+        defer matched.deinit(allocator);
+
+        if (matched.items.len == 0) {
+            return;
+        }
+
+        const json_bytes = try self.serializer.serialize(change_event, allocator);
+
+        for (matched.items) |stream| {
+            const topic_name = stream.sink.destination;
+            const partition_key = try self.getPartitionKey(allocator, change_event, stream);
+
+            // A full queue is backpressure, not failure: send blocks (stalling
+            // the WAL read, so Postgres slows too) and retries. Shutdown and a
+            // permanent delivery failure propagate as-is; anything else is a
+            // produce error worth recording before it fails the pipeline.
+            self.producer.send(stop_signal, topic_name, partition_key, json_bytes) catch |err| switch (err) {
+                error.Shutdown, error.DeliveryFailed => return err,
+                else => {
+                    self.obs.recordProduceError();
+                    return err;
+                },
+            };
+
+            try tallyEvent(event_counts, allocator, stream.name, change_event.op);
+
+            self.events_processed += 1;
+            if (self.events_processed % 10000 == 0) {
+                std.log.info("Processed {} CDC events", .{self.events_processed});
+            }
+        }
     }
 
     fn getPartitionKey(
@@ -237,8 +251,100 @@ pub const Processor = struct {
             error.PartitionKeyUnavailable;
     }
 
-    /// Run the batch loop until stop_signal is set, with a background flush/commit worker.
-    pub fn startStreaming(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !void {
+    /// Bring the pipeline up and leave the source streaming: produce the read-opted
+    /// resources as READ events, then open the replication stream. The snapshot part
+    /// is skipped when no stream opts into `read` or the source has nothing to
+    /// bootstrap; the stream is opened either way, so `run` can assume it. Opening
+    /// the stream ends the snapshot phase for good, so both steps live here and the
+    /// order cannot be got wrong from outside. A shutdown signal mid-snapshot fails
+    /// with error.Shutdown, leaving the stream unopened so the next start redoes it.
+    pub fn bootstrap(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !void {
+        if (needsInitialSnapshot(self.streams) and self.source.needsBootstrap()) {
+            const resources = try self.readResources();
+            defer self.allocator.free(resources);
+
+            try self.source.openSnapshot(io, resources);
+
+            std.log.info("Running initial snapshot for {} resource(s)", .{resources.len});
+
+            try self.snapshotToKafka(stop_signal);
+        }
+
+        // On the source, not the caller's copy: it is held by value here.
+        try self.source.startStreaming();
+    }
+
+    // The distinct resources of the read-opted streams, so a table read by several
+    // streams is snapshotted once. Caller owns the returned slice; the strings are
+    // borrowed from the streams.
+    fn readResources(self: *Self) ![]const []const u8 {
+        var resources = std.ArrayList([]const u8).empty;
+        errdefer resources.deinit(self.allocator);
+
+        for (self.streams) |stream| {
+            if (!stream.hasReadOperation()) continue;
+
+            var seen = false;
+            for (resources.items) |r| {
+                if (std.mem.eql(u8, r, stream.source.resource)) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen) try resources.append(self.allocator, stream.source.resource);
+        }
+
+        return resources.toOwnedSlice(self.allocator);
+    }
+
+    // Drain the source's snapshot batches and produce them as READ events through the
+    // same path as streamed changes (produceEvent), mirroring processChangesToKafka.
+    // Returns once an empty batch marks the snapshot read out and everything is
+    // flushed to Kafka. The LSN is not advanced (pending_lsn stays 0): the slot moves
+    // only once the stream is confirmed. Consumers must treat READ as an upsert.
+    fn snapshotToKafka(self: *Self, stop_signal: *std.atomic.Value(bool)) !void {
+        while (true) {
+            if (stop_signal.load(.monotonic)) return error.Shutdown;
+
+            // One arena per batch, freed each turn; the events only need to live long
+            // enough to be serialized and copied into librdkafka.
+            var batch_arena = std.heap.ArenaAllocator.init(self.allocator);
+            defer batch_arena.deinit();
+            const batch_alloc = batch_arena.allocator();
+
+            // Deliberately the stream's batch size: a bulk read may well want another
+            // value, but nothing measured says so yet.
+            var batch = try self.source.receiveSnapshotBatch(batch_alloc, constants.CDC.BATCH_SIZE);
+            defer batch.deinit();
+
+            if (batch.changes.len == 0) break;
+
+            var event_counts = std.ArrayList(EventCount).empty;
+            defer event_counts.deinit(batch_alloc);
+
+            for (batch.changes) |change_event| {
+                // produceEvent surfaces a shutdown during backpressure as error.Shutdown,
+                // the same signal the between-batch check raises, so let it propagate.
+                try self.produceEvent(batch_alloc, stop_signal, change_event, &event_counts);
+            }
+            for (event_counts.items) |e| self.obs.addEvents(e.count, e.stream, e.operation);
+        }
+
+        // Durability barrier: the flush/commit worker is not running yet, so drain
+        // the producer here and fail fast if any READ event was not delivered,
+        // before streaming begins to advance the slot past them.
+        try self.producer.flush(null);
+        if (self.producer.deliveryErrorCount() > 0 or self.producer.fatalError()) {
+            std.log.warn("Kafka delivery failed during initial snapshot; exiting for restart", .{});
+            return error.DeliveryFailed;
+        }
+
+        std.log.info("Initial snapshot complete: {} READ events produced", .{self.events_processed});
+    }
+
+    /// Run the batch loop until stop_signal is set, with a background flush/commit
+    /// worker. Call after bootstrap, which leaves the source streaming.
+    pub fn run(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !void {
         // The source is connected and validated before we get here, so readiness's
         // connection signal goes up now; markStreaming follows on the first batch.
         self.obs.markConnected(true);

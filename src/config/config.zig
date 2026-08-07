@@ -124,7 +124,27 @@ pub const Stream = struct {
         }
         return false;
     }
+
+    /// Whether this stream opts into the initial snapshot (lists "read"), so its
+    /// existing rows are emitted as READ events before streaming.
+    pub fn hasReadOperation(self: Stream) bool {
+        for (self.source.operations) |op| {
+            if (std.mem.eql(u8, op, "read")) return true;
+        }
+        return false;
+    }
 };
+
+/// Whether any stream opts into the initial snapshot by listing `read`. The single
+/// source of truth for the snapshot gate: the caller connecting the source (to
+/// drive interrupted-snapshot recovery on the slot) and the processor running the
+/// snapshot both derive it from the same streams.
+pub fn needsInitialSnapshot(streams: []const Stream) bool {
+    for (streams) |stream| {
+        if (stream.hasReadOperation()) return true;
+    }
+    return false;
+}
 
 pub const TableFilter = struct {
     include: []const []const u8,
@@ -1010,6 +1030,37 @@ test "Config validation - invalid SASL mechanism fails" {
     var cfg = createTestDefault();
     cfg.sink.kafka.?.sasl = .{ .mechanism = "GSSAPI", .username = "app", .password_env = "KAFKA_PASSWORD" };
     try testing.expectError(error.InvalidEnumValue, cfg.validate(testing.allocator));
+}
+
+test "Stream.hasReadOperation reflects the configured operations" {
+    const base: Stream = .{
+        .name = "s",
+        .source = .{ .resource = "users", .operations = &.{} },
+        .flow = .{ .format = "json" },
+        .sink = .{ .destination = "t", .routing_key = "id" },
+    };
+
+    var read_insert = base;
+    read_insert.source.operations = &.{ "read", "insert" };
+    try testing.expect(read_insert.hasReadOperation());
+
+    var stream_only = base;
+    stream_only.source.operations = &.{ "insert", "update" };
+    try testing.expect(!stream_only.hasReadOperation());
+}
+
+test "needsInitialSnapshot is driven by the read opt-in" {
+    const no_read: Stream = .{
+        .name = "s",
+        .source = .{ .resource = "users", .operations = &.{ "insert", "update" } },
+        .flow = .{ .format = "json" },
+        .sink = .{ .destination = "t", .routing_key = "id" },
+    };
+    try testing.expect(!needsInitialSnapshot(&.{no_read}));
+
+    var with_read = no_read;
+    with_read.source.operations = &.{ "read", "insert" };
+    try testing.expect(needsInitialSnapshot(&.{ no_read, with_read }));
 }
 
 test "Config validation - full SASL over TLS passes" {

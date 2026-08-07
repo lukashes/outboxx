@@ -118,22 +118,36 @@ fn run(init: std.process.Init) !void {
     printStatus("Using PostgreSQL streaming replication (pgoutput protocol)\n", .{});
 
     var source = PostgresSource.init(allocator, postgres.slot_name, postgres.publication_name);
-    // NOTE: source will be deinit'd by processor.deinit()
 
     printStatus("Connecting to PostgreSQL streaming replication...\n", .{});
-    try source.connect(conninfo);
-
-    // A freshly created slot exposes its start LSN; stream from it so we begin
-    // exactly at the slot's start. An existing slot has none, so resume from its
-    // confirmed position, which "0/0" selects.
-    const start_lsn = source.startLsn() orelse "0/0";
-    try source.startReplication(start_lsn);
+    // Connect and ensure the slot exists, without streaming yet, so the initial
+    // snapshot (if any) runs under the slot's exported snapshot first. Whether it
+    // may run (which also drives interrupted-snapshot recovery on the slot) is
+    // derived from the streams' `read` opt-in.
+    const bootstrap: PostgresSource.Bootstrap = if (config_mod.needsInitialSnapshot(config.streams))
+        .with_snapshot
+    else
+        .stream_only;
+    try source.connect(conninfo, bootstrap);
+    // NOTE: source will be deinit'd by processor.deinit()
 
     const producer = try initKafkaProducer(allocator, config.sink.kafka.?, kafka_sasl_pw);
     // NOTE: producer will be deinit'd by processor.deinit()
 
     var processor = Processor.init(allocator, source, producer, config.streams, &obs);
     defer processor.deinit();
+
+    // First phase: the initial snapshot (if any), then the stream is opened, so `run`
+    // below only has to loop. A shutdown here is a graceful stop, like one during
+    // streaming, so it exits cleanly instead of through the fatal handler; the next
+    // start redoes the bootstrap rather than streaming past unread rows.
+    processor.bootstrap(init.io, &shutdown_requested) catch |err| switch (err) {
+        error.Shutdown => {
+            printStatus("\nInitial snapshot interrupted; the bootstrap will restart on the next launch.\n", .{});
+            return;
+        },
+        else => return err,
+    };
 
     printStatus("\nProcessor initialized successfully with slot: {s}\n", .{postgres.slot_name});
     printStatus("\nCDC processor started successfully!\n", .{});
@@ -156,9 +170,9 @@ fn run(init: std.process.Init) !void {
             metrics_future.cancel(init.io);
             std.log.debug("main: metrics server cancelled", .{});
         }
-        try processor.startStreaming(init.io, &shutdown_requested);
+        try processor.run(init.io, &shutdown_requested);
     } else {
-        try processor.startStreaming(init.io, &shutdown_requested);
+        try processor.run(init.io, &shutdown_requested);
     }
 }
 

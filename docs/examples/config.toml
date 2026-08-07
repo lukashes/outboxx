@@ -52,15 +52,15 @@ port = 9464          # conventional OpenTelemetry Prometheus exporter port
 name = "users-stream"
 
 [streams.source]
-resource = "users"                           # table; use "schema.table" for a non-public schema (default: public)
-operations = ["insert", "update", "delete"]  # subset of insert | update | delete
+resource = "users"                                   # table; use "schema.table" for a non-public schema (default: public)
+operations = ["read", "insert", "update", "delete"]  # subset of read | insert | update | delete; "read" opts into the initial snapshot
 
 [streams.flow]
-format = "json"                              # only json is supported
+format = "json"                                      # only json is supported
 
 [streams.sink]
-destination = "public.users"                 # Kafka topic
-routing_key = "id"                           # column used as the partition key (default: id)
+destination = "public.users"                         # Kafka topic
+routing_key = "id"                                   # column used as the partition key (default: id)
 
 [[streams]]
 name = "orders-stream"
