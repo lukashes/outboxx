@@ -301,7 +301,6 @@ pub const ReplicationProtocol = struct {
         return std.ascii.allocLowerString(self.allocator, name) catch return ReplicationError.OutOfMemory;
     }
 
-    // The snapshot marker publication name, derived from the streaming publication.
     // Named after the slot, not the publication: the marker guards the slot's
     // bootstrap, and several pipelines can share one FOR ALL TABLES publication while
     // each owns its slot. Keying it on the publication would let one pipeline drop a

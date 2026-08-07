@@ -56,11 +56,11 @@ resource = "users"                                   # table; use "schema.table"
 operations = ["read", "insert", "update", "delete"]  # subset of read | insert | update | delete; "read" opts into the initial snapshot
 
 [streams.flow]
-format = "json"                              # only json is supported
+format = "json"                                      # only json is supported
 
 [streams.sink]
-destination = "public.users"                 # Kafka topic
-routing_key = "id"                           # column used as the partition key (default: id)
+destination = "public.users"                         # Kafka topic
+routing_key = "id"                                   # column used as the partition key (default: id)
 
 [[streams]]
 name = "orders-stream"
