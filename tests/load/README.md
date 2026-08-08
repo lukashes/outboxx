@@ -23,6 +23,8 @@ What each command does:
 - `make start-all` starts Debezium, Outboxx, and pgstream together. Debezium is registered automatically.
 - `make reset` stops the stand and removes this stand's PostgreSQL, Kafka, Prometheus, and Grafana volumes.
 
+For the initial-snapshot scenario (pre-seeded rows instead of a WAL backlog), see [Initial Snapshot](#initial-snapshot).
+
 To benchmark the local checkout, copy the example override and rebuild:
 
 ```sh
@@ -76,6 +78,59 @@ Set the lookback with `MINUTES=` (default 60). The window must bracket a single 
 pgstream creates its replication slot and internal schema itself through `pgstream init`, not `create-slots.sql`. The `pgstream-init` service runs that step from `create-slots`, so the wal2json slot exists before load just like the pgoutput slots. The reader runs from the prebuilt `ghcr.io/xataio/pgstream` image pinned in `docker-compose.yml`, so there is nothing to build.
 
 Config lives in `pgstream/config.yaml`. The Kafka batch is enlarged over pgstream's upstream example so it drains the backlog in batches closer to debezium's. The injector and XIDs are turned off so events carry row data instead of pgstream's internal ids (schema_id, table/column pgstream ids). The event shape itself (`action`, `columns[]`, `identity` on updates/deletes) is hardcoded in pgstream's serialiser, so it stays more verbose than outboxx's `op`/`data`/`meta`, and `REPLICA IDENTITY FULL` (needed by debezium/outboxx deletes) keeps `identity` populated; config cannot change either.
+
+## Initial Snapshot
+
+The second scenario measures the bootstrap of a table that already has data: how
+fast a reader turns N pre-existing rows into Kafka messages, and what it costs in
+memory. It is a separate flow because it needs the opposite starting state from
+the backlog scenario.
+
+```sh
+cd tests/load
+
+make reset
+make seed ROWS=2000000 ROW_BYTES=128
+make snapshot-outboxx    # or: make snapshot-debezium
+make check-gaps
+make results MINUTES=30
+```
+
+- `make seed` brings infra up **without** creating slots, drops any slot left
+  over, and inserts `ROWS` rows through `postgres/seed.sql` (truncating first, so
+  ids start at 1). With no slot in place PostgreSQL retains no WAL, so the reader
+  has only the snapshot to do and the number is not a backlog drain in disguise.
+  The seed runs in the Postgres container rather than in the workload generator:
+  the insert is server-side either way, and this keeps the scenario to images the
+  stand already has.
+- `make snapshot-outboxx` drops the slots again and starts outboxx with
+  `outboxx/config.snapshot.toml`, which adds `read` to the stream's operations.
+  Both halves are needed: `read` is the opt-in, and outboxx has to create the slot
+  itself, because the snapshot is read under the snapshot that
+  `CREATE_REPLICATION_SLOT` exports. Watch for
+  `Initial snapshot complete: N READ events produced` in `make logs`.
+- `make snapshot-debezium` does the same for Debezium with
+  `connector/register-postgres-snapshot.json` (`snapshot.mode: initial`).
+- `make check-gaps` verifies the snapshot emitted every seeded row: it compares
+  the ids on the outboxx topic against the table's sequence.
+
+`make results` needs no snapshot-specific flag. It brackets the window in which a
+topic grows from its first to its last offset, which for this scenario is exactly
+the snapshot. Run `make reset` before each measured run: it puts every topic back
+at offset 0, and it clears Debezium's stored offsets, without which Debezium
+resumes instead of snapshotting.
+
+Results (fill from a real run):
+
+```text
+tool             events   drain(s)      evt/s(eff)    mem_peak  cpu_peak
+debezium              -          -               -           -         -
+outboxx               -          -               -           -         -
+```
+
+The comparison is outboxx and Debezium only. pgstream stays on
+`mode: replication`; it can snapshot, but it reports no Prometheus metrics here,
+so it would add configuration without adding a signal.
 
 ## Load Parameters
 
@@ -164,13 +219,14 @@ make load BATCH_SIZE=5000 ROW_BYTES=512 UPDATE_RATIO=1.5 DELETE_RATIO=0.1
 ## Debug Commands
 
 ```sh
-make ps       # containers
-make slots    # retained/unflushed WAL per logical slot
-make status   # Debezium connector status
-make topics   # Kafka topics
-make offsets  # Debezium and Outboxx topic offsets
-make results  # headline numbers (throughput/mem/cpu) from Prometheus
-make logs     # follow relevant logs
+make ps          # containers
+make slots       # retained/unflushed WAL per logical slot
+make drop-slots  # clear the pgoutput slots so the next reader bootstraps
+make status      # Debezium connector status
+make topics      # Kafka topics
+make offsets     # Debezium and Outboxx topic offsets
+make results     # headline numbers (throughput/mem/cpu) from Prometheus
+make logs        # follow relevant logs
 ```
 
 Topics:
@@ -192,3 +248,9 @@ and lag behind source in seconds: outboxx (`outboxx_events_processed_total`,
 are wall-clock time behind the last committed transaction, so they share one axis.
 pgstream has no Prometheus endpoint (OTLP only), so on its board the self-reported
 panels stay outboxx-only.
+
+The Debezium board has one extra panel for the initial-snapshot scenario, rows/sec
+during the bulk read. Outboxx needs no new metric there: its events counter is
+labelled by operation, so the snapshot is `operation="READ"`. Debezium reports the
+snapshot under its own JMX context (`debezium_postgres_snapshot_*`), separate from
+the streaming metrics the other panels use.

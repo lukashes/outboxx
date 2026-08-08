@@ -4,7 +4,12 @@ DEBEZIUM_OFFSET_FLUSH_INTERVAL_MS ?= 1000
 LOAD_POSTGRES_PORT ?= 15432
 LOAD_KAFKA_PORT ?= 19092
 LOAD_KAFKA_CONTROLLER_PORT ?= 19093
-COMPOSE ?= DEBEZIUM_COMPRESSION_TYPE=$(DEBEZIUM_COMPRESSION_TYPE) DEBEZIUM_OFFSET_FLUSH_INTERVAL_MS=$(DEBEZIUM_OFFSET_FLUSH_INTERVAL_MS) LOAD_POSTGRES_PORT=$(LOAD_POSTGRES_PORT) LOAD_KAFKA_PORT=$(LOAD_KAFKA_PORT) LOAD_KAFKA_CONTROLLER_PORT=$(LOAD_KAFKA_CONTROLLER_PORT) docker compose -p $(PROJECT_NAME)
+# Which reader config the scenario runs with: the defaults stream only, the
+# snapshot-* targets override them with the snapshotting pair.
+OUTBOXX_CONFIG ?= config.toml
+DEBEZIUM_CONNECTOR ?= register-postgres.json
+
+COMPOSE ?= DEBEZIUM_COMPRESSION_TYPE=$(DEBEZIUM_COMPRESSION_TYPE) DEBEZIUM_OFFSET_FLUSH_INTERVAL_MS=$(DEBEZIUM_OFFSET_FLUSH_INTERVAL_MS) LOAD_POSTGRES_PORT=$(LOAD_POSTGRES_PORT) LOAD_KAFKA_PORT=$(LOAD_KAFKA_PORT) LOAD_KAFKA_CONTROLLER_PORT=$(LOAD_KAFKA_CONTROLLER_PORT) OUTBOXX_CONFIG=$(OUTBOXX_CONFIG) DEBEZIUM_CONNECTOR=$(DEBEZIUM_CONNECTOR) docker compose -p $(PROJECT_NAME)
 
 INFRA_SERVICES := postgres kafka postgres-exporter kafka-exporter prometheus grafana cadvisor kafka-ui
 DEBEZIUM_SERVICES := debezium
@@ -20,9 +25,13 @@ UPDATE_RATIO ?= 0
 DELETE_RATIO ?= 0
 REPORT_INTERVAL ?= 5
 
+# Rows the snapshot scenario pre-seeds before a reader is started.
+ROWS ?= 2000000
+
 MINUTES ?= 60
 
-.PHONY: infra infra-up load start-debezium start-outboxx start-pgstream start-all reset create-slots slots status topics offsets check-gaps results logs ps
+.PHONY: infra infra-up load start-debezium start-outboxx start-pgstream start-all reset create-slots drop-slots slots status topics offsets check-gaps results logs ps
+.PHONY: snapshot-infra seed snapshot-outboxx snapshot-debezium
 
 # Bring infra up and ensure slots exist, leaving any running CDC readers alone.
 infra-up:
@@ -74,6 +83,40 @@ start-all:
 	$(COMPOSE) up -d --build $(ALL_CDC_SERVICES)
 	$(COMPOSE) run --rm connector-init
 
+# Initial-snapshot scenario: no slot, so no WAL is retained while the table is
+# seeded and the reader has nothing but the bulk read to do. Same infra as the
+# backlog scenario, minus create-slots.
+snapshot-infra:
+	$(COMPOSE) up -d --remove-orphans $(INFRA_SERVICES)
+	-$(COMPOSE) stop $(ALL_CDC_SERVICES)
+	-$(COMPOSE) rm -sf $(ALL_CDC_SERVICES) connector-init pgstream-init
+	$(MAKE) drop-slots
+
+# Seeds through psql, not the workload container: the insert is set-based anyway,
+# and this keeps the snapshot scenario down to images the stand already has.
+seed: snapshot-infra
+	$(COMPOSE) exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d bench \
+		-v rows=$(ROWS) -v row_bytes=$(ROW_BYTES) -f /sql/seed.sql
+
+# Outboxx bootstraps the seeded rows: `read` in the config plus a slot it creates
+# itself, which is what hands it the exported snapshot to read under.
+snapshot-outboxx: OUTBOXX_CONFIG = config.snapshot.toml
+snapshot-outboxx:
+	$(COMPOSE) up -d --remove-orphans $(INFRA_SERVICES)
+	-$(COMPOSE) rm -sf $(ALL_CDC_SERVICES) connector-init
+	$(MAKE) drop-slots
+	$(COMPOSE) up -d --build $(OUTBOXX_SERVICES)
+
+# Debezium's counterpart, snapshot.mode=initial. It decides to snapshot from its
+# stored offsets, so run this on a stand reset (make reset) or it resumes instead.
+snapshot-debezium: DEBEZIUM_CONNECTOR = register-postgres-snapshot.json
+snapshot-debezium:
+	$(COMPOSE) up -d --remove-orphans $(INFRA_SERVICES)
+	-$(COMPOSE) rm -sf $(ALL_CDC_SERVICES) connector-init
+	$(MAKE) drop-slots
+	$(COMPOSE) up -d --build $(DEBEZIUM_SERVICES)
+	$(COMPOSE) run --rm connector-init
+
 reset:
 	$(COMPOSE) down -v --remove-orphans
 	-docker volume rm $(PROJECT_NAME)_postgres-data $(PROJECT_NAME)_kafka-data $(PROJECT_NAME)_prometheus-data $(PROJECT_NAME)_grafana-data
@@ -81,6 +124,11 @@ reset:
 create-slots:
 	$(COMPOSE) exec -T postgres psql -U postgres -d bench -f /sql/create-slots.sql
 	-$(COMPOSE) run --rm pgstream-init
+
+# Fails if a slot is still active, which means a reader is running and the
+# scenario would resume rather than snapshot. Stop it and retry.
+drop-slots:
+	$(COMPOSE) exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d bench -f /sql/drop-slots.sql
 
 slots:
 	$(COMPOSE) exec -T postgres psql -U postgres -d bench -f /sql/slot-lag.sql

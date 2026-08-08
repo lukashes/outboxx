@@ -35,6 +35,8 @@ services:
       - postgres-data:/var/lib/postgresql/data
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/001-init.sql:ro
       - ./postgres/create-slots.sql:/sql/create-slots.sql:ro
+      - ./postgres/drop-slots.sql:/sql/drop-slots.sql:ro
+      - ./postgres/seed.sql:/sql/seed.sql:ro
       - ./postgres/slot-lag.sql:/sql/slot-lag.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d bench"]
@@ -118,7 +120,9 @@ services:
       debezium:
         condition: service_healthy
     volumes:
-      - ./connector/register-postgres.json:/register-postgres.json:ro
+      # Which connector config to register picks the scenario: the default streams
+      # only, register-postgres-snapshot.json snapshots first.
+      - ./connector/${DEBEZIUM_CONNECTOR:-register-postgres.json}:/register-postgres.json:ro
     command:
       - sh
       - -c
@@ -163,7 +167,9 @@ services:
     ports:
       - "9464:9464"  # Prometheus /metrics, /healthz, /readyz
     volumes:
-      - ./outboxx/config.toml:/app/config.toml:ro
+      # Same idea as the debezium connector file: config.snapshot.toml adds the
+      # `read` opt-in, everything else is shared.
+      - ./outboxx/${OUTBOXX_CONFIG:-config.toml}:/app/config.toml:ro
     command: ["--config", "/app/config.toml"]
     restart: unless-stopped
 

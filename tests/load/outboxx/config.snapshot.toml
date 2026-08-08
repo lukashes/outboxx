@@ -1,0 +1,44 @@
+# Initial-snapshot scenario. Identical to config.toml except for the `read`
+# opt-in, which is what makes outboxx bootstrap the pre-seeded rows before it
+# streams. Slot, publication, and topic are shared with the streaming scenario,
+# so results.sh and check-gaps.sh work against either run.
+#
+# `read` alone is not enough: the snapshot also needs outboxx to create the slot
+# itself (that is where the exported snapshot comes from), so the snapshot-*
+# make targets drop the slots first.
+
+[metadata]
+version = "v0"
+
+[source]
+type = "postgres"
+
+[source.postgres]
+connection_env = "POSTGRES_URL"
+slot_name = "outboxx_benchmark_slot"
+publication_name = "outboxx_benchmark_publication"
+
+[sink]
+type = "kafka"
+
+[sink.kafka]
+brokers = ["kafka:9092"]
+tls = false  # the benchmark broker is plaintext
+
+[observability]
+address = "0.0.0.0"
+port = 9464
+
+[[streams]]
+name = "benchmark-records"
+
+[streams.source]
+resource = "benchmark_records"
+operations = ["read", "insert", "update", "delete"]
+
+[streams.flow]
+format = "json"
+
+[streams.sink]
+destination = "outboxx.public.benchmark_records"
+routing_key = "id"
