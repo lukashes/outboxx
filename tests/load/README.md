@@ -90,7 +90,7 @@ the backlog scenario.
 cd tests/load
 
 make reset
-make seed ROWS=2000000 ROW_BYTES=128
+make seed ROWS=10000000 ROW_BYTES=128
 make snapshot-outboxx    # or: make snapshot-debezium
 make check-gaps
 make results MINUTES=30
