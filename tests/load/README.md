@@ -135,8 +135,9 @@ debezium              -          -               -           -         -
 ```
 
 The bulk read runs faster than the streaming figure on the same box: it is a
-sequential scan of a live table, with no WAL to decode. The Debezium row is still
-open.
+sequential scan of a live table, with no WAL to decode. `make check-gaps` on the
+same run reports 10000000 messages, 10000000 distinct ids, no gaps and no
+duplicates. The Debezium row is still open.
 
 Size the seed so the read outlives a few scrapes. `ROWS` defaults to 10M for that
 reason: 2M drains in under one 5s Prometheus interval, and `make results` then has
