@@ -8,4 +8,5 @@ comptime {
     _ = @import("source/postgres/integration_test.zig");
     _ = @import("source/postgres/snapshot_test.zig");
     _ = @import("processor/routing_integration_test.zig");
+    _ = @import("processor/snapshot_integration_test.zig");
 }

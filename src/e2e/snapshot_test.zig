@@ -12,10 +12,12 @@ const c = test_helpers.c;
 // E2E Test: initial snapshot + streaming boundary
 //
 // Proves the #49 consistency contract end to end: rows that existed before the
-// slot was created arrive as READ events (from the exported snapshot), a row
-// inserted after streaming starts arrives as an INSERT, and the two meet with no
-// gap or overlap. The READ rows carry the slot's start LSN, the same boundary the
-// stream begins from.
+// slot was created arrive as READ events (from the exported snapshot), the live
+// changes made after streaming starts arrive as INSERT/UPDATE/DELETE, and the two
+// phases meet with no gap or overlap. The READ rows carry the slot's start LSN,
+// the same boundary the stream begins from. Running all three change operations
+// past the boundary also proves the pipeline is fully wired after the phase
+// switch, not just for the first change.
 
 pub const std_options: std.Options = .{
     .log_level = .debug,
@@ -57,11 +59,11 @@ test "E2E: initial snapshot emits pre-existing rows as READ, then streams live c
     defer allocator.free(seed);
     _ = c.PQexec(conn, seed.ptr);
 
-    // A stream that opts into the snapshot (read) and also tracks live inserts.
+    // A stream that opts into the snapshot (read) and tracks every live operation.
     var stream_config = try test_helpers.createTestStreamConfig(allocator, table_name, topic_name);
     defer allocator.free(stream_config.name);
     defer allocator.free(stream_config.source.resource);
-    stream_config.source.operations = &.{ "read", "insert" };
+    stream_config.source.operations = &.{ "read", "insert", "update", "delete" };
 
     // NOTE: source will be deinit'd by processor.deinit().
     var source = PostgresSource.init(allocator, slot_name, pub_name);
@@ -100,9 +102,14 @@ test "E2E: initial snapshot emits pre-existing rows as READ, then streams live c
     // resources from its streams and drives the snapshot through the source.
     try processor.bootstrap(std.testing.io, &stop_signal);
 
-    // A live insert AFTER streaming started: it enters the WAL past the slot start,
-    // so it must arrive as a streamed INSERT, not via the snapshot.
-    const live = try test_helpers.formatSqlZ(allocator, "INSERT INTO {s} (name, value) VALUES ('Dave', 400)", .{table_name});
+    // Live changes AFTER streaming started: they enter the WAL past the slot start,
+    // so they must arrive as streamed events, not via the snapshot. All three
+    // operations run, so the whole pipeline is exercised past the phase switch.
+    const live = try test_helpers.formatSqlZ(allocator,
+        \\INSERT INTO {s} (name, value) VALUES ('Dave', 400);
+        \\UPDATE {s} SET value = 111 WHERE id = 1;
+        \\DELETE FROM {s} WHERE id = 2;
+    , .{ table_name, table_name, table_name });
     defer allocator.free(live);
     _ = c.PQexec(conn, live.ptr);
     test_helpers.sleepNs(std.testing.io, 200_000_000);
@@ -114,41 +121,41 @@ test "E2E: initial snapshot emits pre-existing rows as READ, then streams live c
     const messages = try test_helpers.consumeAllMessages(std.testing.io, allocator, topic_name, 10000);
     defer test_helpers.cleanupJsonMessages(messages, allocator);
 
-    // Three seeded rows as READ + one live row as INSERT.
-    try testing.expectEqual(@as(usize, 4), messages.len);
+    // Three seeded rows as READ + the three live changes.
+    try testing.expectEqual(@as(usize, 6), messages.len);
 
     var read_count: usize = 0;
-    var insert_count: usize = 0;
-    var seen_ids = [_]bool{false} ** 5; // ids 1..4
+    var seen_read_ids = [_]bool{false} ** 4; // ids 1..3
 
-    for (messages) |msg| {
-        const op = msg.value.object.get("op").?.string;
-        const data = msg.value.object.get("data").?.object;
-        const id = data.get("id").?.integer;
+    for (messages[0..3]) |msg| {
+        const id = msg.value.object.get("data").?.object.get("id").?.integer;
 
-        if (std.mem.eql(u8, op, "READ")) {
-            read_count += 1;
-            // The dedup boundary: every READ row carries the slot's start LSN, the
-            // point streaming then resumes from.
-            try test_helpers.assertJsonField(msg, "meta.lsn", start_lsn);
-            try test_helpers.assertJsonField(msg, "meta.resource", stream_config.source.resource);
-            try testing.expect(id >= 1 and id <= 3); // seeded rows
-        } else if (std.mem.eql(u8, op, "INSERT")) {
-            insert_count += 1;
-            try test_helpers.assertJsonField(msg, "data.name", "Dave");
-            try testing.expectEqual(@as(i64, 4), id); // the live row, not in the snapshot
-        }
-        try testing.expect(!seen_ids[@intCast(id)]);
-        seen_ids[@intCast(id)] = true;
+        try test_helpers.assertJsonField(msg, "op", "READ");
+        // The dedup boundary: every READ row carries the slot's start LSN, the
+        // point streaming then resumes from.
+        try test_helpers.assertJsonField(msg, "meta.lsn", start_lsn);
+        try test_helpers.assertJsonField(msg, "meta.resource", stream_config.source.resource);
+        try testing.expect(id >= 1 and id <= 3); // seeded rows
+        try testing.expect(!seen_read_ids[@intCast(id)]);
+        seen_read_ids[@intCast(id)] = true;
+        read_count += 1;
     }
 
     try testing.expectEqual(@as(usize, 3), read_count);
-    try testing.expectEqual(@as(usize, 1), insert_count);
+    // No gap, no overlap: the snapshot covered exactly the rows that predate the slot.
+    for (1..4) |i| try testing.expect(seen_read_ids[i]);
 
-    // No gap, no overlap: the snapshot covered ids 1..3, the stream covered id 4.
-    for (1..5) |i| try testing.expect(seen_ids[i]);
+    // Single-partition dev topic, so the log order is the produce order: the
+    // snapshot ran to completion before the stream opened, and the live changes
+    // follow in WAL order.
+    try test_helpers.assertJsonField(messages[3], "op", "INSERT");
+    try test_helpers.assertJsonField(messages[3], "data.name", "Dave");
+    try testing.expectEqual(@as(i64, 4), messages[3].value.object.get("data").?.object.get("id").?.integer);
 
-    // Single-partition dev topic: the snapshot rows were produced before the live
-    // insert, so they precede it in the log.
-    try test_helpers.assertJsonField(messages[messages.len - 1], "op", "INSERT");
+    try test_helpers.assertJsonField(messages[4], "op", "UPDATE");
+    try testing.expectEqual(@as(i64, 1), messages[4].value.object.get("data").?.object.get("id").?.integer);
+    try testing.expectEqual(@as(i64, 111), messages[4].value.object.get("data").?.object.get("value").?.integer);
+
+    try test_helpers.assertJsonField(messages[5], "op", "DELETE");
+    try testing.expectEqual(@as(i64, 2), messages[5].value.object.get("data").?.object.get("id").?.integer);
 }
