@@ -25,13 +25,15 @@ UPDATE_RATIO ?= 0
 DELETE_RATIO ?= 0
 REPORT_INTERVAL ?= 5
 
-# Rows the snapshot scenario pre-seeds before a reader is started.
-ROWS ?= 2000000
+# Rows the snapshot scenario pre-seeds before a reader is started. Sized so the
+# bulk read outlives a few 5s Prometheus scrapes: 2M drains faster than one, and
+# `make results` then has no growth window to measure.
+ROWS ?= 10000000
 
 MINUTES ?= 60
 
 .PHONY: infra infra-up load start-debezium start-outboxx start-pgstream start-all reset create-slots drop-slots slots status topics offsets check-gaps results logs ps
-.PHONY: snapshot-infra seed snapshot-outboxx snapshot-debezium
+.PHONY: snapshot-infra create-topics seed snapshot-outboxx snapshot-debezium
 
 # Bring infra up and ensure slots exist, leaving any running CDC readers alone.
 infra-up:
@@ -91,6 +93,17 @@ snapshot-infra:
 	-$(COMPOSE) stop $(ALL_CDC_SERVICES)
 	-$(COMPOSE) rm -sf $(ALL_CDC_SERVICES) connector-init pgstream-init
 	$(MAKE) drop-slots
+	$(MAKE) create-topics
+
+# Topics have to exist before the reader starts, or kafka-exporter discovers them
+# only on its next metadata refresh, which for a snapshot can be after the whole
+# thing is over. Then `make results` sees one flat series and reports zero.
+create-topics:
+	@for topic in debezium outboxx pgstream; do \
+		$(COMPOSE) exec -T kafka /kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 \
+			--create --if-not-exists --partitions 1 --replication-factor 1 \
+			--topic $$topic.public.benchmark_records; \
+	done
 
 # Seeds through psql, not the workload container: the insert is set-based anyway,
 # and this keeps the snapshot scenario down to images the stand already has.

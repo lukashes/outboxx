@@ -120,13 +120,27 @@ the snapshot. Run `make reset` before each measured run: it puts every topic bac
 at offset 0, and it clears Debezium's stored offsets, without which Debezium
 resumes instead of snapshotting.
 
-Results (fill from a real run):
+`make seed` creates the three topics up front, which matters more here than in the
+backlog scenario. kafka-exporter only reports a topic it has seen in a metadata
+refresh, so a topic auto-created by the first produce can go unreported until the
+snapshot is already over, and `make results` would then show a flat series and
+zero events.
+
+Results (Apple M1, 10M rows of 128 bytes, 2560 MB table):
 
 ```text
 tool             events   drain(s)      evt/s(eff)    mem_peak  cpu_peak
+outboxx        10000000         40          250000     87.9 MB      0.39
 debezium              -          -               -           -         -
-outboxx               -          -               -           -         -
 ```
+
+The bulk read runs faster than the streaming figure on the same box: it is a
+sequential scan of a live table, with no WAL to decode. The Debezium row is still
+open.
+
+Size the seed so the read outlives a few scrapes. `ROWS` defaults to 10M for that
+reason: 2M drains in under one 5s Prometheus interval, and `make results` then has
+no growth window to report.
 
 The comparison is outboxx and Debezium only. pgstream stays on
 `mode: replication`; it can snapshot, but it reports no Prometheus metrics here,
@@ -254,3 +268,9 @@ during the bulk read. Outboxx needs no new metric there: its events counter is
 labelled by operation, so the snapshot is `operation="READ"`. Debezium reports the
 snapshot under its own JMX context (`debezium_postgres_snapshot_*`), separate from
 the streaming metrics the other panels use.
+
+Outboxx's half of that panel does not draw yet. `main.zig` starts the observability
+server after the bootstrap returns, so `/metrics`, `/healthz`, and `/readyz` are all
+down for the whole snapshot and the counter is first scraped already at its final
+value. Until that ordering changes, snapshot throughput for outboxx comes from the
+Kafka append rate panel and `make results`, which read the topic from outside.
