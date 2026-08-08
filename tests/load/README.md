@@ -70,7 +70,7 @@ Set the lookback with `MINUTES=` (default 60). The window must bracket a single 
 
 [pgstream](https://github.com/xataio/pgstream) is the golang CDC reader in the comparison (from Xata), next to outboxx (zig) and debezium (java). Two things set it apart from both and shape the stand:
 
-- It decodes the WAL with the `wal2json` output plugin, not `pgoutput`. Neither the stock `postgres` image nor `debezium/postgres` ships wal2json, so the shared Postgres is built from `postgres/Dockerfile` (`postgres:18` with `postgresql-18-wal2json` added), keeping the built-in pgoutput that debezium and outboxx use.
+- It decodes the WAL with the `wal2json` output plugin, not `pgoutput`. Neither the stock `postgres` image nor `debezium/postgres` ships wal2json, so the shared Postgres is built from `postgres/Dockerfile` (`postgres:17` with `postgresql-17-wal2json` added), keeping the built-in pgoutput that debezium and outboxx use.
 - It exports metrics over OTLP only, with no Prometheus endpoint to scrape. Its throughput and resource use come from kafka-exporter (topic append rate) and cAdvisor (memory/CPU), the same outward signals `make results` reads for every tool. The self-reported Grafana panels (events/sec, lag) stay debezium/outboxx only.
 
 pgstream creates its replication slot and internal schema itself through `pgstream init`, not `create-slots.sql`. The `pgstream-init` service runs that step from `create-slots`, so the wal2json slot exists before load just like the pgoutput slots. The reader runs from the prebuilt `ghcr.io/xataio/pgstream` image pinned in `docker-compose.yml`, so there is nothing to build.
