@@ -9,12 +9,9 @@ const KafkaProducer = @import("../sink/kafka/producer.zig").KafkaProducer;
 const Stream = @import("../config/config.zig").Stream;
 const c = test_helpers.c;
 
-// The snapshot resource set is derived from the streams, and that derivation
-// (Processor.readResources) is the one snapshot step with no source-level
-// counterpart to test: it decides which tables are read and how many times.
-// The matrix below is the one that can go wrong: two streams sharing a resource
-// must not read it twice, and a stream without `read` must not be snapshotted at
-// all even though it sits in the same publication.
+// Processor.readResources decides which tables the snapshot reads and how many
+// times. Two streams sharing a resource must not read it twice, and a stream
+// without `read` must not be snapshotted at all.
 
 test "Processor.bootstrap: reads a shared resource once and skips streams without read" {
     const allocator = testing.allocator;
@@ -42,8 +39,8 @@ test "Processor.bootstrap: reads a shared resource once and skips streams withou
     const pub_name = try std.fmt.allocPrint(allocator, "snap_fanout_pub_{d}", .{timestamp});
     defer allocator.free(pub_name);
 
-    // Two topics for the read table, so a resource shared by two streams shows up
-    // as a fan-out rather than as a second read.
+    // Two topics for the read table: a resource shared by two streams must show up
+    // as a fan-out, not as a second read.
     const topic_primary = try std.fmt.allocPrint(allocator, "topic.snap.fanout.primary.{d}", .{timestamp});
     defer allocator.free(topic_primary);
     const topic_mirror = try std.fmt.allocPrint(allocator, "topic.snap.fanout.mirror.{d}", .{timestamp});
@@ -111,8 +108,8 @@ test "Processor.bootstrap: reads a shared resource once and skips streams withou
     var stop_signal = std.atomic.Value(bool).init(false);
     try processor.bootstrap(std.testing.io, &stop_signal);
 
-    // A live change on the read-less table: it must still stream, so the missing
-    // `read` is proven to skip the snapshot rather than the stream.
+    // A live change on the read-less table, so the missing `read` is shown to skip
+    // the snapshot rather than the stream.
     const live = try test_helpers.formatSqlZ(allocator, "INSERT INTO {s} (name, value) VALUES ('Erin', 500)", .{table_plain});
     defer allocator.free(live);
     _ = c.PQexec(conn, live.ptr);

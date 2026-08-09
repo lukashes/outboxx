@@ -1,11 +1,6 @@
-# Initial-snapshot scenario. Identical to config.toml except for the `read`
-# opt-in, which is what makes outboxx bootstrap the pre-seeded rows before it
-# streams. Slot, publication, and topic are shared with the streaming scenario,
-# so results.sh and check-gaps.sh work against either run.
-#
-# `read` alone is not enough: the snapshot also needs outboxx to create the slot
-# itself (that is where the exported snapshot comes from), so the snapshot-*
-# make targets drop the slots first.
+# Initial-snapshot scenario: config.toml plus `read`, which opts the stream into
+# the bootstrap. That alone is not enough, the snapshot also needs outboxx to
+# create the slot itself, so the snapshot-* make targets drop the slots first.
 
 [metadata]
 version = "v0"

@@ -120,8 +120,6 @@ services:
       debezium:
         condition: service_healthy
     volumes:
-      # Which connector config to register picks the scenario: the default streams
-      # only, register-postgres-snapshot.json snapshots first.
       - ./connector/${DEBEZIUM_CONNECTOR:-register-postgres.json}:/register-postgres.json:ro
     command:
       - sh
@@ -167,8 +165,6 @@ services:
     ports:
       - "9464:9464"  # Prometheus /metrics, /healthz, /readyz
     volumes:
-      # Same idea as the debezium connector file: config.snapshot.toml adds the
-      # `read` opt-in, everything else is shared.
       - ./outboxx/${OUTBOXX_CONFIG:-config.toml}:/app/config.toml:ro
     command: ["--config", "/app/config.toml"]
     restart: unless-stopped

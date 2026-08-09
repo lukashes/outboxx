@@ -25,9 +25,8 @@ UPDATE_RATIO ?= 0
 DELETE_RATIO ?= 0
 REPORT_INTERVAL ?= 5
 
-# Rows the snapshot scenario pre-seeds before a reader is started. Sized so the
-# bulk read outlives a few 5s Prometheus scrapes: 2M drains faster than one, and
-# `make results` then has no growth window to measure.
+# Rows the snapshot scenario pre-seeds. 2M drains faster than one 5s Prometheus
+# scrape, leaving `make results` no growth window to measure.
 ROWS ?= 10000000
 
 MINUTES ?= 60
@@ -86,8 +85,7 @@ start-all:
 	$(COMPOSE) run --rm connector-init
 
 # Initial-snapshot scenario: no slot, so no WAL is retained while the table is
-# seeded and the reader has nothing but the bulk read to do. Same infra as the
-# backlog scenario, minus create-slots.
+# seeded and the reader has nothing but the bulk read to do.
 snapshot-infra:
 	$(COMPOSE) up -d --remove-orphans $(INFRA_SERVICES)
 	-$(COMPOSE) stop $(ALL_CDC_SERVICES)
@@ -95,9 +93,8 @@ snapshot-infra:
 	$(MAKE) drop-slots
 	$(MAKE) create-topics
 
-# Topics have to exist before the reader starts, or kafka-exporter discovers them
-# only on its next metadata refresh, which for a snapshot can be after the whole
-# thing is over. Then `make results` sees one flat series and reports zero.
+# kafka-exporter reports a topic only from the metadata refresh that discovers it,
+# so an auto-created one can go unreported until the snapshot is already over.
 create-topics:
 	@for topic in debezium outboxx pgstream; do \
 		$(COMPOSE) exec -T kafka /kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 \
@@ -105,8 +102,8 @@ create-topics:
 			--topic $$topic.public.benchmark_records; \
 	done
 
-# Seeds through psql, not the workload container: the insert is set-based anyway,
-# and this keeps the snapshot scenario down to images the stand already has.
+# Through psql, not the workload container: the insert is set-based anyway, and
+# this keeps the scenario to images the stand already has.
 seed: snapshot-infra
 	$(COMPOSE) exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d bench \
 		-v rows=$(ROWS) -v row_bytes=$(ROW_BYTES) -f /sql/seed.sql

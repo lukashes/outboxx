@@ -96,7 +96,7 @@ make check-gaps
 make results MINUTES=30
 ```
 
-- `make seed` brings infra up **without** creating slots, drops any slot left
+- `make seed` brings infra up without creating slots, drops any slot left
   over, and inserts `ROWS` rows through `postgres/seed.sql` (truncating first, so
   ids start at 1). With no slot in place PostgreSQL retains no WAL, so the reader
   has only the snapshot to do and the number is not a backlog drain in disguise.
@@ -120,11 +120,12 @@ the snapshot. Run `make reset` before each measured run: it puts every topic bac
 at offset 0, and it clears Debezium's stored offsets, without which Debezium
 resumes instead of snapshotting.
 
-`make seed` creates the three topics up front, which matters more here than in the
-backlog scenario. kafka-exporter only reports a topic it has seen in a metadata
-refresh, so a topic auto-created by the first produce can go unreported until the
-snapshot is already over, and `make results` would then show a flat series and
-zero events.
+Two things make the run measurable at all. `make seed` creates the three topics up
+front, because kafka-exporter reports a topic only from the metadata refresh that
+discovers it, and one auto-created by the reader's first produce can go unreported
+until the snapshot is over. And `ROWS` defaults to 10M, because 2M drains in under
+one 5s Prometheus interval. Either way `make results` finds a flat series and
+reports zero events.
 
 Results (Apple M1, 10M rows of 128 bytes, 2560 MB table):
 
@@ -138,10 +139,6 @@ The bulk read runs faster than the streaming figure on the same box: it is a
 sequential scan of a live table, with no WAL to decode. `make check-gaps` on the
 same run reports 10000000 messages, 10000000 distinct ids, no gaps and no
 duplicates. The Debezium row is still open.
-
-Size the seed so the read outlives a few scrapes. `ROWS` defaults to 10M for that
-reason: 2M drains in under one 5s Prometheus interval, and `make results` then has
-no growth window to report.
 
 The comparison is outboxx and Debezium only. pgstream stays on
 `mode: replication`; it can snapshot, but it reports no Prometheus metrics here,

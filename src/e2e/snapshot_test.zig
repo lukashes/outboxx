@@ -15,9 +15,7 @@ const c = test_helpers.c;
 // slot was created arrive as READ events (from the exported snapshot), the live
 // changes made after streaming starts arrive as INSERT/UPDATE/DELETE, and the two
 // phases meet with no gap or overlap. The READ rows carry the slot's start LSN,
-// the same boundary the stream begins from. Running all three change operations
-// past the boundary also proves the pipeline is fully wired after the phase
-// switch, not just for the first change.
+// the same boundary the stream begins from.
 
 pub const std_options: std.Options = .{
     .log_level = .debug,
@@ -59,7 +57,6 @@ test "E2E: initial snapshot emits pre-existing rows as READ, then streams live c
     defer allocator.free(seed);
     _ = c.PQexec(conn, seed.ptr);
 
-    // A stream that opts into the snapshot (read) and tracks every live operation.
     var stream_config = try test_helpers.createTestStreamConfig(allocator, table_name, topic_name);
     defer allocator.free(stream_config.name);
     defer allocator.free(stream_config.source.resource);
@@ -103,8 +100,7 @@ test "E2E: initial snapshot emits pre-existing rows as READ, then streams live c
     try processor.bootstrap(std.testing.io, &stop_signal);
 
     // Live changes AFTER streaming started: they enter the WAL past the slot start,
-    // so they must arrive as streamed events, not via the snapshot. All three
-    // operations run, so the whole pipeline is exercised past the phase switch.
+    // so they must arrive as streamed events, not via the snapshot.
     const live = try test_helpers.formatSqlZ(allocator,
         \\INSERT INTO {s} (name, value) VALUES ('Dave', 400);
         \\UPDATE {s} SET value = 111 WHERE id = 1;
@@ -135,7 +131,7 @@ test "E2E: initial snapshot emits pre-existing rows as READ, then streams live c
         // point streaming then resumes from.
         try test_helpers.assertJsonField(msg, "meta.lsn", start_lsn);
         try test_helpers.assertJsonField(msg, "meta.resource", stream_config.source.resource);
-        try testing.expect(id >= 1 and id <= 3); // seeded rows
+        try testing.expect(id >= 1 and id <= 3);
         try testing.expect(!seen_read_ids[@intCast(id)]);
         seen_read_ids[@intCast(id)] = true;
         read_count += 1;
@@ -145,9 +141,8 @@ test "E2E: initial snapshot emits pre-existing rows as READ, then streams live c
     // No gap, no overlap: the snapshot covered exactly the rows that predate the slot.
     for (1..4) |i| try testing.expect(seen_read_ids[i]);
 
-    // Single-partition dev topic, so the log order is the produce order: the
-    // snapshot ran to completion before the stream opened, and the live changes
-    // follow in WAL order.
+    // Single-partition dev topic, so log order is produce order: the snapshot
+    // finished before the stream opened, and the live changes follow in WAL order.
     try test_helpers.assertJsonField(messages[3], "op", "INSERT");
     try test_helpers.assertJsonField(messages[3], "data.name", "Dave");
     try testing.expectEqual(@as(i64, 4), messages[3].value.object.get("data").?.object.get("id").?.integer);
