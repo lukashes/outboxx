@@ -261,14 +261,8 @@ are wall-clock time behind the last committed transaction, so they share one axi
 pgstream has no Prometheus endpoint (OTLP only), so on its board the self-reported
 panels stay outboxx-only.
 
-The Debezium board has one extra panel for the initial-snapshot scenario, rows/sec
-during the bulk read. Outboxx needs no new metric there: its events counter is
-labelled by operation, so the snapshot is `operation="READ"`. Debezium reports the
-snapshot under its own JMX context (`debezium_postgres_snapshot_*`), separate from
-the streaming metrics the other panels use.
-
-Outboxx's half of that panel does not draw yet. `main.zig` starts the observability
-server after the bootstrap returns, so `/metrics`, `/healthz`, and `/readyz` are all
-down for the whole snapshot and the counter is first scraped already at its final
-value. Until that ordering changes, snapshot throughput for outboxx comes from the
-Kafka append rate panel and `make results`, which read the topic from outside.
+The self-reported panels stay blank during an initial snapshot. `main.zig` starts
+the observability server only after the bootstrap returns, so outboxx serves no
+`/metrics`, `/healthz`, or `/readyz` while the snapshot runs. Snapshot throughput
+comes from the Kafka append rate panel and `make results` instead, which read the
+topic from outside.

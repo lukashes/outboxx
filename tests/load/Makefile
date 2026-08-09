@@ -32,7 +32,7 @@ ROWS ?= 10000000
 MINUTES ?= 60
 
 .PHONY: infra infra-up load start-debezium start-outboxx start-pgstream start-all reset create-slots drop-slots slots status topics offsets check-gaps results logs ps
-.PHONY: snapshot-infra create-topics seed snapshot-outboxx snapshot-debezium
+.PHONY: seed snapshot-outboxx snapshot-debezium
 
 # Bring infra up and ensure slots exist, leaving any running CDC readers alone.
 infra-up:
@@ -84,27 +84,22 @@ start-all:
 	$(COMPOSE) up -d --build $(ALL_CDC_SERVICES)
 	$(COMPOSE) run --rm connector-init
 
-# Initial-snapshot scenario: no slot, so no WAL is retained while the table is
-# seeded and the reader has nothing but the bulk read to do.
-snapshot-infra:
+# Initial-snapshot scenario: infra without slots, so no WAL is retained while the
+# table is seeded and the reader has nothing but the bulk read to do. Topics are
+# created here because kafka-exporter reports a topic only from the metadata
+# refresh that discovers it, and an auto-created one can go unreported until the
+# snapshot is over. The insert runs through psql: it is set-based anyway, and this
+# keeps the scenario to images the stand already has.
+seed:
 	$(COMPOSE) up -d --remove-orphans $(INFRA_SERVICES)
 	-$(COMPOSE) stop $(ALL_CDC_SERVICES)
 	-$(COMPOSE) rm -sf $(ALL_CDC_SERVICES) connector-init pgstream-init
 	$(MAKE) drop-slots
-	$(MAKE) create-topics
-
-# kafka-exporter reports a topic only from the metadata refresh that discovers it,
-# so an auto-created one can go unreported until the snapshot is already over.
-create-topics:
 	@for topic in debezium outboxx pgstream; do \
 		$(COMPOSE) exec -T kafka /kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 \
 			--create --if-not-exists --partitions 1 --replication-factor 1 \
 			--topic $$topic.public.benchmark_records; \
 	done
-
-# Through psql, not the workload container: the insert is set-based anyway, and
-# this keeps the scenario to images the stand already has.
-seed: snapshot-infra
 	$(COMPOSE) exec -T postgres psql -v ON_ERROR_STOP=1 -U postgres -d bench \
 		-v rows=$(ROWS) -v row_bytes=$(ROW_BYTES) -f /sql/seed.sql
 
