@@ -259,6 +259,13 @@ pub const Processor = struct {
     /// order cannot be got wrong from outside. A shutdown signal mid-snapshot fails
     /// with error.Shutdown, leaving the stream unopened so the next start redoes it.
     pub fn bootstrap(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !void {
+        // The source is connected and validated before we get here, so readiness's
+        // connection signal goes up now; markStreaming follows on the first batch.
+        self.obs.markConnected(true);
+        // Seed liveness so it does not read stale before the first message; from
+        // here it is refreshed only by real wire activity.
+        self.obs.heartbeat(io);
+
         if (needsInitialSnapshot(self.streams) and self.source.needsBootstrap()) {
             const resources = try self.readResources();
             defer self.allocator.free(resources);
@@ -267,7 +274,7 @@ pub const Processor = struct {
 
             std.log.info("Running initial snapshot for {} resource(s)", .{resources.len});
 
-            try self.snapshotToKafka(stop_signal);
+            try self.snapshotToKafka(io, stop_signal);
         }
 
         // On the source, not the caller's copy: it is held by value here.
@@ -302,7 +309,7 @@ pub const Processor = struct {
     // Returns once an empty batch marks the snapshot read out and everything is
     // flushed to Kafka. The LSN is not advanced (pending_lsn stays 0): the slot moves
     // only once the stream is confirmed. Consumers must treat READ as an upsert.
-    fn snapshotToKafka(self: *Self, stop_signal: *std.atomic.Value(bool)) !void {
+    fn snapshotToKafka(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !void {
         while (true) {
             if (stop_signal.load(.monotonic)) return error.Shutdown;
 
@@ -318,6 +325,10 @@ pub const Processor = struct {
             defer batch.deinit();
 
             if (batch.changes.len == 0) break;
+
+            // Real progress on the snapshot connection, so liveness holds through a
+            // bulk read that outlasts the probe timeout.
+            self.obs.heartbeat(io);
 
             var event_counts = std.ArrayList(EventCount).empty;
             defer event_counts.deinit(batch_alloc);
@@ -345,13 +356,6 @@ pub const Processor = struct {
     /// Run the batch loop until stop_signal is set, with a background flush/commit
     /// worker. Call after bootstrap, which leaves the source streaming.
     pub fn run(self: *Self, io: std.Io, stop_signal: *std.atomic.Value(bool)) !void {
-        // The source is connected and validated before we get here, so readiness's
-        // connection signal goes up now; markStreaming follows on the first batch.
-        self.obs.markConnected(true);
-        // Seed liveness so it does not read stale before the first message; from
-        // here it is refreshed only by real wire activity (see processChangesToKafka).
-        self.obs.heartbeat(io);
-
         const producer = &self.producer;
 
         // Background flush/commit loop. `concurrent` not `async`: it must run

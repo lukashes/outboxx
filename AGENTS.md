@@ -113,7 +113,10 @@ TOML, secrets kept out of the file (see `docs/examples/config.toml`).
 - `[sink.kafka]`: `tls` (default true) plus an optional `[sink.kafka.sasl]`
   (`mechanism`, `username`, `password_env`).
 - `[observability]` (optional; absent = off): `address`/`port` for a Prometheus
-  `/metrics` plus `/healthz` and `/readyz` HTTP server.
+  `/metrics` plus `/healthz` and `/readyz` HTTP server. It serves for the whole run,
+  the initial snapshot included, which can outlast a probe timeout: during it
+  `/healthz` is up (a snapshot batch counts as activity) and `/readyz` is 503 until
+  the stream delivers its first batch.
 - Initial snapshot: a stream opts in by listing `read` in its `operations`, and its
   existing rows are emitted as `op="READ"` before streaming. There is no separate
   toggle; the snapshot runs only when the slot is created this run and some stream
