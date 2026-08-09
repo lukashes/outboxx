@@ -137,29 +137,10 @@ fn run(init: std.process.Init) !void {
     var processor = Processor.init(allocator, source, producer, config.streams, &obs);
     defer processor.deinit();
 
-    // First phase: the initial snapshot (if any), then the stream is opened, so `run`
-    // below only has to loop. A shutdown here is a graceful stop, like one during
-    // streaming, so it exits cleanly instead of through the fatal handler; the next
-    // start redoes the bootstrap rather than streaming past unread rows.
-    processor.bootstrap(init.io, &shutdown_requested) catch |err| switch (err) {
-        error.Shutdown => {
-            printStatus("\nInitial snapshot interrupted; the bootstrap will restart on the next launch.\n", .{});
-            return;
-        },
-        else => return err,
-    };
-
-    printStatus("\nProcessor initialized successfully with slot: {s}\n", .{postgres.slot_name});
-    printStatus("\nCDC processor started successfully!\n", .{});
-    printStatus("Monitoring WAL changes from {} stream(s)\n", .{config.streams.len});
-    for (config.streams) |stream| {
-        printStatus("  - {s} -> {s}\n", .{ stream.source.resource, stream.sink.destination });
-    }
-    printStatus("Using publication: {s}\n", .{postgres.publication_name});
-    printStatus("Press Ctrl+C to stop gracefully.\n\n", .{});
-
-    // Serve /metrics + health on a background worker while the receive loop runs;
-    // the future is canceled on shutdown, which unblocks its accept().
+    // Serve /metrics + health on a background worker for the whole run, the bootstrap
+    // included: an initial snapshot can outlast a probe timeout by a wide margin, and
+    // a process that answers nothing gets restarted before it can finish one. The
+    // future is canceled on shutdown, which unblocks its accept().
     if (config.observability) |obs_cfg| {
         printStatus("Observability endpoints on http://{s}:{d} (/metrics, /healthz, /readyz)\n\n", .{ obs_cfg.address, obs_cfg.port });
         var metrics_future = try init.io.concurrent(observability.serve, .{
@@ -170,10 +151,36 @@ fn run(init: std.process.Init) !void {
             metrics_future.cancel(init.io);
             std.log.debug("main: metrics server cancelled", .{});
         }
-        try processor.run(init.io, &shutdown_requested);
+        try runPipeline(&processor, init.io, config);
     } else {
-        try processor.run(init.io, &shutdown_requested);
+        try runPipeline(&processor, init.io, config);
     }
+}
+
+// Bootstrap, then stream until shutdown. A shutdown during the bootstrap is a
+// graceful stop like one during streaming, so it exits cleanly instead of through
+// the fatal handler; the next start redoes the bootstrap rather than streaming past
+// unread rows.
+fn runPipeline(processor: *Processor, io: std.Io, config: Config) !void {
+    processor.bootstrap(io, &shutdown_requested) catch |err| switch (err) {
+        error.Shutdown => {
+            printStatus("\nInitial snapshot interrupted; the bootstrap will restart on the next launch.\n", .{});
+            return;
+        },
+        else => return err,
+    };
+
+    const postgres = config.source.postgres.?;
+    printStatus("\nProcessor initialized successfully with slot: {s}\n", .{postgres.slot_name});
+    printStatus("\nCDC processor started successfully!\n", .{});
+    printStatus("Monitoring WAL changes from {} stream(s)\n", .{config.streams.len});
+    for (config.streams) |stream| {
+        printStatus("  - {s} -> {s}\n", .{ stream.source.resource, stream.sink.destination });
+    }
+    printStatus("Using publication: {s}\n", .{postgres.publication_name});
+    printStatus("Press Ctrl+C to stop gracefully.\n\n", .{});
+
+    try processor.run(io, &shutdown_requested);
 }
 
 // Build the Kafka sink from config, deriving librdkafka's security.protocol from the
