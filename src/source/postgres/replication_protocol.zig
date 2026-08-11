@@ -1,8 +1,13 @@
 const std = @import("std");
 const c = @import("c"); // C bindings (build-system translate-c)
 
+// The logical decoding plugin this source speaks: slots are created with it and
+// an existing slot is only usable if it runs it.
+const OUTPUT_PLUGIN = "pgoutput";
+
 pub const ReplicationError = error{
     ConnectionFailed,
+    SlotMismatch,
     StartReplicationFailed,
     ReceiveFailed,
     SendFeedbackFailed,
@@ -39,6 +44,7 @@ pub const StandbyStatusUpdate = struct {
     wal_write_position: u64,
     wal_flush_position: u64,
     wal_apply_position: u64,
+    /// Microseconds since 2000-01-01, the epoch the protocol uses on the wire.
     client_time: i64,
     reply_requested: bool,
 };
@@ -213,12 +219,46 @@ pub const ReplicationProtocol = struct {
         try self.execSimple(sql.ptr, "DROP PUBLICATION (snapshot marker)");
     }
 
-    /// Whether the replication slot already exists.
+    /// Whether the replication slot already exists and is usable by this run.
+    /// Slot names are global to the cluster, so a same-named slot can belong to
+    /// another database or another output plugin; that one is rejected here with
+    /// SlotMismatch, because START_REPLICATION would otherwise fail on every start
+    /// and turn a naming clash into a restart loop.
     pub fn slotExists(self: *Self) ReplicationError!bool {
         if (self.connection == null) return ReplicationError.ConnectionFailed;
         const slot_name = try self.lowerName(self.slot_name);
         defer self.allocator.free(slot_name);
-        return self.objectExists("pg_replication_slots", "slot_name", slot_name);
+
+        const sql = std.fmt.allocPrintSentinel(
+            self.allocator,
+            "SELECT database, plugin, current_database() FROM pg_replication_slots WHERE slot_name = '{s}'",
+            .{slot_name},
+            0,
+        ) catch return ReplicationError.OutOfMemory;
+        defer self.allocator.free(sql);
+
+        const result = c.PQexec(self.connection, sql.ptr);
+        defer c.PQclear(result);
+        if (c.PQresultStatus(result) != c.PGRES_TUPLES_OK) {
+            std.log.warn("Slot check failed: {s}", .{c.PQresultErrorMessage(result)});
+            return ReplicationError.ConnectionFailed;
+        }
+        if (c.PQntuples(result) == 0) return false;
+
+        // A physical slot reports both columns as NULL.
+        const database = columnText(result, 0) orelse "(none)";
+        const plugin = columnText(result, 1) orelse "(none)";
+        const current_database = columnText(result, 2) orelse "";
+
+        if (!std.mem.eql(u8, database, current_database) or !std.mem.eql(u8, plugin, OUTPUT_PLUGIN)) {
+            std.log.warn(
+                "Replication slot '{s}' already exists on database '{s}' with plugin '{s}'; this run needs database '{s}' with plugin '{s}'",
+                .{ slot_name, database, plugin, current_database, OUTPUT_PLUGIN },
+            );
+            return ReplicationError.SlotMismatch;
+        }
+
+        return true;
     }
 
     /// Create the replication slot and capture its consistent point and exported
@@ -240,7 +280,7 @@ pub const ReplicationProtocol = struct {
             self.snapshot_name = null;
         }
 
-        const sql = std.fmt.allocPrintSentinel(self.allocator, "CREATE_REPLICATION_SLOT {s} LOGICAL pgoutput", .{slot_name}, 0) catch return ReplicationError.OutOfMemory;
+        const sql = std.fmt.allocPrintSentinel(self.allocator, "CREATE_REPLICATION_SLOT {s} LOGICAL {s}", .{ slot_name, OUTPUT_PLUGIN }, 0) catch return ReplicationError.OutOfMemory;
         defer self.allocator.free(sql);
 
         std.log.info("Creating replication slot: {s}", .{slot_name});
@@ -323,6 +363,12 @@ pub const ReplicationProtocol = struct {
             return ReplicationError.ConnectionFailed;
         }
         return c.PQntuples(result) > 0;
+    }
+
+    // Text of a column in the first row, null when the value is SQL NULL.
+    fn columnText(result: ?*c.PGresult, column: c_int) ?[]const u8 {
+        if (c.PQgetisnull(result, 0, column) != 0) return null;
+        return std.mem.span(c.PQgetvalue(result, 0, column));
     }
 
     // Run a command that returns no rows (CREATE/DROP), failing on a non-OK status.
