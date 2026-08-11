@@ -221,9 +221,10 @@ fn printStatus(comptime fmt: []const u8, args: anytype) void {
     };
 }
 
+// Only the atomic store: a log here would rebind the shared stderr writer under
+// the interrupted call and can block on the stderr lock. The batch loop reports it.
 fn handleShutdownSignal(_: posix.SIG) callconv(.c) void {
     shutdown_requested.store(true, .seq_cst);
-    std.log.info("Shutdown signal received, initiating graceful shutdown...", .{});
 }
 
 fn setupSignalHandlers() void {
