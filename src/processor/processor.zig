@@ -403,6 +403,9 @@ pub const Processor = struct {
             }
         }
 
+        // The signal handler only sets the flag, so the acknowledgement comes from here.
+        std.log.info("Shutdown requested, finishing the process...", .{});
+
         // Graceful stop: cancel and await the worker (runs its final flush/commit)
         // before reporting the stream stopped.
         flush_future.cancel(io);
