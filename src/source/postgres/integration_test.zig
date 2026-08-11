@@ -816,3 +816,34 @@ test "Streaming source: created slot captures the consistent point and streams f
     // The captured point is a valid start LSN: streaming begins there.
     try source.startReplication(start_lsn);
 }
+
+test "Slot check: a same-named slot with another output plugin is rejected" {
+    const allocator = testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(@intCast(test_helpers.nowMicros(std.testing.io)));
+    const random_suffix = prng.random().int(u32);
+    const timestamp = test_helpers.nowSeconds(std.testing.io);
+
+    const slot_name = try std.fmt.allocPrint(allocator, "slot_mismatch_{d}_{d}", .{ timestamp, random_suffix });
+    defer allocator.free(slot_name);
+
+    const setup_conn = try createSetupConnection(allocator);
+    defer c.PQfinish(setup_conn);
+
+    const create_slot_sql = try test_helpers.formatSqlZ(allocator, "SELECT pg_create_logical_replication_slot('{s}', 'test_decoding')", .{slot_name});
+    defer allocator.free(create_slot_sql);
+    try execSQL(setup_conn, create_slot_sql);
+
+    const drop_slot_sql = try test_helpers.formatSqlZ(allocator, "SELECT pg_drop_replication_slot('{s}')", .{slot_name});
+    defer allocator.free(drop_slot_sql);
+    defer execSQL(setup_conn, drop_slot_sql) catch {};
+
+    const conn_str = try getTestConnectionString(allocator);
+    defer allocator.free(conn_str);
+
+    var protocol = ReplicationProtocol.init(allocator, slot_name, "unused_pub");
+    defer protocol.deinit();
+    try protocol.connect(conn_str);
+
+    try testing.expectError(error.SlotMismatch, protocol.slotExists());
+}

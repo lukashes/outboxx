@@ -61,6 +61,9 @@ pub const Batch = struct {
 
 pub const PostgresSourceError = error{
     ConnectionFailed,
+    // A slot with the configured name exists but belongs to another database or
+    // output plugin, so this run must not use it (see slotExists).
+    SlotMismatch,
     ReplicationFailed,
     DecodeFailed,
     ConversionFailed,
@@ -176,7 +179,10 @@ pub const PostgresSource = struct {
     // "no slot, marker present", which reads as a fresh bootstrap, never a false
     // "completed".
     fn ensureSlot(self: *Self, bootstrap: Bootstrap) PostgresSourceError!void {
-        const slot_exists = self.protocol.slotExists() catch return PostgresSourceError.ConnectionFailed;
+        const slot_exists = self.protocol.slotExists() catch |err| switch (err) {
+            error.SlotMismatch => return PostgresSourceError.SlotMismatch,
+            else => return PostgresSourceError.ConnectionFailed,
+        };
 
         if (bootstrap == .stream_only) {
             self.protocol.dropSnapshotMarker() catch return PostgresSourceError.ConnectionFailed;
@@ -357,7 +363,13 @@ pub const PostgresSource = struct {
 
             // Step 2: DRAIN all buffered messages (non-blocking)
             while (changes.items.len < limit) {
-                const next_msg = self.protocol.receiveMessage(io, 0) catch break; // 0ms wait time = non-blocking
+                // 0ms wait time = non-blocking. A failure here is the same broken
+                // connection the blocking receive above reports, so it propagates
+                // instead of ending the batch as if the buffer had run dry.
+                const next_msg = self.protocol.receiveMessage(io, 0) catch |err| {
+                    std.log.warn("Failed to drain buffered replication message: {}", .{err});
+                    return PostgresSourceError.ReplicationFailed;
+                };
                 if (next_msg == null) break; // No more buffered data
 
                 var buffered_msg = next_msg.?;
@@ -450,7 +462,7 @@ pub const PostgresSource = struct {
             .wal_write_position = lsn,
             .wal_flush_position = lsn,
             .wal_apply_position = lsn,
-            .client_time = std.Io.Timestamp.now(io, .real).toSeconds(),
+            .client_time = std.Io.Timestamp.now(io, .real).toMicroseconds() - POSTGRES_EPOCH_UNIX_SECONDS * std.time.us_per_s,
             // Request an immediate keepalive back. Our regular feedback keeps the
             // walsender quiet (it only probes after wal_sender_timeout/2 of client
             // silence), so an idle stream would carry no inbound traffic and trip
